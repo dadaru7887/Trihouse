@@ -10,7 +10,7 @@ services:
     environment:
       TZ: Asia/Seoul
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${FMS_DB_NAME:-trihouse_fms}
+      MYSQL_DATABASE: ${FMS_DB_DATABASE:-trihouse_fms}
       MYSQL_USER: ${FMS_DB_USER:-fms_gateway}
       MYSQL_PASSWORD: ${FMS_DB_PASSWORD}
     ports:

@@ -218,6 +218,17 @@ pytest==9.1.1
 pytest-cov==7.1.0
 ```
 
+Flutter Gateway 클라이언트 의존성은 다음 명령으로 추가했으며 lock 파일에
+`http 1.6.0`, `http_parser 4.1.2`가 고정되어 있다. 새 환경에서는 `pub add`를
+반복하지 말고 커밋된 lock 파일을 사용해 `flutter pub get`만 실행한다.
+
+```bash
+cd control_system/robo_control
+flutter pub add http
+flutter pub get
+cd ../..
+```
+
 ## 7. MySQL 개발 환경 시작
 
 비밀값 파일을 만들고 Git에 커밋하지 않는다.
@@ -258,9 +269,16 @@ docker compose up -d --wait mysql
 docker compose -f compose.test.yaml up -d --wait
 FMS_DB_PORT=3307 \
 FMS_DB_PASSWORD=test_gateway_password \
-fms_gateway/.venv/bin/pytest fms_gateway/tests -v
+PYTHONPATH= PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+fms_gateway/.venv/bin/pytest -c fms_gateway/pytest.ini fms_gateway/tests -v
 docker compose -f compose.test.yaml down -v
 ```
+
+이 머신에는 ROS 2의 `launch_testing` pytest 플러그인이 전역 자동 로드되며 Python
+경로의 `yaml` 의존성이 맞지 않았다. 위의 `PYTHONPATH=`와
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`은 Gateway 자체에 필요 없는 ROS 플러그인을
+격리하기 위해 실제 테스트에 사용한 값이다. ROS가 없는 깨끗한 환경에서도 같은
+명령을 사용해도 된다.
 
 ## 9. Gateway 실행
 
@@ -269,7 +287,7 @@ set -a
 source .env
 set +a
 fms_gateway/.venv/bin/uvicorn \
-  fms_gateway.app.main:app \
+  fms_gateway.app.main:create_app --factory \
   --host "$FMS_API_HOST" \
   --port "$FMS_API_PORT"
 ```
@@ -282,6 +300,16 @@ curl -fsS http://127.0.0.1:8080/ready
 curl -fsS http://127.0.0.1:8080/api/v1/devices
 curl -fsS http://127.0.0.1:8080/api/v1/inventory/lots
 curl -fsS http://127.0.0.1:8080/api/v1/jobs
+```
+
+재고 조정 예시(같은 키를 다시 보내도 수량은 한 번만 반영된다):
+
+```bash
+curl -fsS -X POST \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: manual-adjust-001' \
+  -d '{"quantity_delta":-1,"recorded_by":"W-OP-01","note":"연동 확인"}' \
+  http://127.0.0.1:8080/api/v1/inventory/lots/1/adjust
 ```
 
 ## 10. Flutter 관제 UI 실행
@@ -300,12 +328,16 @@ FMS API 모드:
 cd control_system/robo_control
 flutter pub get
 flutter run -d linux \
-  --dart-define=FMS_API_BASE_URL=http://127.0.0.1:8080
+  --dart-define=FMS_BASE_URL=http://127.0.0.1:8080
 ```
 
 API 모드에서도 아직 이전되지 않은 관제 화면은 로컬 엔진을 사용하지만, 재고 조회와
 조정은 Gateway를 통해서만 MySQL에 접근한다. Flutter 앱에는 DB 계정이나 비밀번호를
 전달하지 않는다.
+
+현재 머신에서는 Flutter/Dart와 패키지 설치 및 테스트까지 완료했지만,
+`clang++`, `ninja`, GTK 3 개발 헤더는 sudo 권한이 없어 설치하지 못했다. 따라서
+Linux 창을 실제로 띄우려면 3절의 시스템 패키지를 먼저 설치해야 한다.
 
 ## 11. 종료
 
@@ -315,3 +347,37 @@ docker compose -f compose.test.yaml down -v
 ```
 
 MySQL 개발 데이터는 `docker compose down`만으로 삭제되지 않는다.
+
+## 12. 2026-08-03 실제 검증 기록
+
+사용자 디렉터리 MySQL(3307)에서 아래 Gateway 명령을 실행했다. 빈 비밀번호는
+`--initialize-insecure`로 만든 localhost 전용 테스트 서버에만 해당한다.
+
+```bash
+FMS_DB_HOST=127.0.0.1 \
+FMS_DB_PORT=3307 \
+FMS_DB_USER=root \
+FMS_DB_PASSWORD= \
+FMS_DB_DATABASE=trihouse_fms \
+fms_gateway/.venv/bin/uvicorn \
+  fms_gateway.app.main:create_app --factory \
+  --host 127.0.0.1 --port 8080
+```
+
+검증 결과:
+
+```text
+Gateway pytest: 35 passed
+Flutter test: 35 passed
+Flutter analyze: No issues found
+GET /health: 200
+GET /ready: 200, database=ok
+GET /api/v1/devices: Pinky 2대 + OMX 2대
+GET /api/v1/inventory/lots: 개발 로트 2건
+같은 Idempotency-Key로 POST 2회: available_qty 100 -> 99
+inventory_moves: 1건
+operation_events: 1건
+```
+
+마지막 세 줄은 재시도 요청이 재고·원장·감사 로그를 중복 생성하지 않았음을 실제
+MySQL 조회로 확인한 결과다.
