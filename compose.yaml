@@ -1,0 +1,30 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: trihouse-mysql
+    restart: unless-stopped
+    command:
+      - --default-time-zone=+09:00
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      TZ: Asia/Seoul
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${FMS_DB_NAME:-trihouse_fms}
+      MYSQL_USER: ${FMS_DB_USER:-fms_gateway}
+      MYSQL_PASSWORD: ${FMS_DB_PASSWORD}
+    ports:
+      - 127.0.0.1:${FMS_DB_PORT:-3306}:3306
+    volumes:
+      - trihouse_mysql_data:/var/lib/mysql
+      - ./db/schema_mysql.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+      - ./db/seed_dev.sql:/docker-entrypoint-initdb.d/002-seed.sql:ro
+    healthcheck:
+      test: [CMD-SHELL, "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+volumes:
+  trihouse_mysql_data:

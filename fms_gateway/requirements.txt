@@ -1,0 +1,4 @@
+fastapi==0.141.1
+mysql-connector-python==26.7.0
+pydantic-settings==2.14.2
+uvicorn==0.52.1
