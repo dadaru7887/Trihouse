@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 
 class DeviceView(BaseModel):
@@ -27,6 +27,19 @@ class InventoryLotView(BaseModel):
     available_qty: int
     reserved_qty: int
     state: str
+
+
+class InventoryAdjustment(BaseModel):
+    quantity_delta: int
+    recorded_by: str = Field(min_length=1, max_length=64)
+    note: str | None = Field(default=None, max_length=512)
+
+    @field_validator("quantity_delta")
+    @classmethod
+    def quantity_must_change(cls, value: int) -> int:
+        if value == 0:
+            raise ValueError("quantity_delta must not be zero")
+        return value
 
 
 class JobView(BaseModel):

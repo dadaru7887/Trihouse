@@ -84,3 +84,15 @@ def test_devices_inventory_and_jobs_contracts():
     assert jobs.status_code == 200
     assert jobs.json()[0]["item_count"] == 1
     assert jobs.json()[0]["due_at"] == "2026-08-03T10:00:00+09:00"
+
+
+def test_zero_inventory_adjustment_is_rejected_before_repository_call():
+    client = TestClient(create_app(FakeRepository()))
+
+    response = client.post(
+        "/api/v1/inventory/lots/1/adjust",
+        headers={"Idempotency-Key": "zero-adjustment"},
+        json={"quantity_delta": 0, "recorded_by": "W-OP-01"},
+    )
+
+    assert response.status_code == 422

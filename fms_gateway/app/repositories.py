@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from typing import Protocol
+import uuid
 from zoneinfo import ZoneInfo
 
 from .database import Database
@@ -20,6 +22,27 @@ class FmsRepository(Protocol):
     def list_inventory(self) -> list[dict[str, object]]: ...
 
     def list_jobs(self) -> list[dict[str, object]]: ...
+
+    def adjust_inventory(
+        self,
+        lot_id: int,
+        quantity_delta: int,
+        recorded_by: str,
+        note: str | None,
+        idempotency_key: str,
+    ) -> dict[str, object]: ...
+
+
+class InventoryLotNotFound(Exception):
+    pass
+
+
+class InventoryQuantityConflict(Exception):
+    pass
+
+
+class IdempotencyConflict(Exception):
+    pass
 
 
 def _seoul_datetimes(row: dict[str, object]) -> dict[str, object]:
@@ -74,6 +97,114 @@ class MySqlFmsRepository:
             ORDER BY lot.expiry_date, lot.lot_id
             """
         )
+
+    @staticmethod
+    def _lot(cursor, lot_id: int, *, for_update: bool = False):
+        lock = " FOR UPDATE" if for_update else ""
+        cursor.execute(
+            """
+            SELECT lot.lot_id, lot.lot_code, lot.product_code, lot.item_name,
+                   lot.temperature_zone, loc.location_code, lot.expiry_date,
+                   lot.available_qty, lot.reserved_qty, lot.state
+            FROM inventory_lots lot
+            LEFT JOIN locations loc ON loc.location_id = lot.location_id
+            WHERE lot.lot_id = %s
+            """ + lock,
+            (lot_id,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def adjust_inventory(
+        self,
+        lot_id: int,
+        quantity_delta: int,
+        recorded_by: str,
+        note: str | None,
+        idempotency_key: str,
+    ) -> dict[str, object]:
+        event_uuid = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"trihouse:inventory-adjust:{idempotency_key}")
+        )
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                cursor.execute(
+                    "SELECT payload FROM operation_events WHERE event_uuid = %s",
+                    (event_uuid,),
+                )
+                existing = cursor.fetchone()
+                if existing:
+                    payload = existing["payload"]
+                    if isinstance(payload, str):
+                        payload = json.loads(payload)
+                    expected = {
+                        "lot_id": lot_id,
+                        "quantity_delta": quantity_delta,
+                        "recorded_by": recorded_by,
+                    }
+                    if any(payload.get(key) != value for key, value in expected.items()):
+                        raise IdempotencyConflict
+                    lot = self._lot(cursor, lot_id)
+                    if lot is None:
+                        raise InventoryLotNotFound
+                    lot["available_qty"] = payload["quantity_after"]
+                    return lot
+
+                lot = self._lot(cursor, lot_id, for_update=True)
+                if lot is None:
+                    raise InventoryLotNotFound
+                quantity_after = int(lot["available_qty"]) + quantity_delta
+                if quantity_after < int(lot["reserved_qty"]):
+                    raise InventoryQuantityConflict
+
+                cursor.execute(
+                    "UPDATE inventory_lots SET available_qty = %s WHERE lot_id = %s",
+                    (quantity_after, lot_id),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO inventory_moves
+                      (lot_id, move_type, quantity_delta, quantity_after,
+                       reserved_delta, reserved_after, recorded_by, note)
+                    VALUES (%s, 'adjustment', %s, %s, 0, %s, %s, %s)
+                    """,
+                    (
+                        lot_id,
+                        quantity_delta,
+                        quantity_after,
+                        lot["reserved_qty"],
+                        recorded_by,
+                        note,
+                    ),
+                )
+                payload = {
+                    "idempotency_key": idempotency_key,
+                    "lot_id": lot_id,
+                    "quantity_delta": quantity_delta,
+                    "quantity_after": quantity_after,
+                    "recorded_by": recorded_by,
+                }
+                cursor.execute(
+                    """
+                    INSERT INTO operation_events
+                      (event_uuid, occurred_at, actor_worker_id, severity,
+                       category, event_type, message, payload)
+                    VALUES (%s, NOW(6), %s, 'info', 'inventory',
+                            'inventory.adjusted', %s, %s)
+                    """,
+                    (
+                        event_uuid,
+                        recorded_by,
+                        note or "inventory quantity adjusted",
+                        json.dumps(payload, ensure_ascii=False),
+                    ),
+                )
+                connection.commit()
+                lot["available_qty"] = quantity_after
+                return lot
+            finally:
+                cursor.close()
 
     def list_jobs(self) -> list[dict[str, object]]:
         return self._all(
