@@ -4,3 +4,14 @@ docs/
 
 # files
 *.DS_Store
+
+# local secrets and generated database artifacts
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+*.db
+*.db-shm
+*.db-wal
+*.log
