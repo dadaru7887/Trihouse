@@ -100,3 +100,15 @@ def mysql_db(fresh_schema):
     finally:
         connection.rollback()
         connection.close()
+
+
+@pytest.fixture
+def seeded_schema(fresh_schema):
+    connection = mysql_connection(database="trihouse_fms")
+    try:
+        execute_sql_script(connection, SEED_PATH)
+        connection.commit()
+    finally:
+        connection.close()
+
+    yield
