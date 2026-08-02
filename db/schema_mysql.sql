@@ -7,7 +7,8 @@
 --   데이터베이스는 입출고·재고·작업·안전·감사 이력 관리를 담당한다.
 --
 -- 운영 원칙
---   * MySQL 8.0 이상, InnoDB, UTC DATETIME(6)을 사용한다.
+--   * MySQL 8.0 이상, InnoDB, Asia/Seoul DATETIME(6)을 사용한다.
+--   * Gateway는 연결 직후 SET time_zone = '+09:00'을 실행한다.
 --   * 이 파일은 실제 운영 예시 데이터를 넣지 않는다.
 --   * UI와 장비 어댑터는 FMS API만 사용하며 MySQL 쓰기 권한을 받지 않는다.
 --   * VLM/RL의 관측과 복구 제안은 기록 대상이며, 전역 배차·최종 안전 권한은
@@ -154,7 +155,8 @@ CREATE TABLE IF NOT EXISTS inventory_lots (
   CONSTRAINT chk_lots_temperature CHECK (temperature_zone IN
     ('ambient','chilled','frozen')),
   CONSTRAINT chk_lots_qty CHECK
-    (available_qty >= 0 AND reserved_qty >= 0),
+    (available_qty >= 0 AND reserved_qty >= 0
+      AND reserved_qty <= available_qty),
   CONSTRAINT chk_lots_state CHECK (state IN
     ('pending_inbound','stored','on_hold','depleted','expired','damaged'))
 ) ENGINE=InnoDB;
@@ -163,10 +165,20 @@ CREATE TABLE IF NOT EXISTS inventory_lots (
 -- 주문과 로봇 미션을 별도 헤더로 나누지 않아 운영자가 한 화면에서 상태를 본다.
 CREATE TABLE IF NOT EXISTS jobs (
   job_id               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  parent_job_id        BIGINT UNSIGNED NULL,
   job_code             VARCHAR(64) NOT NULL,
   operation_type       VARCHAR(24) NOT NULL,
   priority             VARCHAR(16) NOT NULL DEFAULT 'normal',
+  priority_rank        TINYINT UNSIGNED GENERATED ALWAYS AS (
+    CASE priority
+      WHEN 'critical' THEN 1
+      WHEN 'high' THEN 2
+      WHEN 'normal' THEN 3
+      WHEN 'low' THEN 4
+    END
+  ) STORED,
   state                VARCHAR(24) NOT NULL DEFAULT 'pending',
+  revision             BIGINT UNSIGNED NOT NULL DEFAULT 0,
   requested_by         VARCHAR(64) NULL,
   external_reference   VARCHAR(128) NULL,
   source_location_id   BIGINT UNSIGNED NULL,
@@ -180,9 +192,12 @@ CREATE TABLE IF NOT EXISTS jobs (
   completed_at         DATETIME(6) NULL,
   PRIMARY KEY (job_id),
   UNIQUE KEY uq_jobs_code (job_code),
-  KEY idx_jobs_dispatch (state, priority, due_at),
+  UNIQUE KEY uq_jobs_external_reference (external_reference),
+  KEY idx_jobs_dispatch (state, priority_rank, due_at, created_at),
   KEY idx_jobs_mobile (assigned_mobile_id, state),
-  KEY idx_jobs_external_reference (external_reference),
+  KEY idx_jobs_parent (parent_job_id),
+  CONSTRAINT fk_jobs_parent FOREIGN KEY (parent_job_id)
+    REFERENCES jobs (job_id),
   CONSTRAINT fk_jobs_source FOREIGN KEY (source_location_id)
     REFERENCES locations (location_id),
   CONSTRAINT fk_jobs_destination FOREIGN KEY (destination_location_id)
@@ -308,6 +323,7 @@ CREATE TABLE IF NOT EXISTS reservations (
   KEY idx_reservations_device_schedule
     (device_id, state, planned_start_at, planned_end_at),
   KEY idx_reservations_feature_state (map_feature_id, state),
+  KEY idx_reservations_feature_expiry (map_feature_id, state, expires_at),
   CONSTRAINT fk_reservations_job FOREIGN KEY (job_id)
     REFERENCES jobs (job_id) ON DELETE CASCADE,
   CONSTRAINT fk_reservations_step FOREIGN KEY (job_step_id)
@@ -331,6 +347,7 @@ CREATE TABLE IF NOT EXISTS reservations (
       AND planned_end_at IS NOT NULL AND planned_start_at < planned_end_at) OR
      (reservation_mode <> 'time_slot' AND planned_start_at IS NULL
       AND planned_end_at IS NULL)),
+  CONSTRAINT chk_reservations_expiry CHECK (expires_at > created_at),
   CONSTRAINT chk_reservations_state CHECK (state IN
     ('reserved','in_use','released','expired','cancelled'))
 ) ENGINE=InnoDB;
@@ -345,6 +362,8 @@ CREATE TABLE IF NOT EXISTS inventory_moves (
   move_type            VARCHAR(24) NOT NULL,
   quantity_delta       INT NOT NULL,
   quantity_after       INT NOT NULL,
+  reserved_delta       INT NOT NULL DEFAULT 0,
+  reserved_after       INT NOT NULL DEFAULT 0,
   recorded_by          VARCHAR(96) NOT NULL,
   recorded_at          DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   note                 VARCHAR(512) NULL,
@@ -357,6 +376,9 @@ CREATE TABLE IF NOT EXISTS inventory_moves (
     REFERENCES jobs (job_id),
   CONSTRAINT fk_inventory_moves_step FOREIGN KEY (job_step_id)
     REFERENCES job_steps (job_step_id),
+  CONSTRAINT chk_inventory_moves_qty CHECK
+    (quantity_after >= 0 AND reserved_after >= 0
+      AND reserved_after <= quantity_after),
   CONSTRAINT chk_inventory_moves_type CHECK (move_type IN
     ('inbound','outbound','reservation','reservation_release','adjustment',
      'disposal','cycle_count'))
@@ -406,6 +428,7 @@ CREATE TABLE IF NOT EXISTS integration_messages (
   external_reference   VARCHAR(160) NULL,
   state                VARCHAR(16) NOT NULL DEFAULT 'pending',
   attempts             SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  next_attempt_at      DATETIME(6) NULL,
   payload              JSON NOT NULL,
   last_error           VARCHAR(512) NULL,
   created_at           DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
@@ -413,7 +436,7 @@ CREATE TABLE IF NOT EXISTS integration_messages (
   acknowledged_at      DATETIME(6) NULL,
   PRIMARY KEY (message_id),
   UNIQUE KEY uq_messages_dedupe (direction, channel, idempotency_key),
-  KEY idx_messages_delivery (direction, state, created_at),
+  KEY idx_messages_delivery (direction, state, next_attempt_at, created_at),
   KEY idx_messages_step (job_step_id),
   CONSTRAINT fk_messages_device FOREIGN KEY (device_id)
     REFERENCES devices (device_id),
@@ -438,8 +461,10 @@ CREATE TABLE IF NOT EXISTS incidents (
   geometry             JSON NULL,
   description          VARCHAR(512) NOT NULL,
   raised_by_worker_id  VARCHAR(64) NULL,
+  acknowledged_by_worker_id VARCHAR(64) NULL,
   resolved_by_worker_id VARCHAR(64) NULL,
   raised_at            DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  acknowledged_at      DATETIME(6) NULL,
   resolved_at          DATETIME(6) NULL,
   context              JSON NULL,
   PRIMARY KEY (incident_id),
@@ -449,6 +474,8 @@ CREATE TABLE IF NOT EXISTS incidents (
   CONSTRAINT fk_incidents_location FOREIGN KEY (location_id)
     REFERENCES locations (location_id),
   CONSTRAINT fk_incidents_raised_by FOREIGN KEY (raised_by_worker_id)
+    REFERENCES workers (worker_id),
+  CONSTRAINT fk_incidents_acknowledged_by FOREIGN KEY (acknowledged_by_worker_id)
     REFERENCES workers (worker_id),
   CONSTRAINT fk_incidents_resolved_by FOREIGN KEY (resolved_by_worker_id)
     REFERENCES workers (worker_id),
@@ -467,6 +494,7 @@ CREATE TABLE IF NOT EXISTS operation_events (
   event_id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   event_uuid           CHAR(36) NOT NULL,
   occurred_at          DATETIME(6) NOT NULL,
+  actor_worker_id      VARCHAR(64) NULL,
   device_id            VARCHAR(64) NULL,
   job_id               BIGINT UNSIGNED NULL,
   job_step_id          BIGINT UNSIGNED NULL,
@@ -482,12 +510,16 @@ CREATE TABLE IF NOT EXISTS operation_events (
   payload              JSON NULL,
   PRIMARY KEY (event_id),
   UNIQUE KEY uq_operation_events_uuid (event_uuid),
+  KEY idx_events_occurred_at (occurred_at DESC),
+  KEY idx_events_actor_at (actor_worker_id, occurred_at),
   KEY idx_events_device_at (device_id, occurred_at),
   KEY idx_events_job_at (job_id, occurred_at),
   KEY idx_events_incident_at (incident_id, occurred_at),
   KEY idx_events_category_at (category, occurred_at),
   CONSTRAINT fk_events_device FOREIGN KEY (device_id)
     REFERENCES devices (device_id),
+  CONSTRAINT fk_events_actor FOREIGN KEY (actor_worker_id)
+    REFERENCES workers (worker_id),
   CONSTRAINT fk_events_job FOREIGN KEY (job_id)
     REFERENCES jobs (job_id),
   CONSTRAINT fk_events_step FOREIGN KEY (job_step_id)
@@ -510,6 +542,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
   artifact_id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   artifact_type         VARCHAR(24) NOT NULL,
   storage_uri           VARCHAR(1024) NOT NULL,
+  storage_uri_hash      BINARY(32) GENERATED ALWAYS AS
+                          (UNHEX(SHA2(storage_uri, 256))) STORED,
   sha256                CHAR(64) NOT NULL,
   mime_type             VARCHAR(128) NULL,
   byte_size             BIGINT UNSIGNED NULL,
@@ -522,7 +556,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
   metadata              JSON NULL,
   captured_at           DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   PRIMARY KEY (artifact_id),
-  UNIQUE KEY uq_artifacts_sha_uri (sha256, storage_uri),
+  UNIQUE KEY uq_artifacts_sha_uri (sha256, storage_uri_hash),
   KEY idx_artifacts_step (job_step_id),
   KEY idx_artifacts_event (event_id),
   KEY idx_artifacts_model (model_name, model_version),
