@@ -30,6 +30,19 @@ FMS Gateway <-> OMX Adapter <-> Cyclo / MoveIt 2 / OMX-AI
 
 Gateway는 유일한 DB 쓰기 주체다. Safety Supervisor는 승인, 거부, 정지의 최종 권한을 가진다. VLM/RL은 허용 목록 내 복구 제안만 생성하며 직접 명령을 실행하거나 업무 상태를 확정하지 않는다.
 
+### Open-RMF and database authority
+
+Pinky-Pro의 다중 로봇 전역 경로, RMF graph lane 충돌, 교통 협상과 배차는 Open-RMF가 유일한 권한을 가진다. Pinky Adapter는 RMF Fleet Adapter 경계에서 RMF 명령을 Pinky/Nav2 action으로 변환하고 로봇 상태를 RMF에 보고한다. Nav2와 Collision Monitor는 각 로봇의 로컬 경로 추종, 장애물 회피, 즉시 감속·정지를 담당한다.
+
+MySQL `reservations`는 RMF lane schedule을 복제하지 않는다. 다음과 같이 권한을 분리한다.
+
+- RMF graph의 lane과 주행 교통: Open-RMF
+- 도크, 포장대, OMX, 인계 workstation과 장비 사용 시간: MySQL `reservations`
+- RMF가 표현하지 못하는 특수 단일 진입 구역: Gateway가 DB Lock을 먼저 확보한 후 RMF task 제출
+- RMF task 연결과 업무 상태: `job_steps.rmf_task_id` 및 `integration_messages`
+
+동일한 통로를 RMF schedule과 DB Lock이 독립적으로 동시에 승인하지 않는다. UI는 Open-RMF에 직접 쓰지 않고 Gateway API를 통해 task 요청과 취소를 전달한다. 현재 `control_system/openrmf`와 `control_system/openrmf_app`은 RMF 실행 및 화면 구현의 재사용 후보지만, 최종 쓰기 경계는 Gateway 뒤에 둔다.
+
 ## Time policy
 
 - 모든 업무 시각은 대한민국 표준시 `Asia/Seoul` 기준으로 저장하고 해석한다.
