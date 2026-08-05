@@ -1,3 +1,6 @@
 [submodule "control_system"]
 	path = control_system
 	url = https://github.com/gwangheeyi/robosapiens.git
+[submodule "pinky_pro"]
+	path = pinky_pro
+	url = https://github.com/pinklab-art/pinky_pro.git
