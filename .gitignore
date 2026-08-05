@@ -1,6 +1,12 @@
+# codex
+.superpowers/
+.codex/
+.agents/
+
 # folders
 references/
-docs/
+docs/superpowers/
+
 
 # files
 *.DS_Store
