@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Trihouse VLM, RL, YOLO, buffer, Nav2, RTX 5080 논의 전체 읽기 기록">
+  <title>Trihouse VLM + RL + YOLO 연구 논의 기록</title>
+  <style>
+    :root { color-scheme: light dark; --ink:#17212b; --muted:#596878; --line:#d9e1e8; --surface:#fff; --canvas:#f4f7f8; --accent:#006d77; --soft:#e2f2f1; --warn:#9a4e00; --warnsoft:#fff1df; --code:#152229; }
+    @media (prefers-color-scheme:dark) { :root { --ink:#eaf1f5; --muted:#b3c1ca; --line:#344753; --surface:#17242d; --canvas:#0f181e; --accent:#79d5cd; --soft:#173c3a; --warn:#ffc37e; --warnsoft:#49331b; --code:#091218; } }
+    * { box-sizing:border-box; } html { scroll-behavior:smooth; }
+    body { margin:0; background:var(--canvas); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif; line-height:1.7; word-break:keep-all; }
+    main { width:min(1020px,calc(100% - 32px)); margin:0 auto; padding:34px 0 72px; }
+    .hero { padding:34px; border:1px solid var(--line); border-radius:22px; background:linear-gradient(135deg,var(--surface),var(--soft)); }
+    .eyebrow { margin:0 0 9px; color:var(--accent); font-size:.83rem; font-weight:800; letter-spacing:.09em; text-transform:uppercase; }
+    h1 { margin:0; font-size:clamp(1.8rem,5vw,3rem); line-height:1.2; letter-spacing:-.045em; }
+    h2 { margin:50px 0 15px; font-size:clamp(1.35rem,3vw,1.8rem); line-height:1.3; letter-spacing:-.03em; scroll-margin-top:20px; }
+    h3 { margin:24px 0 8px; font-size:1.1rem; } p { margin:10px 0; } .lead { margin:18px 0 0; color:var(--muted); font-size:1.08rem; } .date { color:var(--muted); font-size:.9rem; }
+    .toc { margin-top:20px; padding:20px 22px; background:var(--surface); border:1px solid var(--line); border-radius:14px; } .toc strong { display:block; margin-bottom:7px; } .toc ol { margin:0; columns:2; } .toc a { color:var(--accent); text-decoration:none; }
+    .callout,.warning,.note { margin:18px 0; padding:16px 18px; border-left:4px solid var(--accent); background:var(--soft); border-radius:0 10px 10px 0; } .warning { border-left-color:var(--warn); background:var(--warnsoft); } .note { border-left-color:var(--line); background:var(--surface); }
+    .scroll { overflow-x:auto; border:1px solid var(--line); border-radius:12px; background:var(--surface); } table { width:100%; min-width:700px; border-collapse:collapse; font-size:.93rem; } th,td { padding:13px 14px; text-align:left; vertical-align:top; border-bottom:1px solid var(--line); } th { background:var(--soft); font-weight:750; } tr:last-child td { border-bottom:0; }
+    .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; } .card { padding:18px; border:1px solid var(--line); border-radius:14px; background:var(--surface); } .card h3 { margin:0 0 8px; } .card p { margin:0; color:var(--muted); font-size:.93rem; } .num { color:var(--accent); font-size:.8rem; font-weight:800; letter-spacing:.1em; }
+    .flow { overflow-x:auto; padding:18px; border:1px solid var(--line); border-radius:14px; background:var(--surface); } .flow-row { display:flex; align-items:center; min-width:780px; gap:9px; } .node { min-width:125px; padding:12px 10px; border:1px solid var(--line); border-radius:10px; background:var(--soft); text-align:center; font-size:.87rem; font-weight:700; } .node.safe { background:var(--warnsoft); border-color:var(--warn); } .arrow { color:var(--accent); font-size:1.3rem; font-weight:800; }
+    pre { overflow-x:auto; margin:14px 0; padding:18px; border-radius:12px; background:var(--code); color:#e8f3f6; font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size:.82rem; line-height:1.55; white-space:pre; } code { padding:.1em .35em; border-radius:4px; background:var(--soft); color:var(--ink); } pre code { padding:0; background:transparent; color:inherit; }
+    ul,ol { padding-left:1.35em; } li+li { margin-top:7px; } details { margin:12px 0; padding:13px 16px; border:1px solid var(--line); border-radius:10px; background:var(--surface); } summary { cursor:pointer; font-weight:750; } a { color:var(--accent); font-weight:700; } footer { margin-top:48px; padding-top:18px; border-top:1px solid var(--line); color:var(--muted); font-size:.87rem; }
+    @media (max-width:700px) { main { width:min(100% - 24px,1020px); padding-top:18px; } .hero { padding:25px 20px; border-radius:16px; } .toc ol { columns:1; } .grid { grid-template-columns:1fr; } h2 { margin-top:38px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <p class="eyebrow">Trihouse · conversation reading record</p>
+      <h1>VLM + RL + YOLO<br>연구·설계 논의 전체 기록</h1>
+      <p class="lead">냉동·상온 창고, 포장대, 대기·충전소를 오가는 Pinky 주행 로봇에서 기본 경로는 FMS와 Nav2가 수행하고, 위험·예외 상황에서만 VLM과 RL이 제한적으로 개입하는 구조를 정리한 문서다.</p>
+      <p class="date">대화 기록일: 2026-08-07 · 출근길 읽기용 단일 HTML</p>
+    </header>
+
+    <nav class="toc" aria-label="목차">
+      <strong>목차</strong>
+      <ol>
+        <li><a href="#request">대화의 출발점</a></li>
+        <li><a href="#papers">검토 논문 4편</a></li>
+        <li><a href="#map">VLM+RL 분야 지도</a></li>
+        <li><a href="#algorithms">PPO · SAC · GRPO · TGRPO</a></li>
+        <li><a href="#policy-learning">RL policy 학습 원리</a></li>
+        <li><a href="#buffer">Buffer와 dual-buffer</a></li>
+        <li><a href="#trihouse">Trihouse 운영 흐름</a></li>
+        <li><a href="#architectures">권장 아키텍처 3개</a></li>
+        <li><a href="#vlm">RTX 5080 VLM 추천</a></li>
+        <li><a href="#contract">VLM 출력·안전 계약</a></li>
+        <li><a href="#sensor-fusion">Pinky-Pro 센서 융합과 Nav2</a></li>
+        <li><a href="#nav2-basics">Odom · AMCL · Costmap 기초</a></li>
+        <li><a href="#decision">최종 채택안과 다음 검증</a></li>
+      </ol>
+    </nav>
+
+    <section id="request">
+      <h2>1. 대화의 출발점</h2>
+      <p>목표는 주문이 들어오면 물품 입고·출고를 위해 최적 동선을 만들고, 이를 좌표 시퀀스로 관리하는 것이다. 예시 경로는 <strong>냉동 창고 → 상온 창고 → 포장대 → 대기/충전소 복귀</strong>다.</p>
+      <p>기본 운행은 Nav2가 맡고, Nav2가 자체 costmap·기본 recovery로 대응하지 못하는 위험·예외 상황에만 YOLO, VLM, RL을 개입시킨다. 이 문서에서 말하는 VLM은 Expert, RL은 Explorer이며, 둘 다 안전 승인자가 아니라 복구 제안자다.</p>
+      <div class="callout"><strong>가장 중요한 원칙:</strong> VLM/RL은 전역 교통·예약을 결정하거나 <code>cmd_vel</code>을 직접 발행하지 않는다. FMS는 전역 작업·예약, Nav2는 즉시 로컬 주행, Safety Supervisor는 최종 허용·정지 권한을 가진다.</div>
+    </section>
+
+    <section id="papers">
+      <h2>2. 현재 검토 논문 4편</h2>
+      <div class="scroll"><table><thead><tr><th>논문</th><th>핵심 구조</th><th>Trihouse에서 가져올 점</th><th>그대로 가져오면 안 되는 점</th></tr></thead><tbody>
+        <tr><td><a href="https://arxiv.org/abs/2601.21506">IROS: A Dual-Process Architecture for Real-Time VLM-Based Indoor Navigation</a></td><td>빠른 System One과 느린 VLM System Two를 분리하고 필요할 때만 VLM을 호출</td><td>정상 주행은 빠른 경로, 모호·복잡한 경우만 VLM으로 보내는 Trigger 구조</td><td>VLM이 매 프레임 주행을 판단하게 만들지 않기</td></tr>
+        <tr><td><a href="https://arxiv.org/abs/2412.04453">NaVILA: Legged Robot Vision-Language-Action Model for Navigation</a></td><td>VLA가 중간 수준 공간 지시를 만들고 저수준 RL locomotion 정책이 실행</td><td>고수준 의미 판단과 저수준 실행을 계층 분리하는 사고방식</td><td>보행 로봇의 저수준 policy를 바퀴형 Nav2 주행에 그대로 대체하지 않기</td></tr>
+        <tr><td><a href="https://openaccess.thecvf.com/content/CVPR2026/html/Li_EE-RL_Vision_Language_Guided_Reinforcement_Learning_with_Explorer_and_Expert_CVPR_2026_paper.html">EE-RL</a></td><td>RL Explorer, VLM Expert, dual replay buffer, StateHash로 희소·위험 상황 학습</td><td>사람·막힌 통로·결로 등 rare-critical 사례를 별도 replay로 다루기</td><td>CARLA 자율주행 결과를 Pinky-Pro 현장 성능으로 주장하지 않기</td></tr>
+        <tr><td><a href="https://arxiv.org/abs/2506.08440">TGRPO</a></td><td>GRPO에 단계별·궤적 전체 advantage를 결합하여 VLA를 온라인 RL로 fine-tuning</td><td>긴 작업 좌표 시퀀스 전체의 성공도를 보상에 반영하는 연구 방향</td><td>초기 Nav2 예외 복구의 1차 알고리즘으로 바로 채택하지 않기</td></tr>
+      </tbody></table></div>
++
+      <div class="note"><strong>읽는 기준:</strong> 아래 “풀려는 문제”와 “제안 방법”은 각 원문의 문제 설정·실험 범위를 바탕으로 정리했다. “Trihouse에 가져올 점”과 “그대로 가져오면 안 되는 점”은 그 사실에 근거한 프로젝트 적용 판단이다.</div>
+
+      <details open>
+        <summary>IROS — VLM을 계속 부르면 느리고, 안 부르면 의미 판단이 약해지는 문제</summary>
+        <h3>풀려고 한 문제</h3>
+        <p>실내 이동 로봇은 복도·교차로·표지판·방 번호처럼 의미 정보를 이해해야 하지만, VLM을 카메라 프레임마다 호출하면 지연이 너무 커진다. 논문은 SLAM 같은 기하 기반 방법은 위치 추정에는 강하지만 사람 대상 표지·문자 이해가 약하고, VLA의 반응형 판단은 보이지 않는 교차로·먼 거리 단서 추론에 한계가 있다고 문제를 정의한다. 특히 직선 복도에서는 reasoning 결과가 거의 같은데도 VLM을 반복 호출하는 낭비를 핵심 문제로 본다.</p>
+        <h3>제안한 방법 — System One / System Two 이중 경로</h3>
+        <ul>
+          <li><strong>System One:</strong> segmentation, OCR, key-frame compare(KFC), condition matching으로 빠르고 명확한 장면을 처리한다. 구조 변화가 감지될 때만 vision-condition matching을 수행한다.</li>
+          <li><strong>System Two:</strong> System One이 모호하다고 넘긴 장면만 compact VLM이 숙고한다. System One이 만든 공간 단서와 문자 단서를 prompt에 넣어 VLM의 약한 공간 이해를 보완한다.</li>
+          <li><strong>실행:</strong> 두 경로 중 하나가 낸 Action을 finite-state action executor가 실행·확인한다.</li>
+        </ul>
+        <p>논문 실험에서는 System One이 약 0.7~0.9초, System Two가 약 17~19초의 처리 시간을 보였으며, VLM-only 대비 지연을 줄이는 것이 구조의 핵심 성과다.</p>
+        <h3>한계와 읽을 때의 주의점</h3>
+        <ul>
+          <li>논문의 실험 대상은 표지판·방 번호가 있는 실내 건물 이동이다. 동적 작업자, 다중 로봇 예약, 냉동 환경 결로, 물류 작업 순서를 직접 검증한 연구는 아니다.</li>
+          <li>System Two 지연은 여전히 크다. VLM을 덜 부르는 구조이지, VLM 자체가 즉시 안전 제어를 할 수 있다는 뜻은 아니다.</li>
+          <li>turnover를 보수적으로 잡아 필요한 경우를 놓치지 않도록 했지만, 관리 가능한 장면도 VLM으로 넘기는 false positive가 발생한다. 즉 안전성과 효율 사이의 threshold 튜닝 문제가 남는다.</li>
+          <li>조건-행동 표와 KFC threshold가 환경에 맞아야 한다. 창고 구조·조명·결로 변화에서 그대로 재사용할 수 없다.</li>
+        </ul>
+        <h3>Trihouse에 가져올 점</h3>
+        <p><strong>가장 직접적인 설계 참고 논문이다.</strong> 다만 System One을 YOLO + LiDAR/local costmap + Nav2 상태 + stream health로 재구성한다. YOLO는 상시 동작하고, 사람/통로 차단/미지 객체/결로 의심/반복 Nav2 실패처럼 의미 판단이 필요한 경우만 5080의 VLM으로 넘긴다. VLM에는 원본 프레임만 주지 말고 YOLO track, costmap 점유, 현재 stage, 후보 안전 node를 함께 제공한다.</p>
+        <h3>그대로 가져오면 안 되는 점</h3>
+        <p>IROS의 조건-행동 matching이나 VLM Action을 Pinky의 직접 주행 명령으로 연결하면 안 된다. Trihouse에서는 VLM 출력이 <code>risk_label</code>과 <code>candidate_node_id</code>, 제한된 recovery skill 제안에 머물고, Safety Supervisor와 FMS 예약, Nav2가 실행을 결정한다.</p>
+        <p>원문: <a href="https://arxiv.org/abs/2601.21506">arXiv IROS 논문</a></p>
+      </details>
+
+      <details open>
+        <summary>NaVILA — 언어 지시를 저수준 로봇 관절 행동으로 바로 번역하기 어려운 문제</summary>
+        <h3>풀려고 한 문제</h3>
+        <p>Vision-and-Language Navigation에서 “왼쪽으로 돌아 75cm 전진” 같은 언어·시각 지시를 받아, 다족·휴머노이드의 복잡한 저수준 관절 행동으로 바로 바꾸는 것은 어렵다. VLM/VLA의 의미 일반화와 실제 보행 정책의 실시간·물리적 안정성 사이에 큰 간극이 있다는 것이 논문의 문제 설정이다.</p>
+        <h3>제안한 방법 — 중간 수준 공간 지시를 매개로 한 2계층 구조</h3>
+        <ul>
+          <li><strong>상위 VLA:</strong> 시각·언어 입력을 바로 관절 torque로 내지 않고, “전진 75cm”, “오른쪽 30도 회전” 같은 언어 기반의 중간 수준 spatial action으로 낸다.</li>
+          <li><strong>하위 locomotion RL policy:</strong> 상위 지시를 받아 실시간으로 실행하고 장애물을 회피한다. 논문은 LiDAR를 사용해 직접 환경과 상호작용하며 학습한 vision-based locomotion policy를 제시한다.</li>
+          <li><strong>학습·평가:</strong> 실제 human touring video, simulation indoor navigation, QA 데이터를 활용한 VLA와 IsaacLab 기반 물리 benchmark, 실제 legged robot 실험을 결합한다.</li>
+        </ul>
+        <h3>한계와 읽을 때의 주의점</h3>
+        <ul>
+          <li>핵심 대상은 사족·휴머노이드 보행이며, 바퀴형 AMR의 map-based Nav2 stack과 action space가 다르다.</li>
+          <li>하위 policy는 rough terrain·투명 표면 같은 보행 특성까지 다룬다. 이는 창고 평면 주행의 핵심 난제와 다르다.</li>
+          <li>VLA와 별도 locomotion policy, 다양한 데이터, 물리 simulator가 필요하므로 초기 PoC의 구현 범위가 크다.</li>
+          <li>전역 작업 배정, 다중 로봇 교통, 구역 예약, 작업자 비상 대응은 논문의 중심 문제가 아니다.</li>
+        </ul>
+        <h3>Trihouse에 가져올 점</h3>
+        <p>가져올 것은 <strong>계층 분리 원리</strong>다. VLM은 “어떤 의미적 복구가 필요한가”와 “어느 안전 node가 적절한가”를 중간 수준으로 제안하고, Nav2가 실제 local/global path와 속도를 계산한다. 즉 NaVILA의 mid-level action을 Trihouse에서는 <code>candidate_node_id</code>, <code>avoid_zone</code>, <code>recovery_skill</code>로 바꿔 사용한다.</p>
+        <h3>그대로 가져오면 안 되는 점</h3>
+        <p>VLA가 <code>cmd_vel</code> 또는 wheel velocity를 직접 내고 Nav2를 대체하게 하면 안 된다. Pinky에서 RL은 보행 policy 역할이 아니라, 허용된 복구 skill 또는 검증된 안전 node 후보를 고르는 역할에 제한한다.</p>
+        <p>원문: <a href="https://arxiv.org/abs/2412.04453">arXiv NaVILA 논문</a> · <a href="https://navila-bot.github.io/">공식 프로젝트 페이지</a></p>
+      </details>
+
+      <details open>
+        <summary>EE-RL — 드물지만 치명적인 위험 사건을 일반 RL이 충분히 배우지 못하는 문제</summary>
+        <h3>풀려고 한 문제</h3>
+        <p>End-to-end 자율주행 policy는 정상 운전 데이터에서는 잘 작동해도 보행자 횡단, 장애물 회피, 신호 위반처럼 빈도는 낮고 안전 영향은 큰 sparse-critical 상황에서 성능이 떨어진다. 일반 RL은 sparse reward와 탐험 효율 문제를 갖고, 단순 imitation은 보지 못한 위험 상황으로 일반화가 약할 수 있다는 배경에서 출발한다.</p>
+        <h3>제안한 방법 — Explorer, VLM Experts, Dual Replay, StateHash</h3>
+        <ul>
+          <li><strong>RL Explorer:</strong> 환경과 상호작용하며 행동을 선택하고 exploration experience를 만든다.</li>
+          <li><strong>LoRA fine-tuned VLM Experts:</strong> regular scenario와 sparse-critical scenario의 reasoning·reward generation을 보조하는 여러 expert를 둔다. 학습이 진행되면 한 VLM expert가 sparse-critical reasoning에 집중한다.</li>
+          <li><strong>Dual replay buffer:</strong> explorer와 expert가 만든 경험을 나누어 저장·샘플링해 policy 학습 효율과 안정성을 높인다.</li>
+          <li><strong>StateHash:</strong> RGB 이미지 유사도와 차량 kinematic 유사도를 따로 비교해 이미 본 유사 상태에서는 불필요한 VLM reasoning을 건너뛴다.</li>
+        </ul>
+        <h3>한계와 읽을 때의 주의점</h3>
+        <ul>
+          <li>실험은 CARLA Leaderboard의 end-to-end 자동차 주행이다. 조향·throttle을 내는 자동차 controller와 Nav2 기반 AMR은 안전 경계와 실행 단위가 다르다.</li>
+          <li>VLM expert·reward의 품질, StateHash 유사도 기준, dual buffer의 sampling 비율이 성능을 크게 좌우한다. 오류 난 VLM 판단이 replay에 누적될 위험도 관리해야 한다.</li>
+          <li>논문이 제시하는 사고·신호 위반 수치는 CARLA 환경의 결과다. 작업자·냉동 결로·실제 Wi-Fi 지연이 있는 창고 현장 성능을 의미하지 않는다.</li>
+          <li>저자도 large-model-guided RL에서 inference latency와 hallucination을 과제로 언급한다. 따라서 VLM을 실시간 safety layer로 쓰는 해석은 부정확하다.</li>
+        </ul>
+        <h3>Trihouse에 가져올 점</h3>
+        <p>이 논문에서 가장 가치 있는 부분은 <strong>rare-critical experience를 일반 경험과 분리</strong>하는 관점이다. Trihouse의 critical buffer에는 <code>person_on_path</code>, <code>blocked_aisle</code>, <code>low_visibility_condensation</code>, <code>localization_suspect</code>, 반복 Nav2 failure를 저장한다. StateHash도 가능하지만 사람 검출, 급격한 LiDAR 변화, safety event가 있으면 무조건 cache를 무효화해야 한다.</p>
+        <h3>그대로 가져오면 안 되는 점</h3>
+        <p>EE-RL처럼 raw sensor에서 직접 자동차 control을 내도록 만들지 않는다. VLM은 구조화된 위험 의미를 내고, RL은 <code>WAIT</code>/<code>BACKOUT</code>/<code>REOBSERVE</code>/<code>REQUEST_REPLAN</code> 같은 allowlist skill만 고른다. FMS는 예약·전역 재계획을, Nav2는 실제 회피를, Safety Supervisor는 최종 거부·정지를 담당한다.</p>
+        <p>원문: <a href="https://openaccess.thecvf.com/content/CVPR2026/html/Li_EE-RL_Vision_Language_Guided_Reinforcement_Learning_with_Explorer_and_Expert_CVPR_2026_paper.html">CVPR 2026 Open Access</a></p>
+      </details>
+
+      <details open>
+        <summary>TGRPO — 성공 시연만 모은 VLA를 낯선 환경에 적응시키기 어려운 문제</summary>
+        <h3>풀려고 한 문제</h3>
+        <p>VLA는 대규모 사전학습 뒤에도 새로운 작업·환경·실행 편향에 적응하려면 fine-tuning이 필요하다. 기존 SFT는 사람이 수집한 성공 trajectory에 크게 의존하므로 실패로부터 배우기 어렵고, 실제 환경 feedback을 충분히 활용하지 못한다. 반대로 긴 로봇 작업에 RL을 적용하면 sparse reward, 높은 variance, credit assignment 문제가 커진다.</p>
+        <h3>제안한 방법 — LLM 보상 구성 + trajectory-wise group relative optimization</h3>
+        <ul>
+          <li><strong>dense reward 구성:</strong> LLM의 task analysis를 이용해 단계별로 더 촘촘한 reward를 구성한다.</li>
+          <li><strong>group rollout:</strong> 같은 초기 조건에서 여러 trajectory를 병렬로 샘플링하고, 그룹 안의 상대 성과를 정규화해 비교한다.</li>
+          <li><strong>step-level advantage:</strong> 같은 시점의 행동 품질을 비교해 국소적인 credit assignment를 제공한다.</li>
+          <li><strong>trajectory-level advantage:</strong> 전체 누적 보상·작업 성공을 비교해 장기 결과를 반영한다.</li>
+          <li><strong>fused update:</strong> 두 advantage를 결합해, 별도 value network 없이 GRPO 계열의 clipped policy update에 사용한다.</li>
+        </ul>
+        <h3>한계와 읽을 때의 주의점</h3>
+        <ul>
+          <li>현재 공개 원문은 LIBERO manipulation benchmark의 VLA post-training을 검증한다. 이동 로봇 경로 계획·다중 로봇 예약·물류 운영을 직접 다루지 않는다.</li>
+          <li>LLM이 만든 dense reward와 task decomposition이 잘못되면 policy도 잘못된 방향으로 최적화될 수 있다.</li>
+          <li>동일 초기 조건에서 여러 rollout을 돌리는 online RL은 simulator 병렬화와 상당한 실험 예산이 필요하다.</li>
+          <li>논문은 arXiv preprint이며, 실제 작업장 장기 운영·안전 인증을 검증한 논문으로 해석하면 안 된다.</li>
+        </ul>
+        <h3>Trihouse에 가져올 점</h3>
+        <p>TGRPO는 지금의 Nav2 recovery manager를 대체하는 방법이 아니라 <strong>후속 VLA 연구 방법</strong>으로 유용하다. 예를 들어 “사람 발견 뒤 어떤 안전 node를 제안할까”를 VLM/VLA가 여러 개 생성하고, 단계별 안전 규칙과 전체 mission 성공·예약 충돌·복구 시간·Safety stop을 함께 보상으로 삼아 후보 생성 policy를 fine-tuning할 수 있다.</p>
+        <h3>그대로 가져오면 안 되는 점</h3>
+        <p>초기 PoC에서 TGRPO로 VLM을 online update하거나, LLM 보상만으로 안전 여부를 정하지 않는다. 먼저 고정 rule·Safety Supervisor·PPO recovery baseline·offline 로그 평가를 만들고, 충분한 시뮬레이터와 검증 set이 생긴 뒤에 TGRPO를 VLM/VLA의 고수준 제안 학습에만 검토한다.</p>
+        <p>원문: <a href="https://arxiv.org/abs/2506.08440">arXiv TGRPO 논문</a> · <a href="https://github.com/hahans/TGRPO">공개 코드</a></p>
+      </details>
+    </section>
+
+    <section id="map">
+      <h2>3. VLM + RL 분야 지도와 구성요소</h2>
+      <div class="scroll"><table><thead><tr><th>층위</th><th>역할</th><th>Trihouse 적용</th></tr></thead><tbody>
+        <tr><td>FMS</td><td>주문, 작업 순서, 구역 예약, 다중 로봇 조정</td><td>냉동·상온·포장대·대기/충전소 순서와 병목 예약 결정</td></tr>
+        <tr><td>SLAM·AMCL·센서 융합</td><td>지도에서 pose·속도·신뢰도 추정</td><td><code>map → odom → base_footprint</code>를 기준으로 주행</td></tr>
+        <tr><td>Nav2</td><td>전역/로컬 경로, costmap 기반 회피, 기본 recovery</td><td>정상 운행의 주체이자 최종 경로 실행자</td></tr>
+        <tr><td>YOLO</td><td>사람·박스·장애물의 빠른 검출·추적</td><td>무엇이 앞에 있는지 실시간 후보 생성</td></tr>
+        <tr><td>VLM</td><td>영상과 언어를 통한 의미·위험·실패 해석</td><td>사람 여부, 쓰러짐 의심, 통로 차단, 결로, 위치 불확실성 판정</td></tr>
+        <tr><td>RL Explorer</td><td>제한된 복구 행동 중 후보 선택</td><td>대기·후진·재관측·Nav2/FMS 재계획 요청</td></tr>
+        <tr><td>Safety Supervisor</td><td>속도·거리·금지구역·정지의 최종 판정</td><td>제안을 허용·축소·거부하고 비상 정지 유지</td></tr>
+      </tbody></table></div>
+
+      <h3>연구 흐름</h3>
+      <div class="grid">
+        <article class="card"><p class="num">A</p><h3>VLM/VLA 직접 행동</h3><p>시각과 언어에서 바로 행동을 생성한다. 일반성은 높지만 주행 안전·검증 비용이 크다.</p></article>
+        <article class="card"><p class="num">B</p><h3>고수준 VLM + 저수준 RL</h3><p>NaVILA형 계층 구조다. 고수준 의미와 실행 정책을 분리한다.</p></article>
+        <article class="card"><p class="num">C</p><h3>VLM Expert + RL Explorer</h3><p>EE-RL형이다. 드문 위험·예외 복구에 초점을 맞춰 현재 목표와 가장 가깝다.</p></article>
+      </div>
+      <div class="note">Trihouse의 1차 구조는 C를 중심으로 IROS의 “예외 시에만 VLM 호출” 원칙을 결합한다.</div>
+    </section>
+
+    <section id="algorithms">
+      <h2>4. PPO · SAC · GRPO · TGRPO</h2>
+      <div class="scroll"><table><thead><tr><th>기법</th><th>핵심</th><th>강점</th><th>Trihouse 1차 판단</th></tr></thead><tbody>
+        <tr><td>PPO</td><td>현재 정책으로 수집한 경험을 안정적으로 갱신하는 on-policy RL</td><td>구현과 검증의 기준선으로 좋음</td><td><strong>추천</strong>: 이산 recovery skill 선택의 1차 기준선</td></tr>
+        <tr><td>SAC</td><td>replay buffer를 재사용하는 off-policy RL</td><td>표본 효율·연속 행동에 강함</td><td>연속 회피 오프셋 연구에는 후보. 직접 속도 제어에는 사용하지 않음</td></tr>
+        <tr><td>GRPO</td><td>같은 상태에서 여러 출력의 상대 보상을 비교</td><td>LLM/VLM 정책 최적화와 잘 맞음</td><td>VLM의 후보 경로·설명 ranking 연구에 후보</td></tr>
+        <tr><td>TGRPO</td><td>단계별 보상과 궤적 전체 보상을 함께 반영</td><td>긴 로봇 작업 궤적 평가에 유리</td><td>후순위: VLA 또는 좌표 시퀀스 fine-tuning 연구 단계</td></tr>
+      </tbody></table></div>
+      <p>따라서 처음에는 <strong>PPO로 제한된 이산 행동</strong>을 학습한다. 예: <code>WAIT_AT_SAFE_NODE</code>, <code>BACKOUT_TO_SAFE_NODE</code>, <code>REOBSERVE_SCENE</code>, <code>REQUEST_NAV2_REPLAN</code>.</p>
+
+      <h3>PPO — 현재 정책을 조금씩, 안정적으로 개선</h3>
+      <p>PPO(Proximal Policy Optimization)는 로봇이 현재 정책으로 시뮬레이터나 환경에서 rollout을 수집하고, 그 경험을 바탕으로 정책을 <strong>한 번에 너무 많이 바꾸지 않도록 제한</strong>하며 업데이트하는 actor-critic 계열 방법이다. 여기서 actor는 행동 확률을 내는 정책이고, critic은 현재 상태가 얼마나 좋은지를 추정해 보상 분산을 줄인다.</p>
+      <p>예를 들어 <code>blocked_aisle</code> 상태에서 PPO 정책은 <code>WAIT</code> 0.55, <code>BACKOUT</code> 0.30, <code>REQUEST_NAV2_REPLAN</code> 0.15처럼 복구 skill의 확률을 낸다. 시뮬레이션에서 <code>WAIT</code>가 안전하게 성공했다면 그 행동 확률을 올리되, clip 목적함수로 이전 정책과 지나치게 멀어지는 갱신을 막는다.</p>
+      <ul>
+        <li><strong>장점:</strong> 학습이 비교적 안정적이고, 이산 action space와 safety constraint를 붙이기 쉽다.</li>
+        <li><strong>단점:</strong> 새 정책으로 수집한 최근 rollout을 주로 써야 하므로 샘플 효율은 SAC보다 낮다.</li>
+        <li><strong>Trihouse 역할:</strong> Nav2 실패 뒤의 복구 skill 선택. PPO가 경로를 직접 만들거나 속도를 직접 명령하지는 않는다.</li>
+      </ul>
+
+      <h3>SAC — replay buffer를 오래 활용하는 연속 제어형 RL</h3>
+      <p>SAC(Soft Actor-Critic)는 replay buffer에서 과거 경험을 반복 샘플링하는 off-policy actor-critic 방법이다. 행동 보상뿐 아니라 <strong>entropy</strong>, 즉 행동 선택의 다양성도 보상에 포함해 초기 탐색이 한 행동에 너무 빨리 고정되지 않게 한다. 두 개의 Q critic과 target network를 사용하는 구성이 대표적이다.</p>
+      <p>예를 들어 action을 <code>안전 노드까지 후진 거리</code>, <code>재관측을 위한 카메라 yaw</code>, <code>후보 goal 주변의 작은 offset</code>처럼 연속값으로 정의하면 SAC가 잘 맞는다. 반대로 <code>WAIT</code>/<code>REPLAN</code> 같은 몇 개의 이산 skill만 고르는 현재 1차 범위에서는 PPO가 더 단순하다.</p>
+      <ul>
+        <li><strong>장점:</strong> safe/critical replay buffer를 여러 번 활용하므로 위험 사례가 비싼 실제 로봇 데이터에 표본 효율이 좋다.</li>
+        <li><strong>단점:</strong> critic 과대추정, 보상 설계, 분포가 오래된 데이터의 편향을 더 조심해야 한다.</li>
+        <li><strong>Trihouse 역할:</strong> 다음 단계에서 "얼마나 후진할지" 또는 "어느 정도의 안전 offset을 줄지"를 연구할 때 후보. <code>cmd_vel</code> 직접 제어는 Safety/ Nav2 권한을 침범하므로 제외한다.</li>
+      </ul>
+
+      <h3>GRPO — 여러 VLM 후보를 서로 비교해 좋은 출력을 강화</h3>
+      <p>GRPO(Group Relative Policy Optimization)는 하나의 상태 또는 prompt에 대해 여러 출력을 생성하고, 그 그룹 안에서의 <strong>상대 보상</strong>으로 advantage를 계산해 정책을 개선한다. 값 함수 critic을 별도로 크게 학습하지 않아도 그룹 내 우열을 이용할 수 있다는 점 때문에 LLM/VLM의 문장·JSON·행동 토큰 fine-tuning에 자주 논의된다.</p>
+      <p>예를 들어 같은 장면에서 VLM이 아래 세 후보를 낸다고 하자. <code>WAIT_NODE_A1</code>, <code>SAFE_NODE_C2</code>, <code>계속 전진</code>. Safety rule, 예약 가능 여부, 이후 Nav2 성공 여부로 보상을 매기면, 위험 상황에서 "계속 전진"보다 검증된 안전 노드 제안을 더 높은 상대 점수로 강화할 수 있다.</p>
+      <ul>
+        <li><strong>장점:</strong> VLM이 만들어 내는 구조화 후보를 ranking하기 좋고, 명시적인 정답 라벨이 부족한 상황에서도 결과 보상으로 정렬할 수 있다.</li>
+        <li><strong>단점:</strong> 여러 후보를 생성·평가해야 하므로 추론 비용이 든다. 또한 GRPO 자체가 Nav2 대체 주행 controller는 아니다.</li>
+        <li><strong>Trihouse 역할:</strong> VLM의 위험 JSON, 안전 노드 후보, 복구 설명을 개선하는 연구용 fine-tuning 후보다.</li>
+      </ul>
+
+      <h3>TGRPO — 단계 점수와 전체 궤적 성공을 함께 학습</h3>
+      <p>TGRPO(Trajectory-wise Group Relative Policy Optimization)는 GRPO의 그룹 상대 비교를 VLA의 실제 로봇 궤적에 맞게 확장한 방법이다. 단일 시점 출력만 잘 평가하는 것이 아니라, <strong>각 단계의 즉시 피드백</strong>과 <strong>작업 궤적 전체의 성공·효율·안전 결과</strong>를 함께 advantage에 반영한다. 제시 논문은 실제 환경 상호작용을 활용해 VLA를 온라인 RL로 fine-tuning하는 데 초점을 둔다.</p>
+      <p>Trihouse에서는 “경로 재계획 제안이 그 순간만 안전해 보였는가”뿐 아니라, 그 선택 이후 <code>냉동 창고 → 상온 창고 → 포장대 → 복귀</code> 단계가 예약 충돌 없이 완료됐는지, 불필요한 후진·대기 시간이 컸는지, Safety stop이 발생했는지를 함께 평가하는 연구로 연결할 수 있다.</p>
+      <ul>
+        <li><strong>장점:</strong> 긴 시퀀스에서 단기적으로 좋아 보이는 선택과 최종 작업 성공의 차이를 줄이는 데 적합하다.</li>
+        <li><strong>단점:</strong> 온라인 상호작용·궤적 보상·실험 인프라가 필요해 초기 PoC 난도가 높다.</li>
+        <li><strong>Trihouse 역할:</strong> PPO 기반 recovery manager와 안전 로그가 안정된 뒤, VLM/VLA의 좌표·안전 노드 제안 자체를 fine-tuning하는 후속 연구다.</li>
+      </ul>
+
+      <h3>한 번에 구분하기</h3>
+      <div class="scroll"><table><thead><tr><th>질문</th><th>가장 가까운 방법</th><th>이유</th></tr></thead><tbody>
+        <tr><td>지금 위험 상황에서 대기·후진·재계획 중 무엇을 고를까?</td><td>PPO</td><td>제한된 이산 recovery skill을 안정적으로 고르는 기준선</td></tr>
+        <tr><td>얼마나 후진하거나 어느 offset으로 회피할까?</td><td>SAC</td><td>연속값 action과 replay 활용에 강점</td></tr>
+        <tr><td>VLM이 낸 여러 안전 노드·설명 후보 중 무엇이 더 좋은가?</td><td>GRPO</td><td>동일 상태의 후보를 상대 보상으로 정렬</td></tr>
+        <tr><td>긴 작업 좌표 sequence 전체를 성공·안전·효율 기준으로 VLA에 학습시킬까?</td><td>TGRPO</td><td>단계 보상과 trajectory-level 결과를 함께 사용</td></tr>
+      </tbody></table></div>
+    </section>
+
++
+    <section id="policy-learning">
+      <h2>5. RL policy 학습이란 무엇인가</h2>
+      <p>RL policy 학습은 로봇이 <strong>현재 상태를 보고 어떤 행동을 선택할지</strong>를 보상 경험으로 배우는 과정이다. policy는 보통 <code>πθ(a | s)</code>로 쓴다. 여기서 <code>s</code>는 상태(state), <code>a</code>는 행동(action), <code>θ</code>는 학습으로 바뀌는 신경망 파라미터다. 학습의 목표는 한 번의 즉시 보상만 크게 만드는 것이 아니라, 앞으로 받을 보상의 합인 return을 크게 만드는 policy를 찾는 것이다.</p>
+      <div class="scroll"><table><thead><tr><th>용어</th><th>의미</th><th>Trihouse 예시</th></tr></thead><tbody>
+        <tr><td>상태 <code>s</code></td><td>행동을 결정할 때 policy에 주는 관측 요약</td><td>현재 pose, goal까지 거리, Nav2 상태, local costmap 요약, LiDAR 위험도, YOLO track, VLM risk label, 배터리, map_revision</td></tr>
+        <tr><td>행동 <code>a</code></td><td>policy가 고르는 선택지</td><td><code>WAIT_AT_SAFE_NODE</code>, <code>BACKOUT_TO_SAFE_NODE</code>, <code>REOBSERVE_SCENE</code>, <code>REQUEST_NAV2_REPLAN</code></td></tr>
+        <tr><td>보상 <code>r</code></td><td>선택이 좋았는지 알려 주는 점수</td><td>안전 복구·작업 재개·불필요한 대기 감소는 양의 보상, 반복 실패·위험 접근·사람 경로 침범 시도는 음의 보상</td></tr>
+        <tr><td>전이</td><td>한 상태에서 행동을 했을 때 다음 상태로 바뀐 기록</td><td><code>(s, a, r, s', done)</code></td></tr>
+        <tr><td>episode</td><td>한 번의 독립된 시도</td><td>“통로 차단 감지 → 안전 대기/후진 → Nav2 재계획 → 정상 경로 복귀” 한 건</td></tr>
+        <tr><td>return</td><td>현재 이후 누적 보상. 미래 보상은 보통 discount <code>γ</code>를 적용</td><td>즉시 조금 빨리 지나가는 것보다, 충돌 없이 포장대까지 작업을 완료한 정책을 높게 평가</td></tr>
+      </tbody></table></div>
+      <h3>정책은 어떻게 학습되는가</h3>
+      <div class="flow"><div class="flow-row">
+        <div class="node">1. 정책으로<br>시뮬레이터 실행</div><div class="arrow">→</div><div class="node">2. 상태·행동·결과<br>transition 수집</div><div class="arrow">→</div><div class="node">3. reward 계산</div><div class="arrow">→</div><div class="node">4. policy 파라미터<br>업데이트</div><div class="arrow">→</div><div class="node">5. 고정 평가셋에서<br>새 정책 검증</div>
+      </div></div>
+      <ol>
+        <li><strong>환경을 만든다.</strong> 정상 통로, 사람 출현, 통로 차단, 결로·저조도, pose 불확실성, reservation 충돌 등 예외를 시뮬레이터에 만든다.</li>
+        <li><strong>관측을 policy 입력으로 만든다.</strong> 원본 영상 전체가 아니라 YOLO·VLM·LiDAR·Nav2에서 이미 구조화한 값으로 시작한다. 이는 데이터량과 안전 검증 범위를 줄인다.</li>
+        <li><strong>허용 행동을 고정한다.</strong> policy는 allowlist의 recovery skill만 선택한다. FMS 예약·Nav2 goal·Safety 최종 정지는 policy 밖의 권한으로 남긴다.</li>
+        <li><strong>보상을 계산한다.</strong> 성공/실패뿐 아니라 안전성, 복구 시간, 경로 길이 증가, 반복 재계획, human escalation 여부를 함께 반영한다.</li>
+        <li><strong>많은 episode를 반복한다.</strong> policy가 같은 상태에서 어떤 행동이 장기 return을 높이는지 통계적으로 배운다.</li>
+        <li><strong>새 policy를 동결 평가한다.</strong> 학습에 쓰지 않은 scenario seed와 위험 사례에서 이전 policy보다 안전·성공·지연이 나빠지지 않는지 확인한다.</li>
+      </ol>
+      <h3>보상 설계의 원리</h3>
+      <p>reward는 “로봇이 무엇을 중요하게 배우게 할지”를 정의한다. 잘못 설계하면 가장 가까운 길만 고르거나, 계속 멈춰서 사고를 피하는 policy가 나올 수 있다. 따라서 안전은 단순 큰 음의 보상만이 아니라 Safety Supervisor의 hard constraint로 먼저 막고, policy는 허용된 선택지 안에서 효율을 학습해야 한다.</p>
+      <div class="scroll"><table><thead><tr><th>보상 항목</th><th>의도</th><th>주의</th></tr></thead><tbody>
+        <tr><td>안전 복구 성공</td><td>위험 사건 뒤 안전 node 또는 정상 경로로 복귀</td><td>사람 근접·금지구역 진입은 reward로 상쇄하지 말고 Safety가 선제 차단</td></tr>
+        <tr><td>작업 단계 완료</td><td>재계획 후 냉동·상온·포장대 단계가 이어지도록 유도</td><td>최종 완료 보상만 쓰면 중간 단계 학습이 너무 느릴 수 있음</td></tr>
+        <tr><td>시간·거리 비용</td><td>불필요한 대기·왕복·재계획 반복 감소</td><td>시간 비용을 과도하게 주면 안전 대기를 회피하려 할 수 있음</td></tr>
+        <tr><td>반복 실패 비용</td><td>같은 행동을 계속 시도하지 않게 함</td><td>VLM/센서가 stale이면 policy 잘못이 아니므로 데이터 품질 태그 필요</td></tr>
+        <tr><td>관제 escalation</td><td>정말 필요한 경우만 사람에게 넘기게 함</td><td>사람 안전이 걸린 상황에서는 escalation을 벌점으로 두지 않음</td></tr>
+      </tbody></table></div>
+      <h3>PPO와 SAC는 이 학습 루프에서 무엇이 다른가</h3>
+      <p><strong>PPO</strong>는 최근 rollout으로 actor와 critic을 함께 업데이트한다. critic은 상태의 기대 return을 추정하고, actor는 실제 결과가 예상보다 좋았던 행동의 확률을 높인다. 이 차이가 advantage다. PPO의 clip은 업데이트 전후 행동 확률 비율이 너무 크게 바뀌는 것을 막아 학습 불안정을 줄인다.</p>
+      <p><strong>SAC</strong>는 transition을 replay buffer에 오래 쌓고 여러 번 다시 뽑아 Q-value를 학습한다. actor는 높은 Q-value뿐 아니라 충분한 행동 다양성(entropy)도 갖도록 학습한다. 그래서 경험 재사용 효율은 좋지만, 오래된 데이터·Q 추정 오류·reward 설계를 더 엄격히 관리해야 한다.</p>
+      <div class="note"><strong>중요:</strong> 학습(training)과 실행(inference)은 다르다. training은 시뮬레이터와 기록된 buffer로 policy 파라미터를 갱신하는 오프라인 작업이다. 실행은 고정된 검증 완료 policy가 현재 상태를 입력받아 action 하나를 고르는 일이다. Pinky가 주행 중 자신의 policy를 계속 업데이트하는 방식은 초기 범위에 넣지 않는다.</div>
+      <h3>Trihouse 예외 상황 하나를 policy 학습 데이터로 바꾸면</h3>
+      <pre><code>상태 s:
+  Nav2 = progress_timeout
+  YOLO = person_on_path, confidence=0.94
+  VLM = {risk_label: person_on_path, severity: high}
+  local_costmap = path_occupied
+  current_node = FREEZER_AISLE_3
+  candidate_nodes = [WAIT_NODE_A1, SAFE_NODE_C2]
+
+정책 action a:
+  WAIT_AT_SAFE_NODE
+
+환경 결과:
+  Safety 승인 → Nav2가 WAIT_NODE_A1까지 이동 → 사람이 경로 이탈
+  → FMS가 재계획 → 작업 재개
+
+transition:
+  (s, WAIT_AT_SAFE_NODE, 안전·재개 보상, s', done=false)</code></pre>
+      <p>동일한 상태에서 <code>계속 전진</code>은 Safety가 거부하거나 위험 비용이 커서 낮은 return을 얻는다. 여러 scenario에서 이런 차이가 축적되면 policy는 사람 경로 점유 상태에서 안전 대기·재계획을 더 자주 선택하게 된다.</p>
+      <h3>실제 도입의 안전한 순서</h3>
+      <ol>
+        <li>Nav2 baseline과 Safety Supervisor를 먼저 고정한다.</li>
+        <li>사람·통로 차단·결로·위치 불확실성 scenario를 시뮬레이터로 만든다.</li>
+        <li>수동 설계 reward와 PPO 이산 skill policy를 학습한다.</li>
+        <li>safe/critical replay와 VLM semantic label을 넣어 비교한다.</li>
+        <li>offline regression과 shadow evaluation을 통과한 policy만 제한적으로 배포한다.</li>
+      </ol>
+    </section>
+
+    <section id="buffer">
+      <h2>5. Buffer의 정확한 의미와 dual-buffer 두 안</h2>
+      <p>Buffer는 “로봇이 지금 따라가는 경로”가 아니라 <strong>나중에 참조하거나 학습하기 위한 기억 저장소</strong>다. 기준 경로를 담는 buffer와 RL 학습 경험을 담는 buffer는 목적이 다르다.</p>
+      <div class="scroll"><table><thead><tr><th>구분</th><th>담는 내용</th><th>실시간 역할</th><th>학습 역할</th></tr></thead><tbody>
+        <tr><td>Route reference buffer</td><td>검증된 waypoint/좌표 sequence, stage, zone, map_revision</td><td>기본 경로·복귀 경로 참조</td><td>복구 경로 품질 비교</td></tr>
+        <tr><td>Replay / learning buffer</td><td><code>(state, action, reward, next_state)</code></td><td>보통 직접 실행하지 않음</td><td>RL policy 학습</td></tr>
+        <tr><td>Safe replay buffer</td><td>정상 통과·안전 복구 성공 사례</td><td>안전 후보 ranking</td><td>안정 행동 반복 학습</td></tr>
+        <tr><td>Critical replay buffer</td><td>사람·통로 차단·결로·Nav2 실패·위치 불확실 사례</td><td>위험 상태 재확인</td><td>희소 위험 사례 과대표집</td></tr>
+      </tbody></table></div>
+
+      <h3>1안 — Reference + Learning</h3>
+      <p>검증된 기준 좌표 경로와 학습용 경험 replay를 분리한다. 운영 경로와 학습 데이터가 섞이지 않는다는 점이 장점이다. 현재 운영 기본 구조로 권장한다.</p>
+
+      <h3>2안 — Safe + Unsafe/Critical</h3>
+      <p>정상·안전 성공 사례와 위험·예외 사례를 분리한다. EE-RL처럼 rare-critical 사건을 집중 학습할 수 있다. 단, unsafe buffer는 위험 운전을 재실행하기 위한 것이 아니라, 정지·실패·근접사고·사람 개입 로그와 안전 시뮬레이터 사례를 오프라인 학습에 쓰는 저장소다.</p>
+
+      <div class="callout"><strong>결론:</strong> 둘 중 하나만 고르기보다 <code>운영 = reference route buffer</code>, <code>학습 = safe replay + critical replay</code>로 결합하는 것이 가장 적합하다.</div>
+      <pre><code>route_ref:
+  map_revision, task_type, stage, waypoint_id,
+  [(x, y, yaw), ...], zone, reservation_scope
+
+replay:
+  state=(pose, goal, local_costmap_summary, lidar, YOLO tracks,
+         VLM risk_label, battery, Nav2_status),
+  action, reward, next_state, terminated, safety_event,
+  route_id, map_revision, incident_id</code></pre>
+    </section>
+
+    <section id="trihouse">
+      <h2>6. Trihouse 시나리오에 적용</h2>
+      <p>입고 문서는 바코드·상태 확인, 하차 위치 탐색, 주행 로봇 가용 여부와 작업 재스케줄링을 요구한다. 출고 문서는 주문·재고 확인, 포장대 이동과 작업 이력 기록을 요구한다. 비상 문서는 감속·정지, 사람 여부·자세·움직임 확인, 안전거리 유지, 경로 안전성 재확인 뒤 재개를 요구한다.</p>
+      <div class="flow"><div class="flow-row">
+        <div class="node">주문·작업</div><div class="arrow">→</div><div class="node">FMS<br>단계·예약</div><div class="arrow">→</div><div class="node">기준 좌표 sequence<br>map_revision</div><div class="arrow">→</div><div class="node">Nav2<br>경로·costmap</div><div class="arrow">→</div><div class="node safe">위험/예외<br>Trigger</div>
+      </div></div>
+      <p>좌표 시퀀스는 <strong>냉동 창고 → 상온 창고 → 포장대 → 대기/충전소</strong>처럼 작업 단계별로 저장한다. 하지만 긴 시퀀스를 한 번에 무조건 실행하기보다, mission manager가 단계별 안전 checkpoint를 통과하며 다음 Nav2 goal을 주는 방식이 안전하다.</p>
+      <div class="warning"><strong>좌표의 진실 원천:</strong> VLM이 자유로운 실수 좌표를 발행하지 않는다. FMS의 <code>locations</code>와 <code>map_revision</code>에 등록된 안전 node ID를 VLM/RL이 후보로 제안하고, FMS가 검증된 <code>(x, y, yaw)</code>로 변환한다.</div>
+<h3>map_revision이 정확히 무엇인가</h3>
+      <p><code>map_revision</code>은 <strong>“이 좌표가 어느 버전의 지도 좌표계에서 측정됐는가”를 나타내는 불변 식별자</strong>다. 쉽게 말해 지도 파일의 버전 번호이자, 그 위에 찍어 둔 모든 <code>(x, y, yaw)</code> 좌표의 유효 범위를 보장하는 안전 태그다.</p>
+      <div class="scroll"><table><thead><tr><th>항목</th><th>의미</th><th>예시</th></tr></thead><tbody>
+        <tr><td><code>map_name</code></td><td>어느 공간의 지도 계열인지 나타내는 안정적인 이름</td><td><code>trihouse_warehouse_floor1</code></td></tr>
+        <tr><td><code>map_revision</code></td><td>그 지도 계열의 특정·고정된 좌표계 버전</td><td><code>r2026-08-07-01</code> 또는 지도 내용 hash</td></tr>
+        <tr><td><code>pose_x, pose_y, pose_yaw</code></td><td>해당 revision의 <code>map</code> frame에서만 의미가 있는 위치·방향</td><td><code>(12.40, -3.10, 1.57)</code></td></tr>
+      </tbody></table></div>
+      <p>SLAM 지도를 다시 만들면 시작 원점, 벽 윤곽, scan matching 결과가 달라질 수 있다. 그러면 이전 지도에서의 <code>(12.40, -3.10)</code>은 새 지도에서 완전히 다른 실세계 위치를 가리킬 수 있다. map_revision 없이 과거 좌표를 실행하면 로봇이 오류를 내지 않고도 엉뚱한 곳으로 갈 수 있다.</p>
+      <pre><code>locations 테이블 예시
+location_id: PACKING_A
+map_name: trihouse_warehouse_floor1
+map_revision: r2026-08-07-01
+pose_x: 12.40
+pose_y: -3.10
+pose_yaw: 1.57
+
+작업 요청 예시
+pickup_location_id: FREEZER_A
+packing_station_id: PACKING_A
+map_revision: r2026-08-07-01</code></pre>
+      <p>작업을 받았을 때는 다음 세 값이 모두 일치해야 한다.</p>
+      <ol>
+        <li>로봇이 실제로 로드한 Nav2 map의 <code>map_name</code>과 <code>map_revision</code></li>
+        <li>FMS가 작업에 붙인 <code>map_revision</code></li>
+        <li>출발지·목적지·안전 노드가 저장된 <code>locations.map_revision</code></li>
+      </ol>
+      <div class="callout"><strong>불일치 규칙:</strong> 하나라도 다르면 좌표 변환이나 보정으로 억지 실행하지 않고 <strong>작업을 거절</strong>한다. 새 지도를 로드한 뒤 해당 revision으로 위치를 다시 티칭하고, 관제가 새 revision으로 작업을 다시 발행해야 한다.</div>
+      <p><strong>revision을 올려야 하는 경우:</strong> SLAM map을 재생성했을 때, 지도 원점·스케일·방향을 바꿨을 때, 지도 파일을 교체했을 때, 또는 재티칭이 필요할 정도로 좌표계의 유효성이 변했을 때다. 반대로 사람·박스 같은 동적 장애물의 변화나 기존 지도 위에 새 location 한 개를 추가하는 일은 지도 좌표계가 같다면 revision 변경 사유가 아니다.</p>
+      <p>Trihouse DB에서는 <code>locations</code>에 <code>map_name + map_revision</code>, 좌표, location type을 보관한다. 좌표가 존재하면 map과 revision도 반드시 있어야 한다는 CHECK 제약이 이미 설계되어 있다. 로봇 launch 설정, 작업 요청, 상태 보고에도 같은 revision을 넣어야 전체 경로가 같은 지도 기준임을 증명할 수 있다.</p>
+    </section>
+
+    <section id="architectures">
+      <h2>7. 권장 아키텍처 3개</h2>
+      <h3>아키텍처 1 — IROS형 예외 게이트 + Reference/Learning Buffer</h3>
+      <div class="flow"><div class="flow-row">
+        <div class="node">FMS<br>기준 경로</div><div class="arrow">→</div><div class="node">Nav2<br>정상 주행</div><div class="arrow">→</div><div class="node safe">정체·실패·불확실</div><div class="arrow">→</div><div class="node">VLM</div><div class="arrow">→</div><div class="node">PPO Explorer</div><div class="arrow">→</div><div class="node">Safety → FMS/Nav2</div>
+      </div></div>
+      <p><strong>가장 먼저 구현할 구조.</strong> 정상 주행을 건드리지 않고, VLM을 예외로 제한한다. VLM은 위험 라벨·근거·신뢰도를 내고, RL은 allowlist recovery skill을 고른다.</p>
+
+      <h3>아키텍처 2 — EE-RL형 Safe/Critical Dual Replay</h3>
+      <div class="flow"><div class="flow-row">
+        <div class="node">정상·안전 운행</div><div class="arrow">→</div><div class="node">Safe replay</div><div class="arrow">→</div><div class="node">Stratified sampler</div><div class="arrow">→</div><div class="node">RL Explorer 학습</div><div class="arrow">→</div><div class="node">제한된 복구 행동</div>
+      </div><div class="flow-row" style="margin-top:12px">
+        <div class="node safe">사람·결로·실패</div><div class="arrow">→</div><div class="node safe">Critical replay</div><div class="arrow">→</div><div class="node">StateHash / VLM Expert</div><div class="arrow">→</div><div class="node">같은 학습 경로</div>
+      </div></div>
+      <p><strong>연구 기여를 강화하는 두 번째 단계.</strong> StateHash는 유사 장면에서 불필요한 VLM 호출을 줄이되, 사람 검출·LiDAR 급변·안전 이벤트가 생기면 캐시를 무효화한다.</p>
+
+      <h3>아키텍처 3 — NaVILA형 의미 좌표 후보 계층</h3>
+      <div class="flow"><div class="flow-row">
+        <div class="node">기준 경로 + 현재 stage</div><div class="arrow">→</div><div class="node">VLM<br>위험·우회 제약</div><div class="arrow">→</div><div class="node">안전 node 2~3개</div><div class="arrow">→</div><div class="node">RL 점수화</div><div class="arrow">→</div><div class="node">FMS 예약</div><div class="arrow">→</div><div class="node">Safety → Nav2</div>
+      </div></div>
+      <p><strong>“VLM+RL이 좌표를 전달한다”는 요구에 가장 직접적이다.</strong> 단, VLM은 자유 좌표가 아니라 <code>SAFE_NODE_C2</code>, <code>WAIT_NODE_A1</code> 같은 검증된 node ID를 제안한다.</p>
+    </section>
+
+    <section id="vlm">
+      <h2>8. RTX 5080 서버의 YOLO + VLM 구성</h2>
+      <div class="callout"><strong>1차 채택:</strong> <code>Qwen/Qwen2.5-VL-7B-Instruct</code>를 event-triggered 4-bit Expert로 둔다. 지연·동시 스트림 부담이 있으면 <code>Qwen/Qwen2.5-VL-3B-Instruct</code>를 fallback 또는 초기 PoC 모델로 사용한다.</div>
+      <div class="scroll"><table><thead><tr><th>우선순위</th><th>모델</th><th>권장 역할</th><th>선정 이유</th></tr></thead><tbody>
+        <tr><td>1</td><td><a href="https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct">Qwen2.5-VL-7B-Instruct</a></td><td>예외 상황의 주 VLM</td><td>객체·텍스트·공간 위치 이해, bbox/point, 안정적 JSON 출력. Apache-2.0.</td></tr>
+        <tr><td>2</td><td><a href="https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct">Qwen2.5-VL-3B-Instruct</a></td><td>저지연 fallback·초기 PoC</td><td>구조화 출력·공간 위치·영상 이벤트 분석을 유지하면서 더 가벼움.</td></tr>
+        <tr><td>3</td><td><a href="https://github.com/OpenGVLab/InternVL">InternVL3.5-4B / 8B</a></td><td>비교 연구 후보</td><td>OCR·상세 장면 설명이 특히 중요할 때 동일 평가셋으로 비교.</td></tr>
+      </tbody></table></div>
+      <p>RTX 5080은 16GB GDDR7이므로 7B VLM을 BF16 그대로 YOLO와 상시 병행하기에는 여유가 작다. 7B는 4-bit 또는 8-bit로 운용하고, 실제 지연·JSON 정확도·VRAM 피크를 측정해 최종 선택한다. <a href="https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5080/">NVIDIA RTX 5080 사양</a></p>
+      <pre><code>Pinky RTSP → MediaMTX (RTX 4060) → RTX 5080 추론 워커
+                                      ├─ YOLO: 5~20 Hz, 사람·장애물·박스 추적
+                                      └─ VLM: 예외 Trigger 시 최근 프레임 분석
+                                                   ↓
+                                      구조화 위험 JSON
+                                                   ↓
+                         RL Explorer → Safety Supervisor → FMS / Nav2</code></pre>
+      <p><strong>YOLO는 RTSP 스트림을 계속 처리한다.</strong> 즉, 사람·장애물·박스의 bbox, class, confidence, track을 5~20 Hz로 지속 발행한다. VLM만 제어 루프를 막지 않는 비동기·예외 호출 서비스다. YOLO가 위험 후보 또는 이상 징후를 만들면 VLM이 “무엇이 위험한가”를 해석한다. Qwen2.5-VL은 vLLM의 멀티모달·양자화·LoRA 경로로 별도 API를 구성하기 적합하다. <a href="https://docs.vllm.ai/en/stable/api/vllm/model_executor/models/qwen2_5_vl/">vLLM Qwen2.5-VL 지원 문서</a></p>
+    </section>
+
+    <section id="contract">
+      <h2>9. VLM 출력 계약과 안전 경계</h2>
+      <p><strong>YOLO 호출은 상시다.</strong> VLM 호출만 YOLO가 사람·미지 객체·통로 점유를 검출했을 때, Nav2 정체/recovery 실패가 지속될 때, 또는 LiDAR/costmap과 카메라 판단이 충돌하고 결로·저조도·마커 미검출이 지속될 때로 제한한다.</p>
+      <pre><code>{
+  "risk_label": "person_on_path",
+  "severity": "high",
+  "confidence": 0.91,
+  "candidate_actions": [
+    "WAIT_AT_SAFE_NODE",
+    "REQUEST_FMS_REPLAN_OR_RESERVATION"
+  ],
+  "candidate_node_ids": ["WAIT_NODE_A1"],
+  "requires_human_review": false
+}</code></pre>
+      <div class="scroll"><table><thead><tr><th>구성요소</th><th>입력</th><th>출력</th><th>하지 않는 일</th></tr></thead><tbody>
+        <tr><td>YOLO</td><td>RTSP 프레임</td><td>bbox, class, confidence, track</td><td>경로·안전 정책 결정</td></tr>
+        <tr><td>VLM</td><td>선별 프레임, YOLO 요약, Nav2 상태</td><td>위험 의미, 근거, 후보 행동·노드</td><td>직접 주행 좌표·속도 명령</td></tr>
+        <tr><td>RL Explorer</td><td>구조화 상태, live costmap, VLM 판단</td><td>허용된 recovery skill 선택</td><td>전역 예약·최종 안전 승인</td></tr>
+        <tr><td>FMS / Nav2 / Safety</td><td>작업·지도·센서·복구 제안</td><td>예약, 경로, 속도 제한, 정지</td><td>VLM 출력을 무검증 실행</td></tr>
+      </tbody></table></div>
+      <div class="warning"><strong>안전 원칙:</strong> VLM/RL 제안은 Safety Supervisor가 거부할 수 있으며, 사람·급격한 LiDAR 변화·센서 이상은 VLM의 응답을 기다리지 않고 안전 정지 경로가 우선한다.</div>
+    </section>
+
+    <section id="sensor-fusion">
+      <h2>10. Pinky-Pro 센서 융합: “한 곳에 모두 넣기”가 아니다</h2>
+      <p><strong>정확한 표현은 경로 추정이 아니라 위치 추정(localization)·장애물 인지(costmap)·경로 계획(planning)의 협업</strong>이다. Nav2는 현재 위치와 costmap을 받아 경로를 <em>계획</em>한다. 카메라·LiDAR·IMU·초음파는 측정 방식과 신뢰도가 다르므로 모두 EKF에 넣지 않고, 목적에 맞는 경로로 나눈다.</p>
+      <pre><code>휠 encoder /odom ─┐
+BNO055 /imu/data ─┼→ robot_localization EKF (2D) → /odometry/filtered, odom→base_footprint
+                  │
+정적 지도 + RPLIDAR /scan ───────────────→ AMCL → map→odom
+RPLIDAR /scan ───────────────────────────→ local/global costmap (obstacle layer)
+초음파·IR /range ───────────────────────→ local costmap (range layer) + 독립 Safety stop
+RTSP 카메라 → YOLO/VLM ─────────────────→ 의미 위험 event; 보정된 거리/pose만 선택적으로 costmap·EKF
+                                                           ↓
+             map→odom→base + global/local costmap → Nav2 planner/controller → 속도 안전 gate → cmd_vel</code></pre>
+      <div class="scroll"><table><thead><tr><th>센서</th><th>Nav2에 관여하는 올바른 경로</th><th>처음부터 하면 안 되는 것</th></tr></thead><tbody>
+        <tr><td>휠 encoder</td><td>주행 거리·속도를 <code>nav_msgs/Odometry</code>로 내고 EKF의 기본 예측으로 사용</td><td>미끄럼이 있어도 encoder만으로 <code>map</code> 위치를 확정</td></tr>
+        <tr><td>IMU (BNO055)</td><td>각속도·자세를 EKF에 넣어 yaw drift와 회전 구간을 보정. 평면 로봇은 <code>two_d_mode</code>로 운용</td><td>IMU를 LiDAR처럼 장애물 센서로 쓰거나, 불확실도 없는 절대 위치로 취급</td></tr>
+        <tr><td>LiDAR</td><td><code>/scan</code>을 AMCL의 지도 대조와 Nav2 obstacle layer에 동시 공급</td><td>동적 사람·박스가 섞인 scan만으로 장기 지도 자체를 갱신</td></tr>
+        <tr><td>초음파·IR</td><td><code>sensor_msgs/Range</code>로 변환해 전방의 local range layer에 반영하고, 더 짧은 거리에서는 독립 Safety Supervisor가 감속/정지</td><td>거리 한 개를 EKF 위치 입력으로 넣거나 Nav2만을 비상정지 장치로 간주</td></tr>
+        <tr><td>카메라 + YOLO/VLM</td><td>초기에는 사람·통로점유·미지물체 같은 <strong>의미 위험 event</strong>를 Safety/Recovery에 전달. 카메라 내·외부 보정과 거리 추정이 끝난 뒤에만 metric obstacle 또는 landmark pose를 추가</td><td>단안 RGB bbox만을 곧바로 지도 좌표 장애물로 변환하거나 VLM이 <code>cmd_vel</code>을 출력</td></tr>
+      </tbody></table></div>
+      <h3>좌표계(TF)가 연결의 뼈대</h3>
+      <p>URDF에 고정 변환 <code>base_footprint→lidar</code>, <code>→imu</code>, <code>→ultrasonic_*</code>, <code>→camera</code>를 정확히 두고, EKF만 <code>odom→base_footprint</code>, AMCL만 <code>map→odom</code>을 발행하게 한다. 같은 TF를 두 노드가 동시에 발행하면 위치가 튀므로 금지한다. Nav2는 이 체인으로 로봇 자세를 읽는다.</p>
+      <h3>카메라는 두 단계로 넣는다</h3>
+      <ol>
+        <li><strong>1단계(권장 PoC):</strong> YOLO는 계속 실행해 사람/장애물/박스 track을 내고, 카메라 event와 LiDAR·초음파의 근접 판단을 Safety Supervisor가 결합한다. 사람은 VLM 답변을 기다리지 않고 정지·hold한다.</li>
+        <li><strong>2단계(계측 완료 후):</strong> 카메라 intrinsic, camera↔base extrinsic, timestamp 지연을 보정한다. ArUco/AprilTag처럼 지도상 위치를 아는 마커는 PnP로 <code>PoseWithCovarianceStamped</code>를 만들 수 있고, RGB-D/stereo 또는 검증된 지면 투영은 장애물을 <code>PointCloud2</code>로 costmap에 줄 수 있다. 이때에도 느린 RTSP 원격 추론은 고속 wheel odom 대체가 아니라 드문 위치 보정으로 둔다.</li>
+      </ol>
+      <h3>현재 Pinky-Pro에 필요한 최소 연결 순서</h3>
+      <ol>
+        <li>기본 bringup에 아직 빠져 있는 IMU·ADC 거리 센서 노드를 추가하고, 실제 topic/type/rate와 frame_id를 하드웨어에서 확인한다.</li>
+        <li>encoder odom + IMU로 EKF를 구성한 뒤, Nav2와 AMCL의 odom 입력을 filtered odom으로 전환한다.</li>
+        <li>LiDAR는 AMCL과 기존 costmap에 유지하고, 초음파/IR은 먼저 local range layer와 별도 stop gate에만 넣는다.</li>
+        <li>카메라는 RTSP→중앙 YOLO의 지속 추론을 유지한다. metric 보정 전에는 사람·점유 event만으로 감속/정지/hold/recovery trigger를 만들고, 이후 마커 기반 pose 보정을 별도 실험한다.</li>
+      </ol>
+      <div class="callout"><strong>현재 구현 상태:</strong> Pinky 기본 코드에는 encoder odom·RPLIDAR·AMCL/Nav2가 있지만, BNO055 IMU와 초음파·IR ADC publisher는 기본 bringup 및 Nav2 융합/costmap에 아직 연결되어 있지 않다. 그러므로 위 그림은 “현재 이미 동작 중”이 아니라 권장 통합 목표다.</div>
+      <p>근거: Nav2는 LiDAR scan으로 AMCL localization을 수행하고, costmap의 obstacle/voxel layer에는 LaserScan·PointCloud2, range layer에는 sonar·IR을 넣도록 설계되어 있다. 전역 costmap은 장기 계획, local costmap은 단기 충돌 회피에 사용된다. <a href="https://docs.nav2.org/setup_guides/sensors/mapping_localization.html">Nav2 Mapping &amp; Localization</a> · <a href="https://docs.nav2.org/configuration/packages/configuring-amcl.html">Nav2 AMCL</a></p>
+    </section>
+
+    <section id="nav2-basics">
+      <h2>11. Odom · base_footprint · AMCL · Costmap을 한 번에 이해하기</h2>
+      <p>먼저 표기부터 바로잡으면 <strong>ACML이 아니라 AMCL</strong>이다. AMCL은 <em>Adaptive Monte Carlo Localization</em>의 약자로, “지금 로봇이 지도에서 어디에 있는가?”를 LiDAR와 정적 지도로 추정하는 알고리즘이다.</p>
+      <pre><code>지도 전체 좌표계 map
+      │  AMCL이 보정하는 map→odom 변환
+      ▼
+짧은 시간에 부드러운 로봇 이동 좌표계 odom
+      │  wheel odom + IMU EKF가 발행하는 odom→base_footprint
+      ▼
+바닥 중앙의 로봇 기준점 base_footprint
+      ├─ 고정 TF → lidar
+      ├─ 고정 TF → imu
+      ├─ 고정 TF → camera
+      └─ 고정 TF → ultrasonic / IR</code></pre>
+      <div class="scroll"><table><thead><tr><th>개념</th><th>쉬운 비유</th><th>무엇을 말해 주나</th><th>Trihouse에서의 역할</th></tr></thead><tbody>
+        <tr><td><code>odom</code></td><td>로봇이 출발 후 스스로 적어 둔 “이만큼 움직였다”는 누적 이동 기록</td><td>짧은 구간에서는 매끄러운 상대 위치·속도. 휠 미끄럼·충돌이 누적되면 실제 지도 위치와 차이날 수 있음</td><td>wheel encoder와 IMU를 EKF로 합쳐 Nav2 controller가 끊기지 않게 현재 움직임을 알림</td></tr>
+        <tr><td><code>base_footprint</code></td><td>바닥에 찍힌 로봇의 기준 스티커</td><td>2D 주행에서 로봇 바닥 중앙의 x·y·yaw 기준점. 로봇 몸체 높이/기울기는 제외한 평면 기준</td><td>LiDAR·카메라·초음파가 어디에 달렸는지 모두 이 기준에서 표현하고, costmap에 로봇 크기를 적용</td></tr>
+        <tr><td><code>map</code></td><td>창고 전체 도면의 절대 좌표</td><td>랙, 벽, 통로, 목적지 노드가 고정된 장기 좌표</td><td>FMS의 좌표 시퀀스와 Nav2의 global path가 공유해야 하는 기준</td></tr>
+        <tr><td>AMCL</td><td>“도면의 여러 후보 위치 중 LiDAR 벽 모양과 가장 맞는 곳”을 계속 골라내는 탐색</td><td>정적 지도 + LiDAR scan + odom 이동량으로 로봇의 <code>map</code>상 pose와 신뢰도를 확률적으로 계산</td><td>미끄럼으로 틀어진 odom을 지도 기준으로 천천히 보정해 <code>map→odom</code>을 제공</td></tr>
+        <tr><td>costmap</td><td>도면 위에 “지금 지나면 위험한 칸”을 덧칠한 실시간 위험 지도</td><td>0은 통과 가능, 큰 비용은 피해야 할 곳, 치명 비용은 진입 금지. 정적 지도와 센서 관측을 겹침</td><td>Planner/controller가 사람·박스·벽에 부딪히지 않으면서 좌표 시퀀스의 다음 목표로 가게 함</td></tr>
+      </tbody></table></div>
+      <h3>AMCL은 어떻게 동작하는가</h3>
+      <ol>
+        <li>처음에는 “로봇이 있을 법한 위치 후보(particle)”를 여러 개 둔다.</li>
+        <li>wheel odom/IMU가 “조금 전진·회전했다”고 알려 주면 모든 후보도 그만큼 이동시킨다. 이 과정에는 미끄럼 오차를 섞는다.</li>
+        <li>LiDAR scan의 벽·랙 윤곽을 정적 지도와 비교해, 잘 맞는 후보에는 높은 점수(가중치), 안 맞는 후보에는 낮은 점수를 준다.</li>
+        <li>높은 점수 후보를 많이 남기고 낮은 점수 후보를 버리는 resampling을 반복한다. 남은 후보군의 중심과 퍼짐이 현재 pose와 불확실도다.</li>
+      </ol>
+      <p>따라서 AMCL은 카메라·초음파 자체를 기본 입력으로 쓰지 않는다. LiDAR와 지도에 강하고, 카메라는 ArUco/AprilTag처럼 <em>정확한 pose 측정값</em>을 만들 수 있을 때만 보조 위치 보정 후보가 된다.</p>
+      <h3>global costmap과 local costmap의 차이</h3>
+      <div class="scroll"><table><thead><tr><th></th><th>global costmap</th><th>local costmap</th></tr></thead><tbody>
+        <tr><td>보는 범위</td><td>창고 전체 또는 넓은 운영 구역, <code>map</code> 좌표계</td><td>로봇 주변 몇 m의 이동 창, <code>odom</code> 좌표계</td></tr>
+        <tr><td>주 입력</td><td>정적 지도, 통행금지/예약 구역, 필요 시 장기 장애물</td><td>LiDAR 실시간 scan, 초음파·IR range, 검증된 깊이 카메라 장애물</td></tr>
+        <tr><td>주 사용자</td><td>Global Planner: 냉동창고 → 상온창고 → 포장대의 큰 길 선택</td><td>Controller: 바로 앞 박스·사람을 피해 속도·곡률을 조정</td></tr>
+        <tr><td>갱신 성격</td><td>상대적으로 느리고 안정적</td><td>빠르고 순간적인 장애물에 민감</td></tr>
+        <tr><td>예시</td><td>통로 A가 공사로 막힘 → 다른 aisle을 경유하는 전역 재계획</td><td>통로 A 앞에 사람이 잠시 서 있음 → 즉시 감속·정지, 비켜가면 계속 주행</td></tr>
+      </tbody></table></div>
+      <p><strong>costmap 활용 예:</strong> LiDAR가 박스를 보면 local costmap의 그 칸을 위험하게 표시하고, inflation layer가 로봇 폭·안전여유만큼 주변 칸의 비용도 높인다. Controller는 비용이 낮은 쪽으로 속도와 회전량을 고른다. 사람이 너무 가깝거나 센서가 불확실하면 Safety Supervisor가 costmap보다 먼저 <code>cmd_vel=0</code>을 강제한다.</p>
+      <div class="warning"><strong>냉동창고 튜닝 주의:</strong> 통로 폭보다 footprint·footprint_padding·inflation_radius의 합이 과도하면, costmap은 실제로는 지날 수 있는 aisle도 “막힘”으로 본다. 로봇 실측 외곽과 최소 안전거리를 재서 넣고, 냉동·결로 환경에서 LiDAR 오검출을 별도 시험해야 한다.</div>
+    </section>
+
+    <section id="decision">
+      <h2>12. 최종 선택과 다음 검증</h2>
+      <ol>
+        <li><strong>지금 시작:</strong> 아키텍처 1. Nav2 기반을 유지하고 VLM은 예외 Trigger에서만 호출한다.</li>
+        <li><strong>RL 기준선:</strong> PPO로 이산 recovery skill을 선택한다. raw velocity 제어는 범위에서 제외한다.</li>
+        <li><strong>Buffer:</strong> 운영에는 reference route buffer, 학습에는 safe/critical replay buffer를 함께 쓴다.</li>
+        <li><strong>VLM:</strong> Qwen2.5-VL-3B로 단일 RTSP PoC를 시작하고, 동일 평가셋에서 7B 4-bit와 비교 후 Expert를 결정한다.</li>
+        <li><strong>검증:</strong> 사람·막힌 통로·결로·위치 불확실 상황의 위험 JSON 정확도, VLM 응답 지연, Nav2 재계획 성공, Safety 거부/정지 동작을 분리 측정한다.</li>
+      </ol>
+      <div class="note">이 문서는 설계·연구 기준이다. 실제 Pinky-Pro, ROS 2 topic, 센서 주기, Nav2 파라미터, 안전거리, VLM 지연은 현장 통합 시험으로 별도 검증해야 한다.</div>
+    </section>
+
+    <footer>
+      <strong>문서 범위:</strong> 이 대화에서 사용자에게 제공된 연구·설계 답변을 출근길 읽기용으로 재구성했다. 내부 도구 실행 로그는 제외했다.<br>
+      <strong>로컬 근거:</strong> Trihouse 입고·출고·비상 시나리오, Pinky 기능 점검, 모바일 로봇 SR 체크리스트.<br>
+      <strong>외부 근거:</strong> IROS, NaVILA, EE-RL, TGRPO, Qwen2.5-VL, InternVL, NVIDIA, vLLM 공식 페이지 링크는 각 해당 표와 본문에 포함했다.
+    </footer>
+  </main>
+</body>
+</html>
