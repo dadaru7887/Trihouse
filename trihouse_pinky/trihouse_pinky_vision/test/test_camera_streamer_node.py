@@ -139,6 +139,44 @@ class RecordingPublisher:
         self.events.append('publish')
 
 
+class FastRestartSupervisor(FakeSupervisor):
+    """Complete restart before the next timer and delay fresh progress."""
+
+    def __init__(self):
+        super().__init__()
+        self.poll_count = 0
+        self.restart_count = 0
+        self.restart_finished = threading.Event()
+        self.scheduled = False
+        self.restarted = False
+
+    def poll(self, _now):
+        self.poll_count += 1
+        if self.poll_count == 1:
+            return SupervisorSnapshot(
+                True,
+                ProgressSample(100, 15.0, 100 / 15.0),
+                self.bytes_written,
+                '',
+                None,
+            )
+        if not self.restarted:
+            return SupervisorSnapshot(False, None, None, 'publisher_exit:7', 0.0)
+        return SupervisorSnapshot(True, None, self.bytes_written, '', None)
+
+    def schedule_restart(self, _now):
+        self.scheduled = True
+
+    def restart_due(self, _now):
+        return self.scheduled
+
+    def restart(self):
+        self.restart_count += 1
+        self.scheduled = False
+        self.restarted = True
+        self.restart_finished.set()
+
+
 @pytest.fixture
 def ros_context():
     rclpy.init()
@@ -265,4 +303,30 @@ def test_publishes_disconnection_and_bitrate_reason_before_restart(ros_context):
     finally:
         supervisor.restart_release.set()
         callback_thread.join(timeout=1.0)
+        node.destroy_node()
+
+
+def test_fast_restart_gets_startup_grace_before_new_progress(ros_context):
+    supervisor = FastRestartSupervisor()
+    times = iter([0.0, 10.0, 10.5])
+    node = CameraStreamerNode(
+        supervisor_factory=lambda *_args, **_kwargs: supervisor,
+        monotonic=lambda: next(times),
+    )
+    publisher = RecordingPublisher([])
+    node._publisher = publisher
+    try:
+        node._on_timer()
+        node._on_timer()
+        assert supervisor.restart_finished.wait(timeout=1.0)
+        deadline = time.monotonic() + 1.0
+        while node._restart_is_running() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        node._on_timer()
+
+        assert publisher.messages[-1].state == StreamHealth.STATE_RECOVERING
+        assert publisher.messages[-1].detail.startswith('waiting_for_frame')
+        assert supervisor.restart_count == 1
+        assert not supervisor.scheduled
+    finally:
         node.destroy_node()

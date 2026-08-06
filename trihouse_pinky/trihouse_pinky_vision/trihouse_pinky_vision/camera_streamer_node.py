@@ -152,7 +152,7 @@ class CameraStreamerNode(Node):
 
         if self._supervisor.restart_due(now):
             self.get_logger().warning(f'restarting camera pipeline: {health.reason}')
-            self._begin_restart()
+            self._begin_restart(now)
 
     def _publish_health(self, health: HealthSnapshot, exit_reason: str) -> None:
         message = StreamHealth()
@@ -170,11 +170,12 @@ class CameraStreamerNode(Node):
         message.stamp = self.get_clock().now().to_msg()
         self._publisher.publish(message)
 
-    def _begin_restart(self) -> None:
+    def _begin_restart(self, now: float) -> None:
         with self._restart_lock:
             if self._restart_thread is not None:
                 return
             self._last_frame_count = None
+            self._monitor.restarting(now)
             self._restart_error = None
             thread = threading.Thread(
                 target=self._restart_worker,
