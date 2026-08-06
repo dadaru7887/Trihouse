@@ -16,7 +16,7 @@ FIXTURES = Path(__file__).parent / 'fixtures'
 def test_launch_publishes_healthy_state_with_hardware_free_processes(tmp_path):
     config = tmp_path / 'fixture.yaml'
     config.write_text(
-        f'''camera_streamer:
+        f"""camera_streamer:
   ros__parameters:
     camera_id: pinky_1
     publish_uri: rtsp://192.168.0.9:8554/pinky_1
@@ -24,7 +24,7 @@ def test_launch_publishes_healthy_state_with_hardware_free_processes(tmp_path):
     healthy_after_sec: 0.0
     rpicam_executable: {FIXTURES / "fake_camera.py"}
     ffmpeg_executable: {FIXTURES / "fake_publisher.py"}
-''',
+""",
         encoding='utf-8',
     )
     environment = os.environ.copy()

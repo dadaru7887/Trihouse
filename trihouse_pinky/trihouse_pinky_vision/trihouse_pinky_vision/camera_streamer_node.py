@@ -3,6 +3,7 @@
 import time
 from typing import Callable
 
+from builtin_interfaces.msg import Time
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -10,7 +11,7 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 
 from trihouse_interfaces.msg import StreamHealth
 
-from .command_builder import StreamConfig, build_ffmpeg_command, build_rpicam_command
+from .command_builder import build_ffmpeg_command, build_rpicam_command, StreamConfig
 from .process_metrics import EncodedBitrateSampler
 from .process_supervisor import ProcessSupervisor
 from .stream_health import StreamHealthStateMachine, StreamState
@@ -29,7 +30,9 @@ class CameraStreamerNode(Node):
         self._stopped = False
         self._declare_parameters()
         config = self._stream_config()
-        restart_delays = tuple(float(value) for value in self.get_parameter('restart_backoff_sec').value)
+        restart_delays = tuple(
+            float(value) for value in self.get_parameter('restart_backoff_sec').value
+        )
         if not restart_delays or any(value <= 0 for value in restart_delays):
             raise ValueError('restart_backoff_sec values must be positive')
 
@@ -47,7 +50,7 @@ class CameraStreamerNode(Node):
         self._bitrate = EncodedBitrateSampler()
         self._camera_id = config.camera_id
         self._last_frame_count: int | None = None
-        self._last_frame_stamp = self.get_clock().now().to_msg()
+        self._last_frame_stamp = Time()
         qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
@@ -121,7 +124,9 @@ class CameraStreamerNode(Node):
         health = self._monitor.update(snapshot.progress, snapshot.processes_alive, now, bitrate)
 
         if snapshot.progress is not None and (
-            self._last_frame_count is None or snapshot.progress.frame_count > self._last_frame_count
+            health.reason == 'frames_resumed'
+            or self._last_frame_count is None
+            or snapshot.progress.frame_count > self._last_frame_count
         ):
             self._last_frame_count = snapshot.progress.frame_count
             self._last_frame_stamp = self.get_clock().now().to_msg()
@@ -140,7 +145,11 @@ class CameraStreamerNode(Node):
         message.fps = float(health.fps)
         message.bitrate_kbps = float(health.bitrate_kbps)
         message.last_frame_stamp = self._last_frame_stamp
-        message.detail = health.reason if not snapshot.exit_reason else f'{health.reason}:{snapshot.exit_reason}'
+        message.detail = (
+            health.reason
+            if not snapshot.exit_reason
+            else f'{health.reason}:{snapshot.exit_reason}'
+        )
         message.stamp = self.get_clock().now().to_msg()
         self._publisher.publish(message)
 

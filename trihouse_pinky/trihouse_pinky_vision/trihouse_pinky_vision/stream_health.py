@@ -60,7 +60,9 @@ class StreamHealthStateMachine:
             return self._set(StreamState.DISCONNECTED, bitrate_kbps, 'publisher_exit')
 
         is_new = sample is not None and (
-            self._last_frame_count is None or sample.frame_count > self._last_frame_count
+            self._snapshot.state == StreamState.DISCONNECTED
+            or self._last_frame_count is None
+            or sample.frame_count > self._last_frame_count
         )
         if is_new and sample is not None:
             return self._on_progress(sample, now, bitrate_kbps)
@@ -73,7 +75,7 @@ class StreamHealthStateMachine:
         bitrate_kbps: float,
     ) -> HealthSnapshot:
         was_disconnected = self._snapshot.state == StreamState.DISCONNECTED
-        if self._last_frame_count is None or self._last_frame_time is None:
+        if was_disconnected or self._last_frame_count is None or self._last_frame_time is None:
             fps = max(0.0, sample.reported_fps)
         else:
             elapsed = now - self._last_frame_time
@@ -108,7 +110,11 @@ class StreamHealthStateMachine:
         return self._set(StreamState.RECOVERING, bitrate_kbps, 'below_healthy_threshold', fps)
 
     def _on_silence(self, now: float, bitrate_kbps: float) -> HealthSnapshot:
-        reference = self._last_frame_time if self._last_frame_time is not None else self._started_at
+        reference = (
+            self._last_frame_time
+            if self._last_frame_time is not None
+            else self._started_at
+        )
         silence = now - reference if reference is not None else 0.0
         self._healthy_since = None
         if silence >= self._disconnected_after:

@@ -2,7 +2,6 @@
 
 from collections import deque
 from dataclasses import dataclass
-import os
 import signal
 import subprocess
 import threading
@@ -22,6 +21,8 @@ class SupervisorSnapshot:
 
 
 class RestartBackoff:
+    """Track bounded exponential restart delays and their healthy reset window."""
+
     def __init__(self, delays: Sequence[float], reset_after: float = 30.0) -> None:
         if not delays or any(delay <= 0 for delay in delays):
             raise ValueError('restart delays must be positive')

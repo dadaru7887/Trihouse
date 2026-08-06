@@ -68,3 +68,16 @@ def test_recovery_requires_a_new_five_second_healthy_window():
     assert recovering.state == StreamState.RECOVERING
     assert not_yet_healthy.state == StreamState.RECOVERING
     assert healthy.state == StreamState.HEALTHY
+
+
+def test_accepts_reset_frame_counter_after_publisher_restart():
+    monitor = StreamHealthStateMachine(target_fps=15.0)
+    monitor.update(sample(100), True, 0.0)
+    monitor.update(None, False, 1.0)
+
+    recovering = monitor.update(sample(1), True, 2.0)
+
+    assert recovering.state == StreamState.RECOVERING
+    assert recovering.reason == 'frames_resumed'
+    assert recovering.fps == 15.0
+    assert recovering.last_frame_monotonic == 2.0

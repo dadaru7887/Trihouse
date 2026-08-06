@@ -1,9 +1,9 @@
 import pytest
 
 from trihouse_pinky_vision.command_builder import (
-    StreamConfig,
     build_ffmpeg_command,
     build_rpicam_command,
+    StreamConfig,
 )
 
 
