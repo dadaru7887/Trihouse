@@ -1,6 +1,6 @@
 # trihouse_interfaces
 
-> 상태: 문서 초안 — ROS 2 패키지와 인터페이스 파일은 아직 생성되지 않았다.
+> 상태: 부분 구현 — ROS 2 패키지와 `StreamHealth.msg`가 구현되었고 나머지 계약은 초안이다.
 
 주행 로봇, 로봇팔, 중앙 관제가 공유할 ROS 2 계약 전용 패키지다. 실행 노드와 장치별 로직은 두지 않는다. 공용 계약을 `trihouse_pinky`나 `trihouse_omx` 아래에 두면 다른 장치가 특정 장치 패키지에 의존하므로 저장소 루트에 독립시킨다.
 
@@ -29,3 +29,8 @@
 - 세 트랙 담당자가 필드와 QoS를 검토한다.
 - 예제 publisher/subscriber 또는 인터페이스 직렬화 테스트가 통과한다.
 
+## 현재 구현
+
+- `msg/StreamHealth.msg`: 카메라 식별자, 상태, FPS, 비트레이트, 마지막 프레임 시각과 진단 사유를 전달한다.
+- 상태 상수: `UNKNOWN`, `HEALTHY`, `DEGRADED`, `DISCONNECTED`, `RECOVERING`.
+- 영상 본체는 이 패키지나 ROS 2 토픽으로 전달하지 않는다.
