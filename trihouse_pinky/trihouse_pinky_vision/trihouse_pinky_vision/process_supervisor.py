@@ -144,6 +144,11 @@ class ProcessSupervisor:
     def restart_due(self, now: float) -> bool:
         return self._next_restart_at is not None and now >= self._next_restart_at
 
+    def schedule_restart(self, now: float) -> None:
+        if self._next_restart_at is None:
+            delay = self._backoff.record_failure(now)
+            self._next_restart_at = now + delay
+
     def restart(self) -> None:
         self.stop()
         self._next_restart_at = None

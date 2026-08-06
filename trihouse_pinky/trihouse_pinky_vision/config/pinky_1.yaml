@@ -1,0 +1,23 @@
+camera_streamer:
+  ros__parameters:
+    camera_id: pinky_1
+    camera_index: 0
+    publish_uri: rtsp://192.168.0.9:8554/pinky_1
+    width: 1280
+    height: 720
+    fps: 15.0
+    bitrate_kbps: 2000
+    keyframe_interval: 15
+    hflip: true
+    vflip: true
+    encoder: libx264
+    encoder_preset: veryfast
+    encoder_profile: baseline
+    transport: tcp
+    health_publish_hz: 1.0
+    degraded_after_sec: 1.0
+    disconnected_after_sec: 3.0
+    healthy_after_sec: 5.0
+    restart_backoff_sec: [1.0, 2.0, 4.0, 8.0, 16.0, 30.0]
+    rpicam_executable: /usr/local/bin/rpicam-vid
+    ffmpeg_executable: /usr/bin/ffmpeg

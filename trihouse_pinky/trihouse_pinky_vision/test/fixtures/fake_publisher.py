@@ -5,9 +5,9 @@ import sys
 import time
 
 
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser(add_help=False)
 parser.add_argument('--exit-after', type=int, default=0)
-args = parser.parse_args()
+args, _unknown = parser.parse_known_args()
 running = True
 
 
