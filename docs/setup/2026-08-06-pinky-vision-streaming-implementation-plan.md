@@ -165,4 +165,3 @@ builtin_interfaces/Time stamp
 - [ ] Request independent code review against the design and this plan; fix all Critical and Important findings with regression tests.
 - [ ] Re-run the complete verification and inspect `git status`, staged diff, and commit history.
 - [ ] Push `feat/pinky-edge-agent` to `origin` without force and confirm the remote SHA equals local HEAD.
-
