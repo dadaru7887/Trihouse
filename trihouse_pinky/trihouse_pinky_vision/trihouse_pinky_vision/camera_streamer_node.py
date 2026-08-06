@@ -1,5 +1,6 @@
 """ROS 2 node that supervises Pinky's RTSP camera publisher."""
 
+import threading
 import time
 from typing import Callable
 
@@ -14,7 +15,7 @@ from trihouse_interfaces.msg import StreamHealth
 from .command_builder import build_ffmpeg_command, build_rpicam_command, StreamConfig
 from .process_metrics import EncodedBitrateSampler
 from .process_supervisor import ProcessSupervisor
-from .stream_health import StreamHealthStateMachine, StreamState
+from .stream_health import HealthSnapshot, StreamHealthStateMachine, StreamState
 
 
 class CameraStreamerNode(Node):
@@ -28,6 +29,9 @@ class CameraStreamerNode(Node):
         super().__init__('camera_streamer', parameter_overrides=parameter_overrides)
         self._monotonic = monotonic
         self._stopped = False
+        self._restart_lock = threading.Lock()
+        self._restart_thread: threading.Thread | None = None
+        self._restart_error: BaseException | None = None
         self._declare_parameters()
         config = self._stream_config()
         restart_delays = tuple(
@@ -119,6 +123,12 @@ class CameraStreamerNode(Node):
 
     def _on_timer(self) -> None:
         now = self._monotonic()
+        if self._restart_is_running():
+            bitrate = self._bitrate.sample(None, now)
+            health = self._monitor.restarting(now, bitrate)
+            self._publish_health(health, '')
+            return
+
         snapshot = self._supervisor.poll(now)
         bitrate = self._bitrate.sample(snapshot.total_encoded_bytes, now)
         health = self._monitor.update(snapshot.progress, snapshot.processes_alive, now, bitrate)
@@ -138,6 +148,13 @@ class CameraStreamerNode(Node):
             if health.state == StreamState.DISCONNECTED:
                 self._supervisor.schedule_restart(now)
 
+        self._publish_health(health, snapshot.exit_reason)
+
+        if self._supervisor.restart_due(now):
+            self.get_logger().warning(f'restarting camera pipeline: {health.reason}')
+            self._begin_restart()
+
+    def _publish_health(self, health: HealthSnapshot, exit_reason: str) -> None:
         message = StreamHealth()
         message.camera_id = self._camera_id
         message.state = int(health.state)
@@ -145,21 +162,59 @@ class CameraStreamerNode(Node):
         message.bitrate_kbps = float(health.bitrate_kbps)
         message.last_frame_stamp = self._last_frame_stamp
         detail = [health.reason]
-        if snapshot.exit_reason:
-            detail.append(snapshot.exit_reason)
+        if exit_reason:
+            detail.append(exit_reason)
         if self._bitrate.unavailable_reason:
             detail.extend(['bitrate_unavailable', self._bitrate.unavailable_reason])
         message.detail = ':'.join(detail)
         message.stamp = self.get_clock().now().to_msg()
         self._publisher.publish(message)
 
-        if self._supervisor.restart_due(now):
-            self.get_logger().warning(f'restarting camera pipeline: {health.reason}')
+    def _begin_restart(self) -> None:
+        with self._restart_lock:
+            if self._restart_thread is not None:
+                return
+            self._restart_error = None
+            thread = threading.Thread(
+                target=self._restart_worker,
+                name='camera-stream-restart',
+                daemon=True,
+            )
+            self._restart_thread = thread
+            thread.start()
+
+    def _restart_worker(self) -> None:
+        try:
             self._supervisor.restart()
+        except BaseException as error:
+            with self._restart_lock:
+                self._restart_error = error
+
+    def _restart_is_running(self) -> bool:
+        with self._restart_lock:
+            thread = self._restart_thread
+        if thread is None:
+            return False
+        if thread.is_alive():
+            return True
+
+        thread.join()
+        with self._restart_lock:
+            error = self._restart_error
+            self._restart_error = None
+            self._restart_thread = None
+        if error is not None:
+            self.get_logger().error(f'camera pipeline restart failed: {error}')
+        return False
 
     def destroy_node(self) -> bool:
         if not self._stopped:
             self._stopped = True
+            self._timer.cancel()
+            with self._restart_lock:
+                restart_thread = self._restart_thread
+            if restart_thread is not None:
+                restart_thread.join()
             self._supervisor.stop()
         return super().destroy_node()
 

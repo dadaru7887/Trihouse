@@ -1,3 +1,4 @@
+import threading
 import time
 
 import pytest
@@ -90,6 +91,8 @@ class OrderingSupervisor(FakeSupervisor):
     def __init__(self, events):
         super().__init__()
         self.events = events
+        self.restart_started = threading.Event()
+        self.restart_release = threading.Event()
 
     def poll(self, _now):
         return SupervisorSnapshot(
@@ -108,6 +111,8 @@ class OrderingSupervisor(FakeSupervisor):
 
     def restart(self):
         self.events.append('restart')
+        self.restart_started.set()
+        self.restart_release.wait(timeout=2.0)
 
 
 class RecordingPublisher:
@@ -115,10 +120,10 @@ class RecordingPublisher:
 
     def __init__(self, events):
         self.events = events
-        self.message = None
+        self.messages = []
 
     def publish(self, message):
-        self.message = message
+        self.messages.append(message)
         self.events.append('publish')
 
 
@@ -210,14 +215,31 @@ def test_publishes_disconnection_and_bitrate_reason_before_restart(ros_context):
     )
     publisher = RecordingPublisher(events)
     node._publisher = publisher
-    try:
-        node._on_timer()
+    callback_done = threading.Event()
 
-        assert events == ['schedule', 'publish', 'restart']
-        assert publisher.message.state == StreamHealth.STATE_DISCONNECTED
-        assert publisher.message.bitrate_kbps == 0.0
-        assert publisher.message.detail.endswith(
+    def invoke_timer():
+        node._on_timer()
+        callback_done.set()
+
+    callback_thread = threading.Thread(target=invoke_timer)
+    try:
+        callback_thread.start()
+        assert supervisor.restart_started.wait(timeout=1.0)
+        returned_before_restart_finished = callback_done.wait(timeout=0.2)
+
+        if returned_before_restart_finished:
+            node._on_timer()
+            assert publisher.messages[-1].state == StreamHealth.STATE_RECOVERING
+            assert publisher.messages[-1].detail.startswith('restart_in_progress')
+
+        assert events[:3] == ['schedule', 'publish', 'restart']
+        assert publisher.messages[0].state == StreamHealth.STATE_DISCONNECTED
+        assert publisher.messages[0].bitrate_kbps == 0.0
+        assert publisher.messages[0].detail.endswith(
             ':bitrate_unavailable:byte_counter_unavailable'
         )
+        assert returned_before_restart_finished
     finally:
+        supervisor.restart_release.set()
+        callback_thread.join(timeout=1.0)
         node.destroy_node()

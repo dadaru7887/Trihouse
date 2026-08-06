@@ -46,6 +46,17 @@ class StreamHealthStateMachine:
     def snapshot(self) -> HealthSnapshot:
         return self._snapshot
 
+    def restarting(self, _now: float, bitrate_kbps: float = 0.0) -> HealthSnapshot:
+        """Report recovery while process cleanup and replacement run."""
+        self._healthy_since = None
+        self._below_healthy_since = None
+        return self._set(
+            StreamState.RECOVERING,
+            bitrate_kbps,
+            'restart_in_progress',
+            fps=0.0,
+        )
+
     def update(
         self,
         sample: ProgressSample | None,

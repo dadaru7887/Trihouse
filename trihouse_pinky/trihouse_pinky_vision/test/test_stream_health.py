@@ -94,3 +94,16 @@ def test_repeated_frame_count_stays_disconnected_after_timeout():
     assert still_disconnected.state == StreamState.DISCONNECTED
     assert still_disconnected.reason == 'no_progress_timeout'
     assert still_disconnected.last_frame_monotonic == 0.0
+
+
+def test_reports_recovering_while_restart_cleanup_runs():
+    monitor = StreamHealthStateMachine(target_fps=15.0)
+    monitor.update(sample(100), True, 0.0)
+    monitor.update(None, False, 1.0)
+
+    restarting = monitor.restarting(2.0)
+
+    assert restarting.state == StreamState.RECOVERING
+    assert restarting.reason == 'restart_in_progress'
+    assert restarting.fps == 0.0
+    assert restarting.last_frame_monotonic == 0.0
