@@ -106,4 +106,9 @@ def test_reports_recovering_while_restart_cleanup_runs():
     assert restarting.state == StreamState.RECOVERING
     assert restarting.reason == 'restart_in_progress'
     assert restarting.fps == 0.0
-    assert restarting.last_frame_monotonic == 0.0
+    assert restarting.last_frame_monotonic is None
+
+    resumed = monitor.update(sample(1), True, 3.0)
+
+    assert resumed.state == StreamState.RECOVERING
+    assert resumed.last_frame_monotonic == 3.0

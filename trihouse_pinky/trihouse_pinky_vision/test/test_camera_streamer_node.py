@@ -91,13 +91,23 @@ class OrderingSupervisor(FakeSupervisor):
     def __init__(self, events):
         super().__init__()
         self.events = events
+        self.restarted = False
         self.restart_started = threading.Event()
         self.restart_release = threading.Event()
+        self.restart_finished = threading.Event()
 
     def poll(self, _now):
+        if self.restarted:
+            return SupervisorSnapshot(
+                processes_alive=True,
+                progress=ProgressSample(1, 15.0, 1 / 15.0),
+                total_encoded_bytes=self.bytes_written,
+                exit_reason='',
+                restart_delay=None,
+            )
         return SupervisorSnapshot(
             processes_alive=False,
-            progress=None,
+            progress=ProgressSample(100, 15.0, 100 / 15.0),
             total_encoded_bytes=None,
             exit_reason='publisher_exit:7',
             restart_delay=0.0,
@@ -107,12 +117,14 @@ class OrderingSupervisor(FakeSupervisor):
         self.events.append('schedule')
 
     def restart_due(self, _now):
-        return True
+        return not self.restarted
 
     def restart(self):
         self.events.append('restart')
         self.restart_started.set()
         self.restart_release.wait(timeout=2.0)
+        self.restarted = True
+        self.restart_finished.set()
 
 
 class RecordingPublisher:
@@ -239,6 +251,17 @@ def test_publishes_disconnection_and_bitrate_reason_before_restart(ros_context):
             ':bitrate_unavailable:byte_counter_unavailable'
         )
         assert returned_before_restart_finished
+
+        supervisor.restart_release.set()
+        assert supervisor.restart_finished.wait(timeout=1.0)
+        deadline = time.monotonic() + 1.0
+        while node._restart_is_running() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not node._restart_is_running()
+        node._on_timer()
+
+        assert node._last_frame_count == 1
+        assert events.count('restart') == 1
     finally:
         supervisor.restart_release.set()
         callback_thread.join(timeout=1.0)

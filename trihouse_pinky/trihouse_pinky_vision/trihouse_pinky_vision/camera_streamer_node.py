@@ -174,6 +174,7 @@ class CameraStreamerNode(Node):
         with self._restart_lock:
             if self._restart_thread is not None:
                 return
+            self._last_frame_count = None
             self._restart_error = None
             thread = threading.Thread(
                 target=self._restart_worker,
