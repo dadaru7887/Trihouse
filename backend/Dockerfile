@@ -118,4 +118,19 @@ RUN chmod +x /entrypoint.sh
 RUN source /opt/conda/etc/profile.d/conda.sh && conda activate unified_env_ver2 \
     && MAX_JOBS=2 pip install flash-attn --no-build-isolation
 
+# nvitop: GPU 사용률 모니터링용. requirements_pip.txt에 안 넣고 맨 끝에 독립 레이어로 둠 --
+# 거기 넣으면 그 아래(git+ 설치들 ~ 방금 위 flash-attn 컴파일까지) 캐시가 전부 깨짐.
+# nvidia-ml-py는 requirements_pip.txt에 이미 있어서 nvitop이 그걸 그대로 재사용함.
+RUN source /opt/conda/etc/profile.d/conda.sh && conda activate unified_env_ver2 \
+    && pip install nvitop
+
+# RTX5080(Blackwell, sm_120)은 위에서 conda로 깐 PyTorch 2.5.0(cu124)이 지원 안 함
+# ("CUDA error: no kernel image is available for execution on the device").
+# cu128 빌드로 재설치 -- 마찬가지로 맨 끝 독립 레이어라 재빌드해도 앞 캐시(flash-attn
+# 컴파일 포함) 그대로 재사용됨. pointops/pointgroup_ops(Pointcept)는 이 업그레이드 후에도
+# 정상 동작 확인됨, flash-attn만 ABI 불일치로 깨짐(재컴파일 필요, 아직 안 함).
+RUN source /opt/conda/etc/profile.d/conda.sh && conda activate unified_env_ver2 \
+    && pip install --index-url https://download.pytorch.org/whl/cu128 \
+       torch torchvision torchaudio --upgrade
+
 CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
