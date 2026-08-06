@@ -1,6 +1,6 @@
 # trihouse_pinky_vision
 
-> 상태: 구현 계획. 현재는 README만 존재하며 ROS 2 노드, launch, YAML 또는 스크립트는 없다.
+> 상태: 최소 송신·상태감시 구현. ROS 2 Jazzy 패키지, `StreamHealth`, launch, Pinky 1 프로필과 서버 검증 스크립트가 있다. 캘리브레이션·좌표 변환은 후속 범위다.
 
 ## 1. 목적과 책임
 
@@ -14,15 +14,15 @@ Pinky 내장 카메라를 안정적인 장치 경로로 열어 H.264/RTSP로 Med
 - Pinky 로컬에 영상/이미지를 저장하거나 네트워크 단절 시 로컬 녹화로 전환하지 않는다.
 - 사람·ArUco 모델 추론, safety 정지 판단, docking 제어를 넣지 않는다.
 
-## 3. 계획된 노드와 작업
+## 3. 구현된 노드와 작업
 
-- `camera_streamer_node`: GStreamer pipeline과 bus의 EOS/ERROR/reconnect 관리
-- `stream_health_monitor`: frame timestamp/FPS/bitrate/freeze 상태를 1 Hz로 보고
-- `camera_geometry_node`: calibration 로드, TF 게시, 관측 좌표 변환
-- 안정적인 `/dev/v4l/by-id/` 식별과 제한된 exponential backoff
-- 오래된 frame을 버리는 bounded RAM queue
+- `camera_streamer_node`: 검증된 `rpicam-vid | ffmpeg` 프로세스 실행과 정리
+- `process_supervisor`: 자식 종료, RTSP 게시 실패와 제한된 exponential backoff 관리
+- `stream_health`: frame 진행/FPS/bitrate/freeze 상태를 판정하고 1 Hz로 보고
+- `command_builder`: YAML 값을 검증하고 shell 없이 argv 배열 생성
+- `verify_rtsp.sh`: 서버에서 codec/profile/FPS 확인과 bounded decode 수행
 
-초기 확인은 `gst-launch-1.0`으로 수행하고, 측정값이 확정된 뒤 Python GStreamer binding 기반 ROS 2 노드로 감싼다.
+OV5647은 `/dev/video0` UVC 장치로 가정하지 않는다. 2026-08-06 실측에서 Raspberry Pi 5의 `rpicam-vid`와 `libx264`, FFmpeg RTSP/TCP 조합이 통과했으므로 첫 구현은 이 경로를 그대로 감독한다. GStreamer 전환은 별도 하드웨어 검증 후 결정한다.
 
 ## 4. 발행·구독 토픽
 
@@ -59,18 +59,60 @@ Pinky 내장 카메라를 안정적인 장치 경로로 열어 H.264/RTSP로 Med
 | queue | 오래된 frame 폐기, RAM 최대 3 frame 후보 |
 | calibration | `calibration/<camera_id>/{intrinsics.yaml,extrinsics.yaml}` 후보 |
 
-## 10. 구현 순서와 완료 조건
+## 10. 빌드와 실행
+
+워크스페이스 루트에서:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+colcon build --base-paths trihouse_interfaces trihouse_pinky/trihouse_pinky_vision \
+  --packages-select trihouse_interfaces trihouse_pinky_vision
+source install/setup.bash
+```
+
+Pinky에서 MediaMTX 서버가 먼저 실행된 상태로:
+
+```bash
+export ROS_DOMAIN_ID=11
+ros2 launch trihouse_pinky_vision vision.launch.py
+```
+
+상태 확인:
+
+```bash
+ros2 topic echo /trihouse/vision/stream_health
+```
+
+RTX 4060 서버에서 10분 검증:
+
+```bash
+$(ros2 pkg prefix --share trihouse_pinky_vision)/scripts/verify_rtsp.sh \
+  rtsp://192.168.0.9:8554/pinky_1 600
+```
+
+## 11. 구현 순서와 완료 조건
 
 1. 하드웨어와 카메라 포맷을 실측한다.
 2. 가장 비용이 낮은 H.264 pipeline을 선택해 수동 송수신한다.
 3. CPU, FPS, frame drop과 재접속을 측정한다.
-4. GStreamer pipeline manager와 상태 머신을 테스트 주도로 구현한다.
-5. `StreamHealth`와 자동 재접속을 추가한다.
+4. 검증된 pipeline supervisor와 상태 머신을 테스트 주도로 구현한다.
+5. `StreamHealth`와 자동 재접속을 검증한다.
 6. 최종 RTSP decode frame으로 calibration하고 TF/좌표 변환을 추가한다.
 
 완료 조건은 10분 연속 720p 10~15 FPS, frame drop 1% 이하, timestamp 단조 증가, USB/네트워크 단절 탐지와 복구, 로컬 저장 없음, Nav2와 함께 실행할 CPU 여유가 입증되는 것이다.
 
-## 오늘 할 일: 카메라 영상 송수신 spike
+## 12. 2026-08-06 카메라 영상 송수신 spike 결과
+
+- Raspberry Pi 5 Model B Rev 1.1, `aarch64`
+- OV5647 CSI camera, index 0
+- `rpicam-apps v1.5.3`, libav enabled, `libx264`
+- 1280x720, 15 FPS, 2 Mbps, IDR 15, baseline, `hflip+vflip`
+- `rtsp://192.168.0.9:8554/pinky_1`, MediaMTX v1.19.3, RTSP/TCP
+- 599.93초 동안 8,997 frame, FFmpeg `-xerror` 종료 코드 0
+- Pinky 부하: `rpicam-vid` CPU 24.6%, FFmpeg CPU 0.8%, 온도 48.5°C
+- Wi-Fi power save는 `on`으로 확인했으며 운영 계획은 `off`; ROS 노드가 이를 변경하지 않는다.
+
+### 참고: 대체 카메라 경로 확인 절차
 
 ### Step 0 — Pinky에서 사실 확인
 

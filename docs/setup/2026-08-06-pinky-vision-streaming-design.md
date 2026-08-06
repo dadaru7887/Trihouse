@@ -1,5 +1,8 @@
 # Pinky Vision RTSP Streaming ROS 2 Design
 
+> 구현 기준 문서. 최소 ROS 2 송신·상태감시 범위가 `trihouse_interfaces`와
+> `trihouse_pinky_vision`에 구현되었으며, 하드웨어 acceptance는 현장에서 수행한다.
+
 ## 1. Goal
 
 Turn the camera path verified on 2026-08-06 into a ROS 2 package that can be

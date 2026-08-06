@@ -9,7 +9,7 @@
 3. `trihouse_pinky_bringup` 최소 통합 launch를 만든다.
 4. fleet이 구조화 작업 한 건을 받아 Nav2 한 지점으로 이동하고 결과를 회신하게 한다.
 5. 관제 UI에서 작업 전송과 상태 반영을 연결한다.
-6. vision RTSP 송신, `StreamHealth`, 캘리브레이션을 구현한다.
+6. vision RTSP 송신과 `StreamHealth` 최소 구현을 통합하고, 캘리브레이션을 추가한다.
 7. docking 정밀 정차를 구현한다.
 8. 입·출고 전체 상태 머신을 연결한다.
 9. heartbeat, 체크포인트, 중복 제거와 예외 처리를 강화한다.
@@ -27,6 +27,11 @@
 6. 측정값을 고정한 다음에만 GStreamer Python 노드와 `StreamHealth` 구현 계획을 확정한다.
 
 상세 명령과 판정 기준은 [vision README](../trihouse_pinky_vision/README.md)를 따른다.
+
+2026-08-06 spike에서 Pi 5 + OV5647의 `rpicam-vid/libx264 -> FFmpeg -> MediaMTX`
+경로가 720p15로 10분 검증됐고, 이를 감독하는 최소 ROS 2 패키지와
+`StreamHealth` 계약이 추가됐다. 전체 순서의 1~5단계를 대체하는 것이 아니라,
+하드웨어 리드타임을 줄이기 위한 vision 선행 구현으로 취급한다.
 
 ## 최소 수직 흐름의 완료 조건
 
