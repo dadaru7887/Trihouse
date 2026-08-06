@@ -60,9 +60,12 @@ class StreamHealthStateMachine:
             return self._set(StreamState.DISCONNECTED, bitrate_kbps, 'publisher_exit')
 
         is_new = sample is not None and (
-            self._snapshot.state == StreamState.DISCONNECTED
-            or self._last_frame_count is None
+            self._last_frame_count is None
             or sample.frame_count > self._last_frame_count
+            or (
+                self._snapshot.state == StreamState.DISCONNECTED
+                and sample.frame_count < self._last_frame_count
+            )
         )
         if is_new and sample is not None:
             return self._on_progress(sample, now, bitrate_kbps)

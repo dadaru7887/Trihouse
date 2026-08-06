@@ -48,15 +48,23 @@ class EncodedBitrateSampler:
     def __init__(self) -> None:
         self._last_bytes: int | None = None
         self._last_time: float | None = None
+        self._unavailable_reason = 'warmup'
+
+    @property
+    def unavailable_reason(self) -> str:
+        """Return an empty string only when the latest rate is measurable."""
+        return self._unavailable_reason
 
     def sample(self, total_bytes: int | None, now: float) -> float:
         if total_bytes is None:
             self._last_bytes = None
             self._last_time = None
+            self._unavailable_reason = 'byte_counter_unavailable'
             return 0.0
         if self._last_bytes is None or self._last_time is None:
             self._last_bytes = total_bytes
             self._last_time = now
+            self._unavailable_reason = 'warmup'
             return 0.0
 
         delta_bytes = total_bytes - self._last_bytes
@@ -64,10 +72,16 @@ class EncodedBitrateSampler:
         if delta_bytes < 0:
             self._last_bytes = total_bytes
             self._last_time = now
+            self._unavailable_reason = 'counter_reset'
             return 0.0
         if elapsed <= 0:
+            self._unavailable_reason = 'invalid_interval'
             return 0.0
 
         self._last_bytes = total_bytes
         self._last_time = now
+        if delta_bytes == 0:
+            self._unavailable_reason = 'no_encoded_bytes'
+            return 0.0
+        self._unavailable_reason = ''
         return delta_bytes * 8.0 / elapsed / 1000.0

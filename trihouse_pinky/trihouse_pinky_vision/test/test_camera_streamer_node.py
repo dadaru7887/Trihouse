@@ -47,6 +47,9 @@ class FakeSupervisor:
     def mark_healthy(self, _now):
         pass
 
+    def mark_unhealthy(self):
+        pass
+
     def stop(self):
         self.stopped = True
 
@@ -79,6 +82,44 @@ class RestartingSupervisor(FakeSupervisor):
 
     def schedule_restart(self, _now):
         pass
+
+
+class OrderingSupervisor(FakeSupervisor):
+    """Record failure publication and restart ordering."""
+
+    def __init__(self, events):
+        super().__init__()
+        self.events = events
+
+    def poll(self, _now):
+        return SupervisorSnapshot(
+            processes_alive=False,
+            progress=None,
+            total_encoded_bytes=None,
+            exit_reason='publisher_exit:7',
+            restart_delay=0.0,
+        )
+
+    def schedule_restart(self, _now):
+        self.events.append('schedule')
+
+    def restart_due(self, _now):
+        return True
+
+    def restart(self):
+        self.events.append('restart')
+
+
+class RecordingPublisher:
+    """Capture a published health message in a shared event list."""
+
+    def __init__(self, events):
+        self.events = events
+        self.message = None
+
+    def publish(self, message):
+        self.message = message
+        self.events.append('publish')
 
 
 @pytest.fixture
@@ -118,7 +159,7 @@ def test_publishes_stream_health_from_supervisor_progress(ros_context):
         assert message.camera_id == 'pinky_1'
         assert message.state == StreamHealth.STATE_HEALTHY
         assert message.fps == pytest.approx(15.0)
-        assert message.detail == 'healthy'
+        assert message.detail == 'healthy:bitrate_unavailable:warmup'
         assert supervisor.started
     finally:
         executor.remove_node(observer)
@@ -156,5 +197,27 @@ def test_frame_timestamp_starts_unknown_and_accepts_counter_reset(ros_context):
         node._on_timer()
 
         assert node._last_frame_count == 1
+    finally:
+        node.destroy_node()
+
+
+def test_publishes_disconnection_and_bitrate_reason_before_restart(ros_context):
+    events = []
+    supervisor = OrderingSupervisor(events)
+    node = CameraStreamerNode(
+        supervisor_factory=lambda *_args, **_kwargs: supervisor,
+        monotonic=lambda: 10.0,
+    )
+    publisher = RecordingPublisher(events)
+    node._publisher = publisher
+    try:
+        node._on_timer()
+
+        assert events == ['schedule', 'publish', 'restart']
+        assert publisher.message.state == StreamHealth.STATE_DISCONNECTED
+        assert publisher.message.bitrate_kbps == 0.0
+        assert publisher.message.detail.endswith(
+            ':bitrate_unavailable:byte_counter_unavailable'
+        )
     finally:
         node.destroy_node()

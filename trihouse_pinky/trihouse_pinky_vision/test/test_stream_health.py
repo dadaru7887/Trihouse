@@ -81,3 +81,16 @@ def test_accepts_reset_frame_counter_after_publisher_restart():
     assert recovering.reason == 'frames_resumed'
     assert recovering.fps == 15.0
     assert recovering.last_frame_monotonic == 2.0
+
+
+def test_repeated_frame_count_stays_disconnected_after_timeout():
+    monitor = StreamHealthStateMachine(target_fps=15.0)
+    monitor.update(sample(100), True, 0.0)
+    disconnected = monitor.update(sample(100), True, 3.0)
+
+    still_disconnected = monitor.update(sample(100), True, 4.0)
+
+    assert disconnected.state == StreamState.DISCONNECTED
+    assert still_disconnected.state == StreamState.DISCONNECTED
+    assert still_disconnected.reason == 'no_progress_timeout'
+    assert still_disconnected.last_frame_monotonic == 0.0

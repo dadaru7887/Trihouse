@@ -133,11 +133,10 @@ class CameraStreamerNode(Node):
 
         if health.state == StreamState.HEALTHY:
             self._supervisor.mark_healthy(now)
-        elif health.state == StreamState.DISCONNECTED:
-            self._supervisor.schedule_restart(now)
-        if self._supervisor.restart_due(now):
-            self.get_logger().warning(f'restarting camera pipeline: {health.reason}')
-            self._supervisor.restart()
+        else:
+            self._supervisor.mark_unhealthy()
+            if health.state == StreamState.DISCONNECTED:
+                self._supervisor.schedule_restart(now)
 
         message = StreamHealth()
         message.camera_id = self._camera_id
@@ -145,13 +144,18 @@ class CameraStreamerNode(Node):
         message.fps = float(health.fps)
         message.bitrate_kbps = float(health.bitrate_kbps)
         message.last_frame_stamp = self._last_frame_stamp
-        message.detail = (
-            health.reason
-            if not snapshot.exit_reason
-            else f'{health.reason}:{snapshot.exit_reason}'
-        )
+        detail = [health.reason]
+        if snapshot.exit_reason:
+            detail.append(snapshot.exit_reason)
+        if self._bitrate.unavailable_reason:
+            detail.extend(['bitrate_unavailable', self._bitrate.unavailable_reason])
+        message.detail = ':'.join(detail)
         message.stamp = self.get_clock().now().to_msg()
         self._publisher.publish(message)
+
+        if self._supervisor.restart_due(now):
+            self.get_logger().warning(f'restarting camera pipeline: {health.reason}')
+            self._supervisor.restart()
 
     def destroy_node(self) -> bool:
         if not self._stopped:

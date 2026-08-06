@@ -67,6 +67,48 @@ def test_detects_publisher_exit_and_reaps_both_children():
             os.kill(pid, 0)
 
 
+def test_scheduled_restart_replaces_and_reaps_the_process_pair():
+    camera, publisher = commands()
+    supervisor = ProcessSupervisor(
+        camera,
+        publisher,
+        restart_delays=(0.01,),
+        sigint_timeout=0.2,
+        sigterm_timeout=0.2,
+    )
+    supervisor.start()
+    old_pids = supervisor.child_pids
+    try:
+        supervisor.schedule_restart(10.0)
+        assert supervisor.restart_due(10.01)
+        supervisor.restart()
+        new_pids = supervisor.child_pids
+
+        assert len(new_pids) == 2
+        assert new_pids != old_pids
+        for pid in old_pids:
+            with pytest.raises(ProcessLookupError):
+                os.kill(pid, 0)
+    finally:
+        supervisor.stop()
+
+
+def test_publisher_start_failure_cleans_up_camera_without_hanging():
+    camera, _publisher = commands()
+    supervisor = ProcessSupervisor(
+        camera,
+        ['/path/that/does/not/exist'],
+        sigterm_timeout=0.2,
+    )
+    started_at = time.monotonic()
+
+    with pytest.raises(FileNotFoundError):
+        supervisor.start()
+
+    assert time.monotonic() - started_at < 1.0
+    assert supervisor.child_pids == ()
+
+
 def test_restart_backoff_is_bounded_and_resets_after_thirty_healthy_seconds():
     backoff = RestartBackoff((1.0, 2.0, 4.0, 8.0, 16.0, 30.0), reset_after=30.0)
 
@@ -77,3 +119,16 @@ def test_restart_backoff_is_bounded_and_resets_after_thirty_healthy_seconds():
     backoff.record_healthy(130.0)
 
     assert backoff.record_failure(131.0) == 1.0
+
+
+def test_restart_backoff_reset_requires_continuous_healthy_time():
+    backoff = RestartBackoff((1.0, 2.0, 4.0), reset_after=30.0)
+    assert backoff.record_failure(0.0) == 1.0
+    assert backoff.record_failure(1.0) == 2.0
+
+    backoff.record_healthy(10.0)
+    backoff.record_unhealthy()
+    backoff.record_healthy(50.0)
+    backoff.record_healthy(79.0)
+
+    assert backoff.record_failure(80.0) == 4.0

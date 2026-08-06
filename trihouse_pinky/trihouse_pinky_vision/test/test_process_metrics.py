@@ -35,13 +35,19 @@ def test_bitrate_sampler_calculates_kilobits_per_second_from_byte_delta():
     sampler = EncodedBitrateSampler()
 
     assert sampler.sample(1_000_000, 10.0) == 0.0
+    assert sampler.unavailable_reason == 'warmup'
     assert sampler.sample(1_250_000, 11.0) == pytest.approx(2000.0)
+    assert sampler.unavailable_reason == ''
 
 
 def test_bitrate_sampler_returns_unavailable_for_bad_interval_or_counter_reset():
     sampler = EncodedBitrateSampler()
 
     assert sampler.sample(None, 1.0) == 0.0
+    assert sampler.unavailable_reason == 'byte_counter_unavailable'
     assert sampler.sample(1000, 2.0) == 0.0
+    assert sampler.unavailable_reason == 'warmup'
     assert sampler.sample(2000, 2.0) == 0.0
+    assert sampler.unavailable_reason == 'invalid_interval'
     assert sampler.sample(500, 3.0) == 0.0
+    assert sampler.unavailable_reason == 'counter_reset'

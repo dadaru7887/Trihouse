@@ -43,6 +43,9 @@ class RestartBackoff:
         elif now - self._healthy_since >= self._reset_after:
             self._index = 0
 
+    def record_unhealthy(self) -> None:
+        self._healthy_since = None
+
 
 class ProcessSupervisor:
     def __init__(
@@ -99,7 +102,17 @@ class ProcessSupervisor:
             )
         except BaseException:
             self._camera.terminate()
-            self._camera.wait()
+            try:
+                self._camera.wait(timeout=self._sigterm_timeout)
+            except subprocess.TimeoutExpired:
+                self._camera.kill()
+                try:
+                    self._camera.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    pass
+            for stream in (self._camera.stdin, self._camera.stdout, self._camera.stderr):
+                if stream is not None:
+                    stream.close()
             self._camera = None
             raise
         self._camera.stdout.close()
@@ -157,6 +170,9 @@ class ProcessSupervisor:
 
     def mark_healthy(self, now: float) -> None:
         self._backoff.record_healthy(now)
+
+    def mark_unhealthy(self) -> None:
+        self._backoff.record_unhealthy()
 
     def stop(self) -> None:
         processes = [process for process in (self._publisher, self._camera) if process is not None]
