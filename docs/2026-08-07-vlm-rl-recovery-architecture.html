@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trihouse VLM + RL 위험·예외 복구 아키텍처</title>
+  <meta name="description" content="Pinky-Pro용 VLM, Reference/Episodic Memory, TGRPO, SAC, 6C-Lite, Nav2, Safety Supervisor 통합 설계">
+  <style>
+    :root {
+      --ink:#172033; --muted:#5f6b7a; --line:#d9e1ea; --paper:#fff;
+      --bg:#eef3f7; --navy:#173b57; --blue:#1769aa; --sky:#eaf5ff;
+      --green:#16705a; --green-bg:#e9f8f2; --amber:#9b5b00; --amber-bg:#fff4d6;
+      --red:#a73131; --red-bg:#fff0f0; --violet:#6446a5;
+    }
+    *{box-sizing:border-box} html{scroll-behavior:smooth}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:Pretendard,"Noto Sans KR",system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.68}
+    a{color:var(--blue)} code{font-family:"SFMono-Regular",Consolas,monospace;background:#f2f5f8;padding:.12rem .35rem;border-radius:4px}
+    .layout{max-width:1500px;margin:auto;display:grid;grid-template-columns:260px minmax(0,980px);gap:28px;padding:24px}
+    aside{position:sticky;top:18px;align-self:start;max-height:calc(100vh - 36px);overflow:auto;background:#122c42;color:#eaf4fb;border-radius:16px;padding:22px 18px;box-shadow:0 10px 30px #16314822}
+    aside h1{font-size:1.05rem;margin:0 0 6px} aside p{font-size:.8rem;color:#bcd0df;margin:0 0 18px}
+    aside a{display:block;color:#d9eaf5;text-decoration:none;padding:6px 8px;border-radius:6px;font-size:.84rem} aside a:hover{background:#ffffff18}
+    main{min-width:0}.hero,section{background:var(--paper);border:1px solid var(--line);border-radius:16px;padding:34px 40px;margin-bottom:22px;box-shadow:0 8px 24px #173b5710}
+    .hero{background:linear-gradient(135deg,#122c42,#245f84);color:white;border:0;padding:48px}
+    .eyebrow{text-transform:uppercase;letter-spacing:.08em;font-size:.78rem;color:#bfe1f5;font-weight:700}.hero h1{font-size:2.25rem;line-height:1.2;margin:.5rem 0 1rem}.hero .lead{font-size:1.16rem;color:#e5f1f8;max-width:760px}.meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:24px}.pill{display:inline-block;border:1px solid #ffffff42;border-radius:999px;padding:5px 11px;font-size:.8rem;background:#ffffff12}
+    h2{font-size:1.55rem;color:var(--navy);margin:0 0 1.1rem;padding-bottom:.55rem;border-bottom:2px solid #e7eef4}h3{font-size:1.16rem;color:#204f70;margin-top:1.6rem}h4{margin:.9rem 0 .45rem}
+    .callout{border-left:5px solid var(--blue);background:var(--sky);padding:16px 18px;border-radius:8px;margin:18px 0}.safe{border-color:var(--green);background:var(--green-bg)}.warn{border-color:#d49322;background:var(--amber-bg)}.danger{border-color:var(--red);background:var(--red-bg)}
+    .role-grid,.cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{border:1px solid var(--line);border-radius:11px;padding:16px;background:#fbfdff}.card strong{display:block;color:var(--navy);margin-bottom:4px}
+    pre{white-space:pre;overflow:auto;background:#101d2a;color:#d8edf8;border-radius:10px;padding:19px;font:13px/1.55 "SFMono-Regular",Consolas,monospace}
+    .formula{overflow:auto;background:#f6f3ff;border-left:4px solid var(--violet);padding:14px 18px;margin:14px 0;font:1.06rem/1.5 Georgia,"Times New Roman",serif}.symbols{margin-top:-8px;background:#fbfaff;border:1px solid #e5dcf7;border-radius:8px;padding:10px 16px;font-size:.91rem}
+    .table-wrap{overflow-x:auto;margin:14px 0 24px;border:1px solid var(--line);border-radius:10px}table{border-collapse:collapse;width:100%;min-width:700px;font-size:.88rem}th{background:#173b57;color:#fff;text-align:left}th,td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}tr:last-child td{border-bottom:0}tbody tr:nth-child(even){background:#f7fafc}.rule-id{font-family:monospace;font-weight:700;color:var(--blue);white-space:nowrap}.stage{border-top:5px solid var(--blue)}
+    .flow{display:flex;align-items:stretch;gap:8px;overflow-x:auto;padding:8px 0}.flow div{min-width:125px;flex:1;border:1px solid #bdd2e2;background:#f2f8fc;border-radius:9px;padding:12px;text-align:center;font-size:.84rem}.flow span{align-self:center;color:var(--blue);font-weight:900}
+    .decision{display:grid;grid-template-columns:1fr 1fr;gap:14px}.option{border:2px solid var(--line);border-radius:12px;padding:17px}.option.primary{border-color:var(--green);background:var(--green-bg)}
+    .unresolved{border:2px solid #d49322;background:#fffaf0}.status{font-weight:800}.small{font-size:.86rem;color:var(--muted)}
+    footer{text-align:center;color:var(--muted);font-size:.8rem;padding:10px 0 30px}
+    @media(max-width:1050px){.layout{grid-template-columns:1fr}aside{position:relative;top:0;max-height:none}aside nav{display:grid;grid-template-columns:repeat(3,1fr)}.hero,section{padding:28px}}
+    @media(max-width:680px){.layout{padding:10px}.hero,section{padding:22px 18px;border-radius:10px}.hero h1{font-size:1.7rem}.role-grid,.cards,.decision{grid-template-columns:1fr}aside nav{grid-template-columns:1fr 1fr}.flow{display:grid;grid-template-columns:1fr}.flow span{transform:rotate(90deg);justify-self:center}table{font-size:.8rem}}
+    @media print{body{background:#fff;font-size:10pt}.layout{display:block;max-width:none;padding:0}aside{display:none}.hero,section{box-shadow:none;border:0;border-radius:0;margin:0;padding:12mm 10mm}.hero{background:#fff!important;color:#111;border-bottom:2px solid #222}.hero .lead,.eyebrow{color:#333}.pill{border-color:#777}section{break-before:page}section:first-of-type{break-before:auto}.table-wrap{overflow:visible}table{min-width:0;font-size:7.8pt}pre{white-space:pre-wrap;color:#111;background:#f5f5f5}.callout,.formula{break-inside:avoid}}
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside>
+    <h1>Trihouse Recovery</h1>
+    <p>읽기·회의·인쇄용 설계 문서</p>
+    <nav>
+      <a href="#summary">1. 핵심 결론</a><a href="#architecture">2. 전체 흐름</a>
+      <a href="#trigger">3. Trigger·정지</a><a href="#vlm">4. VLM 계약</a>
+      <a href="#memory">5. Memory ER</a><a href="#candidates">6. 후보·RL</a>
+      <a href="#filters">7. 0~6 필터</a><a href="#rollout">8. 6C-Lite</a>
+      <a href="#samplers">9. Replay sampler</a><a href="#models">10. 모델 업데이트</a>
+      <a href="#authority">11. Nav2·Safety</a><a href="#performance">12. 성능·실패</a>
+      <a href="#tests">13. 검증</a><a href="#phases">14. 구현 단계</a>
+      <a href="#alternatives">15. 대안·연구</a><a href="#review">16. 리뷰·미결정</a>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="eyebrow">Pinky-Pro · ROS 2 · Nav2 · RTX 5080</div>
+      <h1>VLM + RL 위험·예외 복구 아키텍처</h1>
+      <p class="lead">Trigger가 발생하면 먼저 완전히 정지한다. VLM과 Memory가 상황을 해석하고, TGRPO와 SAC가 짧은 복구 좌표를 제안하며, 전 후보 가상검사 뒤 Nav2와 Safety Supervisor가 실제 운행을 책임진다.</p>
+      <div class="meta"><span class="pill">작성일 2026-08-07</span><span class="pill">1안 채택 · 2안 보존</span><span class="pill">3개 미결정</span><span class="pill">Source of truth: Markdown 명세</span></div>
+    </header>
+
+    <section id="summary">
+      <h2>1. 핵심 결론</h2>
+      <div class="callout safe"><strong>권한 한 문장</strong><br>VLM + RL은 좌표를 추천하고, Nav2는 경로를 결정하며, Safety Supervisor는 실제 움직임을 허가한다.</div>
+      <div class="role-grid">
+        <div class="card"><strong>VLM</strong>화면에서 문제 객체의 위치·위험과 로봇이 시도할 후보 방향을 읽는다.</div>
+        <div class="card"><strong>Reference Memory</strong>관리자와 반복 실행으로 검증한 장소 Node와 이동 Edge다.</div>
+        <div class="card"><strong>Episodic Memory</strong>로봇이 실제로 실행한 복구와 결과를 남긴 운행 일지다.</div>
+        <div class="card"><strong>TGRPO → SAC</strong>어떻게 벗어날지 Top-K skill을 고른 뒤, 각 skill 안에서 좌표를 만든다.</div>
+        <div class="card"><strong>6C-Lite</strong>실제로 움직이지 않고 모든 후보의 가까운 미래를 짧게 시험한다.</div>
+        <div class="card"><strong>Nav2 + Safety</strong>실제 경로를 재계획하고, 센서와 정지거리로 최종 속도를 허가·차단한다.</div>
+      </div>
+      <div class="callout danger"><strong>하지 않는 것</strong><br>VLM/RL은 <code>/cmd_vel</code>을 직접 내지 않는다. 복구 모듈은 별도 Nav2 action client가 되지 않는다. 사람 안전을 학습 점수와 맞바꾸지 않는다.</div>
+    </section>
+
+    <section id="architecture">
+      <h2>2. 전체 알고리즘 흐름</h2>
+      <pre>평상시: FMS → Fleet Adapter(유일한 Nav2 goal owner) → Nav2
+                                                    │ /cmd_vel_nav
+센서 ───────────────→ Safety Supervisor ────────────┴→ /cmd_vel → Pinky
+
+위험·예외 Trigger
+  → STOP latch → 실제 0속도 ACK → 기존 goal cancel ACK
+  → 동기화 RGB/segmentation/LiDAR/pose/costmap snapshot
+  → VLM 관찰 + Reference/Episodic Memory 검색 + Recovery Envelope
+  → TGRPO Top-K skill → skill별 SAC M개 좌표 + Memory 좌표
+  → 생성 시 0~3 hard filter
+  → 모든 후보 6C-Lite n-step 가상 rollout + 4~5 검사
+  → 위험 우선 Tournament → 우승 좌표 (x,y,yaw)
+  → 최신 snapshot으로 2~5 전체 재검사
+  → Recovery Coordinator → Fleet Adapter → Nav2 실제 재계획
+  → Safety Supervisor 최종 속도 허가
+  → 짧게 실행 → 다시 정지·관찰 → 임무 재합류 또는 다음 복구 step
+  → Episode/Step/Incident/Outcome 업데이트</pre>
+      <div class="flow"><div>Trigger·STOP</div><span>→</span><div>VLM·Memory</div><span>→</span><div>TGRPO·SAC 후보</div><span>→</span><div>0~5·6C-Lite</div><span>→</span><div>Nav2·Safety</div><span>→</span><div>실행 결과 저장</div></div>
+      <p>새 <code>trihouse_pinky_recovery</code> 패키지가 Trigger 집계, recovery epoch/lease, Memory API, 후보 필터·tournament, 모델 버전을 맡는다. 이 패키지는 속도 명령과 Nav2 goal을 직접 소유하지 않는다.</p>
+    </section>
+
+    <section id="trigger">
+      <h2>3. Composite Trigger와 완전 정지</h2>
+      <div class="formula">T<sub>VLM</sub> = T<sub>hard</sub> ∨ T<sub>ambiguity</sub> ∨ T<sub>disagreement</sub> ∨ T<sub>navigation</sub></div>
+      <div class="symbols"><strong>뜻:</strong> LiDAR/bumper 같은 즉시 위험, YOLO의 지속적 모호성, 영상·segmentation·depth의 불일치, Nav2 stuck 중 하나라도 발생하면 복구를 시작한다. Hard 조건은 즉시, 모호성은 N-of-M 프레임과 hysteresis로 판단한다.</div>
+      <p>학습하지 않은 객체는 이름을 맞히기 전에 장애물로 처리한다. 낮은 confidence, class 불안정, 설명되지 않는 depth/segmentation 영역을 <em>unknown occupied region</em>으로 표시한다. VLM은 그 뒤에 의미와 위험을 보조한다.</p>
+      <h3>정지했다고 인정하는 네 조건</h3>
+      <ol><li>Safety Supervisor STOP latch 활성</li><li>odometry 속도가 threshold 아래에서 일정 시간 유지</li><li>Fleet Adapter가 기존 Nav2 goal cancel ACK</li><li>정지 뒤 timestamp의 동기화 snapshot 확보</li></ol>
+      <div class="callout warn"><strong>Recovery epoch</strong><br>Trigger마다 세대 번호를 올린다. 센서, VLM 출력, 후보, Nav2 goal의 epoch가 다르면 늦게 도착한 옛 답으로 보고 폐기한다. 동시에 유효한 goal은 정확히 하나다.</div>
+    </section>
+
+    <section id="vlm">
+      <h2>4. VLM 입력·출력 계약</h2>
+      <div class="cards">
+        <div class="card"><strong>입력</strong>RGB 프레임(단일/연속은 D25), 같은 시점 segmentation, YOLO bbox·confidence·track, pose·LiDAR/depth·임무 방향</div>
+        <div class="card"><strong>운용</strong>위험·예외 시에만 3B 또는 7B 4-bit 모델 load/infer, LoRA 적용. YOLO는 저주기로 계속 추적한다.</div>
+      </div>
+      <pre>{
+  "observations": [{
+    "bbox_norm": [0.62, 0.08, 0.91, 0.74],
+    "semantic_label": "person_or_unknown_dynamic",
+    "risk": "critical", "confidence": 0.78
+  }],
+  "robot_candidate_sectors": [
+    {"angle_deg": -90, "width_deg": 25, "preference": 0.73}
+  ],
+  "uncertainty": 0.28
+}</pre>
+      <p>VLM은 자유문장이나 metric 좌표를 직접 내지 않는다. 화면의 정규화 bbox와 <strong>로봇이 시도할 방향</strong>을 strict JSON으로 낸다. calibration, TF, LiDAR/depth association과 SAC가 이를 map 좌표로 바꾼다. critical 객체의 3D association이 불확실하면 해당 시야를 빈 공간으로 보지 않는다.</p>
+    </section>
+
+    <section id="memory">
+      <h2>5. Reference Memory + Episodic Memory 스키마</h2>
+      <pre>MapRevision
+ ├─ ReferenceNode ── ReferenceEdge ── ReferenceNode
+ │        └─ RecoveryEpisode ── EpisodeStep ── CandidateRollout
+ │                                  ├─ IncidentFact (불변)
+ │                                  └─ OutcomeAssessment (갱신 가능)
+ └─ localization epoch / TF snapshot
+
+PolicyBundle = TGRPO checkpoint + SAC checkpoint + skill ontology + schema</pre>
+      <h3>ReferenceNode — 검증된 장소 점</h3>
+      <div class="table-wrap"><table><thead><tr><th>필드군</th><th>내용</th><th>왜 필요한가</th></tr></thead><tbody>
+        <tr><td>ID·공간</td><td><code>node_id, map_id, map_revision, x,y,yaw, frame_id</code></td><td>좌표가 어느 지도에서 검증됐는지 고정한다.</td></tr>
+        <tr><td>용도</td><td><code>node_type, recovery_roles[], allowed_heading_range</code></td><td>대기점·후퇴점·재합류점의 허용 행동을 구분한다.</td></tr>
+        <tr><td>안전</td><td><code>footprint_class, static_clearance_m</code></td><td>로봇 몸 전체가 들어가고 여유가 있는지 기록한다.</td></tr>
+        <tr><td>현재성</td><td><code>last_verified_at, status, alpha, beta, source_hash</code></td><td>오래되거나 의심되는 점을 ACTIVE/SUSPECT/QUARANTINED로 관리한다.</td></tr>
+      </tbody></table></div>
+      <h3>ReferenceEdge — Node 사이의 검증된 이동 연결</h3>
+      <div class="table-wrap"><table><thead><tr><th>필드군</th><th>내용</th><th>왜 필요한가</th></tr></thead><tbody>
+        <tr><td>연결</td><td><code>edge_id, from_node_id, to_node_id, directionality</code></td><td>어느 점에서 어느 점으로 갈 수 있는지 나타낸다.</td></tr>
+        <tr><td>경로</td><td><code>path_polyline, min_width_m, min_clearance_m, speed_limit</code></td><td>중심점뿐 아니라 이동 공간을 보존한다.</td></tr>
+        <tr><td>문맥</td><td><code>allowed_recovery_skills[], dynamic_risk_profile</code></td><td>후진 허용과 사람 출현 같은 제약을 기록한다.</td></tr>
+        <tr><td>현재성</td><td><code>map_revision, status, last_verified_at, alpha, beta</code></td><td>지도와 실제 결과가 바뀌면 격리한다.</td></tr>
+      </tbody></table></div>
+      <h3>Episodic Memory — 하나의 schema, 결과는 연속값</h3>
+      <div class="table-wrap"><table><thead><tr><th>Entity</th><th>핵심 필드</th><th>파인만식 설명</th></tr></thead><tbody>
+        <tr><td><strong>RecoveryEpisode</strong></td><td>episode/epoch, trigger, map/localization version, 시작 pose, model bundle, terminal status, budget</td><td>위험을 발견해 멈춘 때부터 임무에 돌아가거나 포기할 때까지의 전체 이야기다.</td></tr>
+        <tr><td><strong>EpisodeStep</strong></td><td>snapshot, retrieved IDs, high action, selected pose, actual Nav2 path, execution, reward, next state</td><td>실제로 선택하고 실행한 짧은 좌표 한 번이다. 최종 후보만 들어간다.</td></tr>
+        <tr><td><strong>IncidentFact</strong></td><td>collision/emergency/human intrusion, severity, sensor evidence, immutable hash</td><td>충돌 같은 사실은 나중에 모델이 안전했다고 덮어쓰지 못한다.</td></tr>
+        <tr><td><strong>OutcomeAssessment</strong></td><td><code>p_safe, p_boundary, p_critical</code>, margin, progress, intervention, label confidence</td><td>성공과 실패 사이의 “간신히 성공”을 경계 확률로 보존한다.</td></tr>
+        <tr><td><strong>CandidateRollout</strong></td><td>출처, skill/좌표, filter 결과, trajectory 요약, risk upper bound, uncertainty, selected, TTL</td><td>실행하지 않은 후보의 가상 시험표다. 실제 성공 경험으로 위장하지 않는다.</td></tr>
+      </tbody></table></div>
+      <div class="callout"><strong>Critical과 Reference</strong><br>관련 Reference Node는 즉시 삭제하지 않는다. 일시적인 사람 때문인지 좌표 자체가 틀렸는지 모르므로 먼저 SUSPECT/QUARANTINED로 바꾸고 재검증한다.</div>
+      <div class="formula">R<sub>ref</sub> = α/(α+β) · e<sup>−λΔt</sup> · C<sub>map</sub> · C<sub>loc</sub></div>
+      <div class="symbols"><strong>뜻:</strong> α는 안전 확인, β는 위험 확인, Δt는 마지막 검증 뒤 시간, C<sub>map</sub>은 지도 일치, C<sub>loc</sub>은 위치추정 품질이다. 여러 번 안전했어도 오래됐거나 지도가 바뀌면 다시 의심한다.</div>
+      <p>MySQL이 원본이고 RTX 5080 PC에는 FAISS index, 최근 cache, 네트워크 단절용 append-only queue를 둔다. event마다 UUID·epoch·step·schema/model version·checksum을 넣고, 로봇은 DB가 아니라 API로 접근한다.</p>
+    </section>
+
+    <section id="candidates">
+      <h2>6. 후보 생성과 계층형 RL</h2>
+      <p>후보는 Reference Node/Edge, 유사한 safe/boundary Episode, Critical 반대 제약, TGRPO+SAC에서 모은다.</p>
+      <div class="formula">z<sub>t</sub><sup>(k)</sup> ~ π<sub>H</sub>(z | s<sub>t</sub>), &nbsp; k=1,…,K</div>
+      <div class="symbols"><code>s_t</code>는 영상·segmentation·LiDAR·pose·Memory 검색 결과, <code>π_H</code>는 TGRPO 상위 정책, <code>z</code>는 후진·좌우 우회·대기 후 재관찰 같은 고수준 action, K는 Top-K 수다.</div>
+      <div class="formula">p<sub>t</sub><sup>(k,m)</sup> ~ π<sub>L</sub>(p | s<sub>t</sub>, z<sub>t</sub><sup>(k)</sup>), &nbsp; p=(x,y,yaw), &nbsp; m=1,…,M</div>
+      <div class="symbols"><code>π_L</code>은 SAC 하위 정책이고, 각 상위 action을 조건으로 M개 map 좌표를 만든다. GPU batch로 함께 계산해도 의미는 <strong>상위 방법 → 그 방법에 맞는 좌표</strong> 순서다.</div>
+      <div class="decision">
+        <div class="option primary"><strong>1안(기존 방안 B) · 채택</strong><h4>직접 bounded absolute map pose</h4><p>SAC가 (x,y,yaw)를 직접 내되 Recovery Envelope 안으로 제한한다. map revision, localization epoch, TF snapshot, covariance, timestamp를 후보에 묶는다.</p><p class="small">장점: Nav2 연결과 결과 해석이 직접적. 단점: map 변경·OOD에 민감.</p></div>
+        <div class="option"><strong>2안(기존 방안 A) · 대안</strong><h4>Reference anchor + bounded residual</h4><div class="formula">p = p<sub>anchor</sub> + Δp, ‖Δp‖ ≤ r<sub>max</sub></div><p class="small">장점: 검증점 주변이라 데이터 효율·안전 설명이 좋음. 단점: Reference가 드문 미지 공간에서 덜 유연.</p></div>
+      </div>
+    </section>
+
+    <section id="filters">
+      <h2>7. 후보 0~6단계 필터</h2>
+      <div class="callout danger"><strong>규칙:</strong> 위험을 점수로 상쇄하지 않는다. 사람 침범 후보는 진행 점수가 아무리 높아도 즉시 탈락한다. 0~3은 생성 시, 4~5는 모든 후보 rollout, 6은 우승 좌표 하나의 최신 재검사다.</div>
+
+      <h3>0. 로봇·센서 상태 검사</h3>
+      <div class="table-wrap stage"><table><thead><tr><th>ID</th><th>통과 조건</th></tr></thead><tbody>
+        <tr><td class="rule-id">R0-01</td><td>실제 속도 0 유지 — 차가 완전히 선 뒤 생각한다.</td></tr><tr><td class="rule-id">R0-02</td><td>기존 goal cancel ACK — 두 운전 지시가 겹치지 않는다.</td></tr>
+        <tr><td class="rule-id">R0-03/04</td><td>RGB·seg·LiDAR·pose·costmap이 최신이고 시간 동기화 — 오래되거나 서로 다른 순간을 섞지 않는다.</td></tr>
+        <tr><td class="rule-id">R0-05</td><td>pose covariance/TF jump 정상 — 로봇이 자기 위치를 모르면 움직이지 않는다.</td></tr><tr><td class="rule-id">R0-06</td><td>bumper·e-stop·Safety 정상 — 마지막 브레이크가 고장 나면 출발하지 않는다.</td></tr><tr><td class="rule-id">R0-07</td><td>GPU와 deadline 예산 충분 — 검사를 끝낼 시간이 없으면 추측하지 않는다.</td></tr>
+      </tbody></table></div>
+
+      <h3>1. 후보 형식·출처 검사</h3>
+      <div class="table-wrap stage"><table><thead><tr><th>ID</th><th>통과 조건</th></tr></thead><tbody>
+        <tr><td class="rule-id">R1-01/02</td><td>x,y,yaw가 유한하고 map frame/검증 TF — 주소와 지도 체계를 확인한다.</td></tr><tr><td class="rule-id">R1-03</td><td>map·localization·footprint version 일치 — 옛 지도 좌표를 쓰지 않는다.</td></tr>
+        <tr><td class="rule-id">R1-04</td><td>Reference/episode/policy ID와 timestamp 추적 가능 — 출처 없는 좌표는 버린다.</td></tr><tr><td class="rule-id">R1-05</td><td>Stable bundle 또는 허가된 저위험 canary — 시험 모델은 운동장을 제한한다.</td></tr><tr><td class="rule-id">R1-06</td><td>현재 epoch의 Recovery Envelope에 결속 — 이번 문제의 작은 복구 구역을 벗어나지 않는다.</td></tr>
+      </tbody></table></div>
+
+      <h3>2. 목표 좌표 자체 검사</h3>
+      <div class="table-wrap stage"><table><thead><tr><th>ID</th><th>통과 조건</th></tr></thead><tbody>
+        <tr><td class="rule-id">R2-01</td><td>Recovery Envelope 안 — 복구는 짧게만 한다.</td></tr><tr><td class="rule-id">R2-02/03</td><td>costmap free이고 전체 footprint가 들어감 — 로봇 중심만 보지 않는다.</td></tr>
+        <tr><td class="rule-id">R2-04/05</td><td>class별 clearance 충족, keep-out/human-only/cliff 불침범 — 금지선은 협상하지 않는다.</td></tr><tr><td class="rule-id">R2-06</td><td>yaw가 통로·센서 시야·재합류에 적합 — 도착해서 몸이 끼지 않는다.</td></tr><tr><td class="rule-id">R2-07</td><td>어느 순간에도 정지 가능한 거리 — 앞이 막히면 그 안에서 설 수 있다.</td></tr>
+      </tbody></table></div>
+
+      <h3>3. Critical Memory veto 검사</h3>
+      <div class="table-wrap stage"><table><thead><tr><th>ID</th><th>통과 조건</th></tr></thead><tbody>
+        <tr><td class="rule-id">R3-01/02</td><td>실제 collision/emergency 사례 및 유사 Critical geometry와 거리가 충분 — 사고 난 행동을 반복하지 않는다.</td></tr>
+        <tr><td class="rule-id">R3-03</td><td>Boundary와 비슷하면 더 큰 margin 적용 후 통과 — 간신히 성공한 길은 더 넉넉히 본다.</td></tr><tr><td class="rule-id">R3-04</td><td>관련 Reference가 ACTIVE — 격리된 표지판은 따르지 않는다.</td></tr><tr><td class="rule-id">R3-05</td><td>사람 현재·예측 점유영역 불침범 — 사람 안전은 점수로 흥정하지 않는다.</td></tr><tr><td class="rule-id">R3-06</td><td>association 불명 unknown을 occupied로 놓아도 통과 — 안 보인다고 빈 공간이 아니다.</td></tr>
+      </tbody></table></div>
+
+      <h3>4. Nav2 경로 생성 가능성 검사</h3>
+      <div class="table-wrap stage"><table><thead><tr><th>ID</th><th>통과 조건</th></tr></thead><tbody>
+        <tr><td class="rule-id">R4-01/02</td><td>현재 version의 costmap·TF로 Nav2 path 생성 — 주소뿐 아니라 최신 길이 있어야 한다.</td></tr><tr><td class="rule-id">R4-03</td><td>길이·detour가 envelope/budget 안 — 복구가 장거리 새 임무가 되지 않는다.</td></tr><tr><td class="rule-id">R4-04</td><td>바퀴·후진·controller 제약에서 추종 가능 — 그려진 길을 실제 바퀴가 따라간다.</td></tr><tr><td class="rule-id">R4-05</td><td>끝에서 임무 재합류 또는 안전 정지·재관찰 가능 — 도착 뒤 다음 수가 있다.</td></tr>
+      </tbody></table></div>
+
+      <h3>5. 전체 경로와 이동 공간 검사</h3>
+      <div class="table-wrap stage"><table><thead><tr><th>ID</th><th>통과 조건</th></tr></thead><tbody>
+        <tr><td class="rule-id">R5-01/02</td><td>path 전체 swept footprint와 clearance 통과 — 가는 동안 몸 전체를 본다.</td></tr><tr><td class="rule-id">R5-03</td><td>사람·동적 장애물 n-step 점유와 시간적으로 비충돌 — 곧 사람이 올 빈 길은 가지 않는다.</td></tr><tr><td class="rule-id">R5-04</td><td>ensemble 위험 상한·불일치 허용 범위 — 가상모델 의견이 갈리면 움직이지 않는다.</td></tr><tr><td class="rule-id">R5-05</td><td>path 모든 지점에서 stopping corridor 보유 — 가는 내내 브레이크 거리를 남긴다.</td></tr><tr><td class="rule-id">R5-06/07</td><td>왕복 oscillation 아님, 시간·거리·attempt budget 안 — 실패를 무한 반복하지 않는다.</td></tr>
+      </tbody></table></div>
+
+      <h3>6. 실행 직전 재검사</h3>
+      <div class="table-wrap stage"><table><thead><tr><th>ID</th><th>통과 조건</th></tr></thead><tbody>
+        <tr><td class="rule-id">R6-01</td><td>후보·센서·goal의 epoch가 현재 — 지난 문제의 답을 실행하지 않는다.</td></tr><tr><td class="rule-id">R6-02</td><td>최신 snapshot으로 2~5 전체 통과 — 생각하는 동안 세상이 바뀌었는지 다시 본다.</td></tr><tr><td class="rule-id">R6-03</td><td>우승 좌표·authorized goal 각 1개 — 운전 지시는 하나다.</td></tr><tr><td class="rule-id">R6-04</td><td>Safety clear — 마지막 신호등이 초록이다.</td></tr><tr><td class="rule-id">R6-05</td><td>absolute deadline과 결과 TTL 유효 — 너무 오래 생각한 답은 버린다.</td></tr><tr><td class="rule-id">R6-06</td><td>모델·규칙·path hash audit log 기록 — 움직이기 전에 이유 영수증을 남긴다.</td></tr>
+      </tbody></table></div>
+      <p>6단계 실패 시 2등을 바로 실행하지 않는다. 최신 상태로 다시 검사하거나 새 판단 step을 시작한다. 유효 후보가 없으면 STOP과 상위 보고가 정답이다.</p>
+    </section>
+
+    <section id="rollout">
+      <h2>8. 6C-Lite: 모든 후보의 가상 n-step</h2>
+      <p>0~3은 현재 시점의 입장권 검사이고, 4~5 rollout은 미래 path 전체의 시간 변화 검사다. 따라서 같은 규칙의 불필요한 중복이 아니다. 영상 생성은 하지 않고 Nav2 geometry rollout, 구조화된 동적 객체 predictor, 작은 world-model ensemble만 사용한다.</p>
+      <div class="formula">τ<sub>i</sub> = (ŝ<sub>i,0</sub>, ŝ<sub>i,1</sub>, …, ŝ<sub>i,n</sub>)</div>
+      <div class="symbols"><code>τ_i</code>는 후보 i의 가상 미래, <code>ŝ_i,j</code>는 j step의 pose·사람·장애물·clearance·불확실성, n은 미리 볼 가까운 step 수다. 실제로는 아직 움직이지 않는다.</div>
+      <div class="formula">Risk<sub>i</sub><sup>UCB</sup> = mean<sub>e</sub>(Risk<sub>i</sub><sup>(e)</sup>) + κ · std<sub>e</sub>(Risk<sub>i</sub><sup>(e)</sup>)</div>
+      <div class="symbols">평균 위험에 모델 간 의견 차이를 더한다. 여러 가상모델이 서로 다르게 말하면 그 자체를 위험으로 본다.</div>
+      <h3>Tournament 순서</h3>
+      <ol><li>모든 hard rule 통과</li><li>사람·critical·unknown 위험 상한 최소</li><li>불확실성 최소</li><li>Nav2 clearance·정지 가능성 최대</li><li>그 뒤에만 진행·시간·에너지·안전한 exploration 비교</li></ol>
+      <div class="formula">i* = arg max<sub>i∈C<sub>valid</sub></sub> J<sub>i</sub>, &nbsp; p* = p<sub>i*,0</sub></div>
+      <div class="symbols">유효 후보 중 우승한 미래 전체를 실행하지 않고, 첫 번째 짧은 waypoint 하나만 Nav2에 준다. 실행 뒤 다시 정지하고 관찰한다.</div>
+      <div class="formula">K × M × E × n ≤ B<sub>compute</sub></div>
+      <div class="symbols">상위 action 수 × action별 좌표 수 × ensemble 수 × 미래 step 수가 RTX 5080 deadline 예산 안이어야 한다. 중복 제거 → 거친 rollout → 상위 후보 정밀 rollout 순으로 줄인다.</div>
+    </section>
+
+    <section id="samplers">
+      <h2>9. Episodic Memory 위의 replay samplers</h2>
+      <div class="callout"><strong>차이</strong><br>Memory는 원본 운행 일지다. Sampler는 그 일지에서 이번 학습에 보여줄 장면을 골라주는 편집자다. Reference/Safe/Critical 원본을 세 replay buffer로 복제하지 않는다.</div>
+      <h3>SAC persistent off-policy replay</h3>
+      <div class="formula">D<sub>SAC</sub> = {(s<sub>t</sub>, z<sub>t</sub>, p<sub>t</sub>, r<sub>t</sub>, s<sub>t+1</sub>, d<sub>t</sub>)}</div>
+      <div class="symbols">실제로 선택·실행한 EpisodeStep만 transition이 된다. Safe·Boundary·Critical·rare·recent·map-zone bucket에서 비율을 정해 뽑고, importance weight로 편향을 보정한다.</div>
+      <h3>TGRPO current-policy trajectory group</h3>
+      <div class="formula">G(s<sub>0</sub>) = {τ<sup>(1)</sup>,…,τ<sup>(G)</sup>}, &nbsp; τ<sup>(g)</sup> ~ π<sub>current</sub></div>
+      <div class="symbols">Memory에서 현실적인 같은 시작 상태를 고르고 현재 Candidate 정책이 여러 trajectory를 가상 생성한다. 같은 출발점끼리 상대 비교하며, 이 group buffer는 학습 step 뒤 버린다. 옛 정책 trajectory를 일반 replay처럼 섞지 않는다.</div>
+      <p>충돌·사람 침범·emergency stop은 가중 보상 이전에 terminal Critical이다. 미선택 rollout에는 실제 성공 label을 주지 않는다.</p>
+    </section>
+
+    <section id="models">
+      <h2>10. Stable–Candidate 업데이트</h2>
+      <p>가중치를 저장하고 이어서 학습하는 일반 방식은 유지한다. 차이는 방금 업데이트한 가중치를 실제 로봇에 바로 쓰지 않는다는 것이다.</p>
+      <pre>Stable v12 ── 복제·새 Episode 학습 ──> Candidate v13
+                                          ├ unit/schema
+                                          ├ offline holdout replay
+                                          ├ simulation/6C-Lite
+                                          ├ Pinky HIL
+                                          └ 저위험 canary
+                                      pass → Stable v13
+                                      fail → 폐기, v12 유지</pre>
+      <p>TGRPO checkpoint, SAC checkpoint, skill ontology, input/reward schema를 <strong>PolicyBundle</strong>로 묶는 것이 현재 안전 기본값이다. 승격한 뒤 이전 Stable은 rollback용으로 남는다. 학습은 정지/docked window에서만 한다.</p>
+    </section>
+
+    <section id="authority">
+      <h2>11. Nav2와 Safety Supervisor 권한</h2>
+      <div class="cards">
+        <div class="card"><strong>Nav2 = 최종 경로 의사결정자</strong>채택 좌표와 넓은 Recovery Envelope를 받고 현재 costmap으로 실제 경로를 자유롭게 재계획한다.</div>
+        <div class="card"><strong>Safety = 최종 움직임 의사결정자</strong>LiDAR zone, bumper, e-stop, 정지거리, 센서 freshness, lease/envelope를 보고 CLEAR/SLOW/STOP/EMERGENCY를 정한다.</div>
+      </div>
+      <pre>Nav2 /cmd_vel_nav → Safety Supervisor → robot /cmd_vel
+                         ├ CLEAR: 통과
+                         ├ SLOW: 안전 scale 감속
+                         ├ STOP: 0속도 + latch
+                         └ EMERGENCY: 즉시 0, Fleet goal cancel 요청</pre>
+      <p>YOLO/VLM은 semantic 보조일 뿐 유일한 비상정지 수단이 아니다. deterministic LiDAR protection zone과 bumper 경로는 GPU/VLM과 독립적으로 계속 동작한다. Nav2가 virtual path와 다른 길을 만들 수 있지만 Recovery Envelope 밖으로 나가면 Safety가 정지하고 Fleet Adapter가 cancel한다.</p>
+    </section>
+
+    <section id="performance">
+      <h2>12. RTX 5080 성능·실패 정책</h2>
+      <ol><li>Safety·센서 항상 우선</li><li>YOLO 평상시 연속, 복구 중 저주기 유지</li><li>VLM은 Trigger 시에만 3B/7B 4-bit load/infer</li><li>후보 progressive pruning 후 6C-Lite</li><li>학습은 운행·복구와 동시에 하지 않음</li></ol>
+      <p>stage timeout은 실제 benchmark p95+margin으로 설정하고 safety-critical 경로는 p99.9와 관측 worst case도 시험한다. absolute deadline이 지나면 부분 검증 후보를 실행하지 않는다.</p>
+      <div class="table-wrap"><table><thead><tr><th>실패</th><th>Fail-closed 동작</th></tr></thead><tbody>
+        <tr><td>VLM JSON 오류/hallucination</td><td>출력 폐기, rule/Memory fallback 또는 STOP</td></tr><tr><td>센서 stale/비동기</td><td>snapshot 재수집, 이동 금지</td></tr><tr><td>localization jump</td><td>모든 map 좌표 무효화, STOP·relocalization</td></tr><tr><td>Memory/API 단절</td><td>검증된 local cache만 제한 사용; 증명 불가하면 STOP</td></tr><tr><td>world model disagreement</td><td>후보 탈락, exploration 0</td></tr><tr><td>GPU OOM/timeout</td><td>결과 폐기, STOP; Safety·YOLO 복구 우선</td></tr><tr><td>모든 후보 탈락</td><td>STOP, FMS/operator 보고</td></tr><tr><td>반복 oscillation</td><td>budget 차감, 초과 시 cancel·mission fail</td></tr><tr><td>Candidate regression</td><td>승격 차단 또는 자동 Stable rollback</td></tr>
+      </tbody></table></div>
+    </section>
+
+    <section id="tests">
+      <h2>13. 검증 전략</h2>
+      <pre>pytest·ament unit/schema/property/fault tests
+      → offline replay/model bundle eval
+          → simulation + digital twin scenarios
+              → Pinky-Pro HIL/safety stop
+                  → 저위험 canary(exploration 0, rollback)</pre>
+      <div class="table-wrap"><table><thead><tr><th>영역</th><th>핵심 시험</th><th>통과 기준</th></tr></thead><tbody>
+        <tr><td>Trigger</td><td>1-frame 흔들림, N-of-M, hard LiDAR, Nav2 stuck</td><td>Hard 즉시, 모호성 false trigger 목표 충족</td></tr><tr><td>Goal race</td><td>cancel 중 늦은 VLM/옛 epoch</td><td>active goal ≤ 1, stale 실행 0</td></tr><tr><td>Memory</td><td>map 변경, old node decay, collision 재평가</td><td>stale 격리, IncidentFact가 Critical 강제</td></tr><tr><td>0~6</td><td>규칙별 positive/negative fixture</td><td>hard violation 실행 0</td></tr><tr><td>6C-Lite</td><td>사람 진입, disagreement, deadline</td><td>veto/STOP, 부분 결과 실행 0</td></tr><tr><td>Nav2·Safety</td><td>replan envelope 이탈, VLM/GPU/YOLO kill</td><td>즉시 STOP/cancel, 독립 safety 유지</td></tr><tr><td>Promotion</td><td>Candidate regression/canary anomaly</td><td>승격 차단·자동 rollback</td></tr>
+      </tbody></table></div>
+      <p>실물 시험은 정지 inference → 바퀴를 띄운 HIL → 빈 저속 구역 → 정적 장애물 → 보호자 동반 동적 장애물 순으로 넓힌다. 사람을 대상으로 exploration하지 않는다.</p>
+    </section>
+
+    <section id="phases">
+      <h2>14. 구현 단계</h2>
+      <div class="cards">
+        <div class="card"><strong>Phase 1 · deterministic shell</strong>Recovery package/epoch/STOP/cancel, 0~6, Envelope, Fleet goal ownership, Safety gate. VLM/RL 없이 Reference로 E2E.</div>
+        <div class="card"><strong>Phase 2 · Memory + VLM</strong>MySQL/API/FAISS, Node/Edge/Episode/Incident, strict JSON, unknown·sensor disagreement Trigger.</div>
+        <div class="card"><strong>Phase 3 · SAC + 6C-Lite</strong>bounded map pose, version gate, geometry/world-model rollout, tournament, replay sampler.</div>
+        <div class="card"><strong>Phase 4 · TGRPO + promotion</strong>skill ontology, current-policy groups, PolicyBundle 승격·rollback, HIL/canary.</div>
+      </div>
+      <p>각 Phase는 앞 단계의 안전 경계를 대체하지 않고 그 안에 후보 생성 능력만 추가한다.</p>
+    </section>
+
+    <section id="alternatives">
+      <h2>15. 대안과 선행 연구</h2>
+      <div class="decision">
+        <div class="option primary"><strong>1안(기존 방안 B) · 채택</strong><p>TGRPO Top-K → SAC 좌표 → 전 후보 6C-Lite → Nav2. 좌표 출력, 계층적 설명, 미래 위험 비교가 장점. 계산 예산·정책 호환·simulator bias 관리가 필요하다.</p></div>
+        <div class="option"><strong>2안(기존 방안 A) · fallback</strong><p>Spatial action → deterministic 좌표 mapper → Nav2. 데이터가 적어도 검증하기 쉽지만 임의 map 적응성이 낮다. SAC OOD가 불안정할 때 유용하다.</p></div>
+      </div>
+      <p>Reference/Safe/Critical 세 물리 buffer를 복제하지 않는다. Reference와 단일 Episodic Memory를 원본으로 두고 sampler view가 Safe/Boundary/Critical/rare/recent를 뽑는다. 그래야 같은 사건의 버전과 경계 사례가 갈라지지 않는다.</p>
+      <ul>
+        <li><a href="https://arxiv.org/abs/2506.08440">TGRPO</a> — trajectory·step feedback을 고수준 recovery skill 연구에 제한 적용</li>
+        <li><a href="https://arxiv.org/abs/2603.26788">ReMemNav</a> — bounded episodic working memory의 참고</li>
+        <li><a href="https://arxiv.org/abs/2202.08417">Retrieval-Augmented RL</a>, <a href="https://arxiv.org/abs/2504.03524">RANa</a> — 경험 검색과 정책 결합</li>
+        <li><a href="https://openaccess.thecvf.com/content/CVPR2026/html/Li_EE-RL_Vision_Language_Guided_Reinforcement_Learning_with_Explorer_and_Expert_CVPR_2026_paper.html">EE-RL</a> — explorer/expert와 replay 관점</li>
+        <li><a href="https://proceedings.neurips.cc/paper_files/paper/2018/hash/3de568f8597b94bda53149c7d7f5958c-Abstract.html">PETS</a>, <a href="https://openreview.net/pdf?id=Oxh5CstDJU">TD-MPC2</a> — ensemble/world-model 기반 짧은 horizon planning</li>
+        <li><a href="https://docs.nav2.org/configuration/packages/configuring-mppic.html">Nav2 MPPI</a>, <a href="https://docs.nav2.org/tutorials/docs/using_collision_monitor.html">Collision Monitor</a> — rollout controller와 독립 collision monitoring</li>
+      </ul>
+      <div class="callout"><strong>Trihouse 조합의 차별점</strong><br>검증 map graph + soft-outcome episodic memory + immutable incident + current-policy TGRPO groups + SAC 좌표 + 모든 후보 Lite rollout + winner 최신 재검사 + Nav2/Safety 이중 권한 경계를 실제 Pinky-Pro 단일 GPU 제약에 묶는다.</div>
+    </section>
+
+    <section id="review" class="unresolved">
+      <h2>16. gstack 리뷰와 미결정 사항</h2>
+      <div class="table-wrap"><table><thead><tr><th>관점</th><th>상태</th><th>결론</th></tr></thead><tbody>
+        <tr><td>제품</td><td class="status">PASS</td><td>완전 정지·짧은 복구·임무 재합류로 범위 고정</td></tr><tr><td>Outside voice</td><td class="status">DONE WITH CONCERNS</td><td>stale epoch, goal race, human exploration, compute budget 반영</td></tr><tr><td>Engineering</td><td class="status">3 ISSUES OPEN</td><td>아래 D25·D26·D30은 구현 전 결정</td></tr><tr><td>운영·검증</td><td class="status">PASS</td><td>STOP/report/rollback, test pyramid, fail-closed 정의</td></tr>
+      </tbody></table></div>
+      <h3>D25 — VLM 시간 입력</h3><p>① 연속 RGB+프레임별 segmentation, ② 연속 RGB+최신 segmentation+YOLO track, ③ 단일 RGB+현재 segmentation 중 선택. 팀원과 카메라 FPS·segmentation 지연을 측정한 뒤 결정한다.</p>
+      <h3>D26 — 모델 승격 단위</h3><p>TGRPO+SAC+skill ontology를 하나의 PolicyBundle로만 승격할지, 호환성 검사를 전제로 각각 승격할지 결정한다. 현재 안전 기본값은 bundle 승격이다.</p>
+      <h3>D30 — SAC OOD 방어</h3><p>dataset-support hard gate, soft penalty, 또는 0~6 filter만 사용할지 결정한다. 실제 map의 state coverage와 false rejection을 측정하기 전까지 미결정이다.</p>
+      <div class="callout warn"><strong>Engineering verdict</strong><br>설계 리뷰는 완료했으며, 위 3개 항목을 의도적으로 미결정으로 남겼다. 이 항목들은 아키텍처 안전 경계를 바꾸지 않지만 모델 입력·승격·후보 거부율에 영향을 준다.</div>
+    </section>
+
+    <footer>Trihouse · VLM + RL Recovery Architecture · 2026-08-07</footer>
+  </main>
+</div>
+</body>
+</html>
