@@ -1,0 +1,32 @@
+string command_id
+string job_id
+string job_step_id
+string map_revision
+string pickup_location_id
+string dropoff_location_id
+geometry_msgs/PoseStamped pickup_pose
+geometry_msgs/PoseStamped dropoff_pose
+uint8 priority
+---
+uint16 CODE_OK=0
+uint16 CODE_REJECTED=1
+uint16 CODE_CANCELED=2
+uint16 CODE_NAVIGATION_FAILED=3
+uint16 CODE_DOCK_FAILED=4
+uint16 CODE_HANDOVER_FAILED=5
+
+bool success
+uint16 code
+string message
+builtin_interfaces/Time completed_at
+---
+uint8 PHASE_ACCEPTED=0
+uint8 PHASE_NAVIGATING=1
+uint8 PHASE_DOCKING=2
+uint8 PHASE_HANDOVER=3
+uint8 PHASE_COMPLETED=4
+
+uint8 phase
+float32 progress
+geometry_msgs/PoseStamped current_pose
+string detail

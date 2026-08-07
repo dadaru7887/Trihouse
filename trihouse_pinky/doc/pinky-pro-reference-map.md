@@ -8,7 +8,7 @@
 | 하드웨어/LiDAR | `pinky_bringup/launch/bringup_robot.launch.xml` | launch include | URDF, LiDAR, 모터, odometry, 배터리 기동 |
 | 배터리 | `pinky_bringup/pinky_bringup/battery_publisher.py` | 토픽 구독 | fleet 상태와 readiness 입력 |
 | IMU | `pinky_imu_bno055/src/main_node.cpp` | 실행·토픽 구독 | bringup에서 실행, 상태 감시 |
-| 초음파/IR | `pinky_sensor_adc/src/main_node.cpp` | 실행·토픽 구독 | safety 근접 판정 |
+| 초음파 | `pinky_sensor_adc/src/main_node.cpp` | 실행·`/us_sensor/range` 구독 | safety 근접 판정 |
 | LED | `pinky_led` | 서비스 호출 | 상태/비상 표시 |
 | 램프 | `pinky_lamp_control` | 서비스 호출 | 상태/비상 표시 |
 | LCD | `pinky_emotion` | 서비스 호출 | 작업 상태 표시 |
@@ -20,4 +20,3 @@
 ## 변경이 필요할 때
 
 파라미터는 Trihouse launch에서 덮어쓰고, 토픽은 remap하며, 모델은 Trihouse xacro에서 include 후 확장한다. 벤더 파일 변경이 불가피하다면 별도 upstream 제안 또는 사유가 기록된 fork로 다룬다.
-

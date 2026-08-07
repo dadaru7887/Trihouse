@@ -1,0 +1,9 @@
+std_msgs/Header header
+string observation_id
+string robot_id
+string camera_id
+string marker_family
+string marker_id
+geometry_msgs/PoseWithCovariance pose
+float32 confidence
+uint32 ttl_ms

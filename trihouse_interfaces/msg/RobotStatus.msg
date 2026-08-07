@@ -1,0 +1,15 @@
+builtin_interfaces/Time stamp
+string robot_id
+string software_version
+string frame_id
+geometry_msgs/PoseWithCovariance pose
+geometry_msgs/Twist twist
+float32 battery_percentage
+trihouse_interfaces/BatteryPolicyState battery_policy
+trihouse_interfaces/SafetyState safety
+string current_job_id
+string current_job_step_id
+float32 task_progress
+uint8 navigation_state
+bool ready
+string[] errors

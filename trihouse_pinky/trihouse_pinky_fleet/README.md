@@ -15,24 +15,30 @@
 - `fleet_node`: 작업 수락/거절과 단계 전이
 - `control_link`: TCP 8788 + NDJSON hello, heartbeat, 재접속, schema 변환
 - `checkpoint_store`: `task_id`, 마지막 완료 단계, sequence 영속화
-- `display_mapper`: 상태를 LED/램프/LCD 서비스로 매핑
+- `task_event_publisher`: `NavigationState`를 `TaskEvent`로 변환
 - pickup, navigation, docking, handover, packing, dropoff, return 상태 머신
 
 ## 4. 발행·구독 토픽
 
-`RobotStatus`, `TaskEvent`, `TaskTrace`, `HandoverReady/Done`, `PackingAssistanceRequest`를 발행하고 `HandoverGo`, `PackingDirective`, `PackingStationStatus`, pose/battery/safety/vision health를 구독할 계획이다.
+`/trihouse/status` (`RobotStatus`), `/trihouse/navigation/state`
+(`NavigationState`), `/trihouse/task/events` (`TaskEvent`),
+`/trihouse/handover/state` (`HandoverState`)를 발행한다. 배터리·safety·readiness·cargo·vision health를 구독한다.
 
 ## 5. 제공·호출 서비스
 
-관제의 `GetLocation`과 벤더 표시 장치 서비스를 호출할 계획이다.
+외부 location ID는 Control Tower가 배포한 versioned location map에서 조회한다.
+Domain 간 ROS 위치 조회 service는 사용하지 않는다.
 
 ## 6. 제공·호출 액션
 
-`ExecuteTransport`를 제공하고 Nav2 `NavigateToPose`와 `Dock`을 호출한다. Nav2 goal이 끝나거나 취소된 뒤에만 docking을 시작한다.
+`/trihouse/transport/execute` (`ExecuteTransport`)를 제공하고 Nav2
+`/navigate_to_pose`와 `/trihouse/dock` (`Dock`)을 호출한다. Nav2 goal이 끝나거나
+취소된 뒤에만 docking을 시작한다.
 
 ## 7. 사용하는 공용 인터페이스
 
-`DeliveryOrder`, `RobotStatus`, `TaskEvent`, `TaskTrace`, handover/packing 메시지, `StreamHealth`, `GetLocation`, `ExecuteTransport`, `Dock`.
+`RobotStatus`, `NavigationState`, `TaskEvent`, `HandoverState`, `CargoState`,
+`BatteryPolicyState`, `SafetyState`, `Readiness`, `StreamHealth`, `ExecuteTransport`, `Dock`.
 
 ## 8. pinky_pro 참조
 
@@ -51,4 +57,3 @@
 5. docking/handover/packing 단계를 확장한다.
 
 최소 완료 조건은 작업 한 건을 readiness에 따라 수락하거나 거절하고, Nav2 결과와 telemetry를 관제 UI에 일관되게 반영하는 것이다.
-

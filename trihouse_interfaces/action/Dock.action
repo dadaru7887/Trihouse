@@ -1,0 +1,29 @@
+string job_id
+string job_step_id
+string marker_id
+geometry_msgs/Pose target_offset
+float32 linear_tolerance_m
+float32 angular_tolerance_rad
+builtin_interfaces/Duration timeout
+---
+uint16 CODE_OK=0
+uint16 CODE_CANCELED=1
+uint16 CODE_TIMEOUT=2
+uint16 CODE_MARKER_LOST=3
+uint16 CODE_TOLERANCE_NOT_REACHED=4
+
+bool success
+uint16 code
+string message
+geometry_msgs/Pose final_error
+builtin_interfaces/Time completed_at
+---
+uint8 STATE_SEARCHING=0
+uint8 STATE_ALIGNING=1
+uint8 STATE_APPROACHING=2
+uint8 STATE_VERIFYING=3
+
+uint8 state
+geometry_msgs/Pose relative_pose
+uint8 retry_count
+string detail

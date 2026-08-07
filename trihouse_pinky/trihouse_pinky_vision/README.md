@@ -26,8 +26,14 @@ OV5647은 `/dev/video0` UVC 장치로 가정하지 않는다. 2026-08-06 실측�
 
 ## 4. 발행·구독 토픽
 
-- 발행 계획: `/trihouse/vision/stream_health` (`StreamHealth`), base-frame `MarkerObservation`, base-frame `PersonDetection`, camera TF
-- 구독 계획: 서버 추론 브리지의 camera-frame `MarkerObservation`, `PersonDetection`
+- 발행: `/trihouse/vision/stream_health` (`StreamHealth`)
+- bridge 발행: `/trihouse/vision/person_detection/camera`,
+  `/trihouse/vision/object_detection/camera`,
+  `/trihouse/vision/marker_observation/camera`
+- transformer 발행: `/trihouse/vision/person_detection/base`,
+  `/trihouse/vision/object_detection/base`,
+  `/trihouse/vision/marker_observation/base`
+- camera-frame 관측은 `camera_optical_frame`, base-frame 관측은 `base_link`를 사용한다.
 - 비대상: 실물 운영 영상의 ROS 2 image topic
 
 ## 5. 제공·호출 서비스
@@ -73,7 +79,7 @@ source install/setup.bash
 Pinky에서 MediaMTX 서버가 먼저 실행된 상태로:
 
 ```bash
-export ROS_DOMAIN_ID=11
+export ROS_DOMAIN_ID=51  # Pinky 2는 52
 ros2 launch trihouse_pinky_vision vision.launch.py
 ```
 

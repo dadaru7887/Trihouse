@@ -1,0 +1,11 @@
+std_msgs/Header header
+string observation_id
+string robot_id
+string camera_id
+string model_version
+string track_id
+float32 confidence
+sensor_msgs/RegionOfInterest bbox
+geometry_msgs/PoseWithCovariance pose
+string pose_class
+uint32 ttl_ms

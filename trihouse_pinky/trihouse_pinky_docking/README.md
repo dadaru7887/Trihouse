@@ -19,7 +19,10 @@ Nav2가 도킹 전 위치에 도착한 뒤 ArUco 상대 pose를 이용해 마지
 
 ## 4. 발행·구독 토픽
 
-vision의 base-frame `MarkerObservation`을 구독하고 `/cmd_vel_dock`을 safety에 발행한다.
+`/trihouse/vision/marker_observation/base` (`MarkerObservation`)와
+`/trihouse/vision/readiness` (`Readiness`)를 구독하고 `/cmd_vel_dock`
+(`geometry_msgs/msg/Twist`)을 safety에 발행한다. vision readiness가 READY가
+아니면 도킹을 시작하지 않으며, 동작 중 내려가면 정지한다.
 
 ## 5. 제공·호출 서비스
 
@@ -27,11 +30,12 @@ vision의 base-frame `MarkerObservation`을 구독하고 `/cmd_vel_dock`을 safe
 
 ## 6. 제공·호출 액션
 
-`Dock`을 제공하며 fleet만 호출한다. action feedback은 상대 오차, 상태와 재시도 횟수를 포함할 계획이다.
+`/trihouse/dock` (`trihouse_interfaces/action/Dock`)을 제공하며 fleet만 호출한다.
+action feedback은 상대 오차, 상태와 재시도 횟수를 포함한다.
 
 ## 7. 사용하는 공용 인터페이스
 
-`MarkerObservation`, `Dock`.
+`MarkerObservation`, `Readiness`, `Dock`.
 
 ## 8. pinky_pro 참조
 

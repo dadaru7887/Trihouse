@@ -27,15 +27,21 @@ trihouse_interfaces
 ## 데이터 흐름
 
 ```text
-카메라 → H.264/RTSP → MediaMTX → 서버 추론
-                                  └→ MarkerObservation/PersonDetection
-                                      → vision 좌표 변환 → docking/safety
+카메라 → H.264/RTSP → MediaMTX → 서버 추론 → Control Tower NDJSON
+                                              → onboard vision bridge
+                                              → camera-frame 관측
+                                              → vision TF 변환
+                                              → base-frame 관측 → docking/safety
 
 관제 TCP 8788 + NDJSON → fleet → Nav2 navigate_to_pose
 Nav2 → /cmd_vel_nav ┐
                     ├→ safety → /cmd_vel → pinky_bringup
 docking → /cmd_vel_dock ┘
 ```
+
+Nav2 action client는 fleet의 command adapter 하나만 소유하며, 결과를
+`/trihouse/navigation/state`로 발행한다. 별도 task event publisher는 이 Topic을
+`/trihouse/task/events`로 변환한다.
 
 ## 오류 경계
 
@@ -48,4 +54,3 @@ docking → /cmd_vel_dock ┘
 ## 검증 원칙
 
 패키지는 독립 단위 테스트 후 실제 ROS graph에서 발행자와 remap을 검사한다. 특히 모터용 `/cmd_vel` 발행자가 safety 하나뿐인지 통합 시험마다 확인한다.
-

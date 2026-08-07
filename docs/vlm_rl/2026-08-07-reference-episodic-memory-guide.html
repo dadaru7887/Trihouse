@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Trihouse Reference Memory, Episodic Memory, Replay Sampler 설명서">
+  <title>Trihouse Memory Architecture</title>
+  <style>
+    :root {
+      --ink: #18242e;
+      --muted: #5b6b77;
+      --line: #d7e0e5;
+      --paper: #ffffff;
+      --canvas: #eef3f5;
+      --teal: #087f8c;
+      --teal-soft: #e4f4f4;
+      --blue: #315ca8;
+      --blue-soft: #eaf0fb;
+      --amber: #a05a00;
+      --amber-soft: #fff3df;
+      --red: #a13a3a;
+      --red-soft: #fdecec;
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--canvas); }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+      line-height: 1.62;
+      word-break: keep-all;
+    }
+    main { padding: 28px 16px 64px; }
+    .page {
+      width: min(900px, 100%);
+      min-height: 1120px;
+      margin: 0 auto 24px;
+      padding: 54px 58px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 16px 40px rgba(31, 55, 68, .09);
+    }
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--teal);
+      font-size: .78rem;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 { margin-top: 0; line-height: 1.3; letter-spacing: -.03em; }
+    h1 { margin-bottom: 16px; font-size: clamp(2rem, 5vw, 3.05rem); }
+    h2 { margin-bottom: 18px; font-size: 1.75rem; }
+    h3 { margin-bottom: 7px; font-size: 1.06rem; }
+    p { margin: 8px 0; }
+    .lead { color: var(--muted); font-size: 1.08rem; }
+    .hero {
+      margin: 28px 0;
+      padding: 24px 26px;
+      border-left: 5px solid var(--teal);
+      border-radius: 0 14px 14px 0;
+      background: var(--teal-soft);
+      font-size: 1.08rem;
+    }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .card {
+      padding: 19px 20px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+    }
+    .card.reference { border-top: 4px solid var(--blue); background: var(--blue-soft); }
+    .card.episode { border-top: 4px solid var(--teal); background: var(--teal-soft); }
+    .card.safe { border-left: 4px solid var(--teal); }
+    .card.critical { border-left: 4px solid var(--red); }
+    .label {
+      display: inline-block;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: .74rem;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    ul { margin: 9px 0 0; padding-left: 1.25em; }
+    li + li { margin-top: 5px; }
+    .flow {
+      display: flex;
+      align-items: stretch;
+      gap: 8px;
+      margin: 22px 0;
+      overflow-x: auto;
+      padding-bottom: 5px;
+    }
+    .step {
+      display: flex;
+      min-width: 120px;
+      flex: 1;
+      align-items: center;
+      justify-content: center;
+      padding: 13px 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #f8fafb;
+      text-align: center;
+      font-size: .88rem;
+      font-weight: 750;
+    }
+    .arrow { align-self: center; color: var(--teal); font-weight: 900; }
+    .formula {
+      margin: 17px 0;
+      padding: 18px 20px;
+      overflow-x: auto;
+      border: 1px solid #c9d6db;
+      border-radius: 12px;
+      background: #f7fafb;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      text-align: center;
+    }
+    .explain {
+      margin: 10px 0 20px;
+      color: var(--muted);
+      font-size: .93rem;
+    }
+    .warning {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--amber);
+      border-radius: 0 10px 10px 0;
+      background: var(--amber-soft);
+    }
+    .example {
+      margin: 18px 0;
+      padding: 18px 20px;
+      border: 1px dashed #9bb1bb;
+      border-radius: 12px;
+      background: #fbfcfd;
+    }
+    code {
+      padding: .12em .35em;
+      border-radius: 4px;
+      background: rgba(49, 92, 168, .1);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .9em;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+    th, td { padding: 10px 11px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #f3f7f8; }
+    .footer-note { margin-top: 28px; color: var(--muted); font-size: .82rem; }
+    a { color: var(--blue); font-weight: 700; }
+
+    @media (max-width: 680px) {
+      main { padding: 0; }
+      .page { min-height: auto; margin: 0; padding: 34px 22px; border: 0; border-radius: 0; box-shadow: none; }
+      .grid { grid-template-columns: 1fr; }
+      .flow { flex-direction: column; }
+      .arrow { transform: rotate(90deg); text-align: center; }
+    }
+    @media print {
+      @page { size: A4; margin: 0; }
+      html, body { background: #fff; }
+      body { font-size: 9pt; line-height: 1.4; }
+      main { padding: 0; }
+      .page {
+        width: 210mm;
+        height: 297mm;
+        min-height: 297mm;
+        margin: 0;
+        padding: 10mm 12mm;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        break-after: page;
+        page-break-after: always;
+      }
+      h1 { margin-bottom: 10px; font-size: 25pt; }
+      h2 { margin-bottom: 10px; font-size: 18pt; }
+      h3 { margin-bottom: 4px; font-size: 10.5pt; }
+      p { margin: 5px 0; }
+      .lead { font-size: 10pt; }
+      .hero { margin: 14px 0; padding: 14px 16px; font-size: 10pt; }
+      .card { padding: 11px 13px; }
+      .flow { margin: 14px 0; }
+      .step { min-width: 104px; padding: 9px 7px; font-size: 8pt; }
+      .formula { margin: 10px 0; padding: 11px 14px; }
+      .explain { margin: 6px 0 12px; font-size: 8.4pt; }
+      .warning, .example { margin: 12px 0; padding: 11px 13px; }
+      ul { margin-top: 5px; }
+      li + li { margin-top: 2px; }
+      th, td { padding: 6px 8px; }
+      .footer-note { margin-top: 16px; font-size: 7.4pt; }
+      .page:last-child { break-after: auto; page-break-after: auto; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="page">
+      <p class="eyebrow">Trihouse · Memory Architecture</p>
+      <h1>검증된 길과 과거 경험을<br>현재의 판단으로 바꾸는 방법</h1>
+      <p class="lead">Reference Memory와 Episodic Memory는 과거를 그대로 따라 하기 위한 저장소가 아니다. 현재 센서와 실행 결과를 이용해 기억의 신뢰도를 계속 갱신하는 판단 재료다.</p>
+
+      <div class="hero">
+        <strong>아주 쉽게 말하면:</strong> Reference Memory는 관리자가 확인한 <strong>도로 지도</strong>이고, Episodic Memory는 로봇이 실제로 겪은 <strong>운행 일지</strong>다. 지도에서 갈 수 있는 곳을 찾고, 운행 일지에서 성공과 실패를 배운 뒤, 현재 센서로 다시 확인하고 움직인다.
+      </div>
+
+      <div class="grid">
+        <article class="card reference">
+          <span class="label">Reference Memory</span>
+          <h3>검증된 좌표와 연결</h3>
+          <ul>
+            <li><strong>Node:</strong> 안전하게 정지·대기·복귀할 수 있는 좌표</li>
+            <li><strong>Edge:</strong> Node 사이의 허용된 연결과 방향</li>
+            <li>map version, 마지막 검증 시각, 사용 상태를 함께 저장</li>
+            <li>VLM이나 RL이 자동으로 수정하지 않음</li>
+          </ul>
+        </article>
+        <article class="card episode">
+          <span class="label">Episodic Memory</span>
+          <h3>실행과 결과의 기록</h3>
+          <ul>
+            <li>어떤 상황에서 어떤 좌표·skill을 선택했는지 저장</li>
+            <li><strong>Safe:</strong> 안전하게 복구하고 기존 task를 재개한 경험</li>
+            <li><strong>Critical:</strong> 실패·근접사고·안전장치 개입 경험</li>
+            <li>새 결과가 쌓일 때마다 신뢰도를 갱신</li>
+          </ul>
+        </article>
+      </div>
+
+      <h2 style="margin-top:32px">기억을 현재에 맞추는 법</h2>
+      <p>과거 경험이 지금도 맞는지는 다음 네 가지를 곱해 판단한다.</p>
+      <div class="formula">적용 가능성 = 상황 유사도 × 버전 호환성 × 최신성 × 결과 신뢰도</div>
+      <p class="explain">상황이 닮았더라도 map이나 robot version이 다르면 낮게 평가한다. 오래된 Safe 경험은 점차 약하게 보고, 충돌과 같은 Critical 경험은 더 오래 보존하되 현재 geometry와 맞는지 다시 확인한다.</p>
+
+      <table>
+        <thead><tr><th>상태</th><th>의미</th><th>Runtime 사용</th></tr></thead>
+        <tbody>
+          <tr><td><code>ACTIVE</code></td><td>현재 version과 호환되고 검증됨</td><td>후보 생성·검색에 사용</td></tr>
+          <tr><td><code>SUSPECT</code></td><td>최근 결과와 충돌하거나 반복 실패</td><td>경고 근거로만 사용</td></tr>
+          <tr><td><code>QUARANTINED</code></td><td>센서·label 오류 또는 안전 문제 의심</td><td>자동 판단에서 제외</td></tr>
+          <tr><td><code>RETIRED</code></td><td>map 변경 등으로 더 이상 호환되지 않음</td><td>분석용 원본만 보존</td></tr>
+        </tbody>
+      </table>
+
+      <div class="warning"><strong>가장 중요한 규칙:</strong> 과거에 100번 안전했더라도 현재 LiDAR나 costmap이 위험하다고 하면 실행하지 않는다. Memory는 후보를 추천할 뿐, 현재의 안전을 보증하지 않는다.</div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">Page 2 · Runtime Loop</p>
+      <h2>실행 결과가 다시 기억을 고친다</h2>
+      <p class="lead">Memory는 한 번 작성하고 끝나는 문서가 아니라, 실제 복구 결과를 다시 받아 현재성을 유지하는 순환 구조다.</p>
+
+      <div class="flow" aria-label="runtime memory update flow">
+        <div class="step">위험 감지<br>완전 정지</div><div class="arrow">→</div>
+        <div class="step">현재 상황으로<br>Memory 검색</div><div class="arrow">→</div>
+        <div class="step">복구 좌표<br>후보 생성</div><div class="arrow">→</div>
+        <div class="step">현재 센서·Nav2<br>사전 검증</div><div class="arrow">→</div>
+        <div class="step">짧게 실행하고<br>결과 기록</div>
+      </div>
+
+      <h3>1. 후보를 찾는다</h3>
+      <p>Reference Memory에서 가까운 안전 Node와 원래 경로로 합류할 Node를 찾는다. Episodic Memory에서는 현재와 비슷한 Safe·Critical 경험을 각각 찾는다.</p>
+
+      <h3 style="margin-top:20px">2. 위험 후보를 먼저 버린다</h3>
+      <p>현재 map version, localization, LiDAR, costmap, keep-out zone, robot footprint를 통과하지 못한 후보는 RL이 점수를 매기기 전에 제거한다. Critical 경험과 매우 유사한 충돌·사람 침범 행동도 veto한다.</p>
+
+      <h3 style="margin-top:20px">3. 안전 후보 안에서만 고른다</h3>
+      <div class="formula">최종 후보 = 안전 조건을 통과한 후보 중 task 재개 가능성이 가장 높은 좌표</div>
+      <p class="explain">안전성과 효율을 한 점수로 섞지 않는다. 먼저 안전하지 않은 후보를 없애고, 남은 후보 안에서 RL이 성공 가능성을 비교한다.</p>
+
+      <h3>4. 바로 달리지 않고 계획부터 검사한다</h3>
+      <p>선택한 좌표는 먼저 Nav2의 경로 계산만 수행한다. 전체 path의 충돌과 clearance를 확인한 뒤 짧은 waypoint만 실행하고 다시 정지·관측한다. 실행 중에는 Safety Supervisor가 속도를 계속 감시한다.</p>
+
+      <div class="example">
+        <span class="label">Example</span>
+        <p><strong>상황:</strong> 전방의 정체불명 상자가 통로를 막음</p>
+        <p><strong>Reference:</strong> 뒤쪽 0.5m에 검증된 복귀 Node가 있음</p>
+        <p><strong>Safe 기억:</strong> 같은 구역에서 짧은 후진 후 재계획 성공 6회</p>
+        <p><strong>Critical 기억:</strong> 왼쪽 우회 중 사람 안전영역 침범 1회</p>
+        <p><strong>결정:</strong> 왼쪽 후보는 제거하고 후방 Node까지의 path를 사전검증한 뒤 저속으로 짧게 실행</p>
+      </div>
+
+      <h3>5. 결과로 Memory를 갱신한다</h3>
+      <div class="grid">
+        <article class="card safe">
+          <h3>성공했다면</h3>
+          <p>새 Safe episode를 추가하고 유사 행동의 신뢰도를 높인다. 반복 성공한 provisional 경험은 verified로 승격한다.</p>
+        </article>
+        <article class="card critical">
+          <h3>실패하거나 위험했다면</h3>
+          <p>Critical episode를 추가한다. 관련 Reference Node는 즉시 삭제하지 않고 suspect 또는 quarantine으로 전환해 재검증한다.</p>
+        </article>
+      </div>
+
+      <div class="hero"><strong>순환의 의미:</strong> 오늘의 실행 결과가 내일의 검색 순위와 위험 판단을 바꾼다. 그래서 Memory는 과거 기록이지만 판단은 점차 현재 환경에 맞춰진다.</div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">Page 3 · Replay Sampler</p>
+      <h2>Episodic Memory를 학습용 Buffer처럼 쓰는 방법</h2>
+      <p class="lead">Episodic Memory는 원본 운행 일지이고, replay sampler는 그 일지에서 지금 학습에 유용한 장면을 골라주는 편집자다.</p>
+
+      <div class="flow" aria-label="replay sampling flow">
+        <div class="step">Episodic Memory<br>원본 보존</div><div class="arrow">→</div>
+        <div class="step">호환성·품질<br>필터</div><div class="arrow">→</div>
+        <div class="step">Replay Sampler<br>학습 사례 선택</div><div class="arrow">→</div>
+        <div class="step">Mini-batch<br>transition 변환</div><div class="arrow">→</div>
+        <div class="step">RL scorer<br>업데이트</div>
+      </div>
+
+      <h3>왜 별도로 두는가?</h3>
+      <p>모든 운행 기록을 같은 비율로 학습하면 흔한 정상 사례가 대부분을 차지해 드문 위험 상황을 잘 배우지 못한다. 반대로 Critical만 과도하게 학습하면 로봇이 지나치게 멈추는 정책이 될 수 있다. Sampler가 두 종류의 균형을 조절한다.</p>
+
+      <h3 style="margin-top:22px">Sampler가 뽑는 transition</h3>
+      <div class="formula">(현재 상태, 선택한 후보, 받은 결과, 다음 상태, 종료 여부)</div>
+      <p class="explain">예를 들면 “전방 상자·후방 free space 상태에서 BACKOUT_RIGHT 후보를 선택했고, 안전하게 route로 복귀했다”가 하나의 학습 사례가 된다.</p>
+
+      <h3>각 episode의 뽑힐 가능성</h3>
+      <div class="formula">wᵢ = 희소성 × 최신성 × 데이터 신뢰도 × 학습 가치<br>P(i) = wᵢ ÷ 모든 w의 합</div>
+      <ul>
+        <li><strong>희소성:</strong> 사람 침범·근접사고처럼 드문 사례에 더 큰 기회</li>
+        <li><strong>최신성:</strong> 현재 map과 robot에 가까운 경험을 우선</li>
+        <li><strong>데이터 신뢰도:</strong> 검증된 센서와 operator label이 있는 경험을 우선</li>
+        <li><strong>학습 가치:</strong> RL 예측이 실제 결과와 크게 달랐던 사례를 우선</li>
+      </ul>
+
+      <p>수식은 어렵게 보이지만 뜻은 간단하다. <strong>자주 보지 못했고, 최근이며, 믿을 수 있고, 현재 모델이 틀렸던 경험일수록 다시 공부할 확률을 높인다.</strong></p>
+
+      <div class="grid" style="margin-top:20px">
+        <article class="card">
+          <span class="label">Memory</span>
+          <h3>원본은 그대로 보존</h3>
+          <p>Safe·Critical 결과와 provenance를 잃지 않는다. 오래된 데이터도 분석과 재현을 위해 archive에 남긴다.</p>
+        </article>
+        <article class="card">
+          <span class="label">Replay View</span>
+          <h3>현재 학습에 맞게 선택</h3>
+          <p>map version이 다르거나 quarantined인 episode는 제외한다. sampling 정책은 바꿔도 원본은 변하지 않는다.</p>
+        </article>
+      </div>
+
+      <div class="warning"><strong>Reference Memory는 replay transition으로 섞지 않는다.</strong> Reference는 “가능한 좌표와 연결”을 제공하고, Episodic Memory는 “그 좌표를 선택했을 때 실제로 무슨 일이 일어났는가”를 제공한다. RL은 후자의 결과로 학습한다.</div>
+
+      <p class="footer-note">연구 배경: ReMemNav의 bounded episodic working memory, Retrieval-Augmented RL과 RANa의 경험 검색, EE-RL의 rare-critical replay 관점을 Trihouse의 Nav2·Safety 경계에 맞게 재구성했다. 참고: <a href="https://arxiv.org/abs/2603.26788">ReMemNav</a> · <a href="https://arxiv.org/abs/2202.08417">Retrieval-Augmented RL</a> · <a href="https://arxiv.org/abs/2504.03524">RANa</a> · <a href="https://openaccess.thecvf.com/content/CVPR2026/html/Li_EE-RL_Vision_Language_Guided_Reinforcement_Learning_with_Explorer_and_Expert_CVPR_2026_paper.html">EE-RL</a></p>
+    </section>
+  </main>
+</body>
+</html>

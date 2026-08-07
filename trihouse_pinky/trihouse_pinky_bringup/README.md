@@ -14,14 +14,15 @@
 
 - `pinky_bringup/bringup_robot.launch.xml`
 - `pinky_navigation/bringup_launch.xml`
-- `pinky_imu_bno055`, `pinky_sensor_adc`, 표시 장치 노드
+- `pinky_imu_bno055`, `pinky_sensor_adc`, LED 노드
 - safety, vision, docking, fleet 노드
 - 실제 로봇용 최상위 launch와 동일 인터페이스의 simulation launch
 - 센서, Nav2, AMCL, map, safety, heartbeat, 선택 기능 health를 검사하는 readiness aggregator
 
 ## 4. 발행·구독 토픽
 
-자체 업무 토픽은 두지 않는다. readiness aggregator는 필수 health/센서 토픽을 구독하고 준비 상태를 fleet에 제공할 계획이다. 정확한 이름은 [매트릭스](../doc/ros-interface-matrix.md)에서 확정한다.
+자체 업무 토픽은 두지 않는다. readiness checker는 필수 health/센서 토픽을 구독하고
+`/trihouse/readiness` (`trihouse_interfaces/msg/Readiness`)를 발행한다.
 
 ## 5. 제공·호출 서비스
 
@@ -51,4 +52,3 @@
 4. vision, docking, fleet을 차례로 조합한다.
 
 완료 조건은 최상위 launch 한 번으로 온보드 필수 프로세스가 뜨고, readiness 전에는 작업을 거절하며, `/cmd_vel` 발행자가 safety 하나뿐인 것이다.
-

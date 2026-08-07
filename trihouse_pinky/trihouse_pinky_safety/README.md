@@ -19,11 +19,14 @@
 
 ## 4. 발행·구독 토픽
 
-`/cmd_vel_nav`, `/cmd_vel_dock`, `/scan`, 초음파/IR, base-frame `PersonDetection`, `KeepOutZone`을 구독한다. `/cmd_vel`, safety 상태, `EmergencyAlert`, 필요 시 `nav2_msgs/SpeedLimit`을 발행할 계획이다.
+`/cmd_vel_nav`, `/cmd_vel_dock`, `/scan`, `/trihouse/proximity/front`,
+`/trihouse/vision/person_detection/base`, `/trihouse/safety/keep_out_zones`를 구독한다.
+`/cmd_vel`, `/trihouse/safety/state`, `/trihouse/safety/proximity_stop`을 발행한다.
 
 ## 5. 제공·호출 서비스
 
-`ClearEmergency`를 제공하고 LED/램프/LCD 표시 서비스를 호출한다.
+`/trihouse/safety/clear_emergency` (`ClearEmergency`)를 제공한다. LED 색상은
+`IndicatorState`를 통해 io 역할에 전달한다.
 
 ## 6. 제공·호출 액션
 
@@ -31,11 +34,11 @@
 
 ## 7. 사용하는 공용 인터페이스
 
-`PersonDetection`, `KeepOutZone`, `EmergencyAlert`, `ClearEmergency`.
+`PersonDetection`, `KeepOutZone`, `SafetyState`, `ClearEmergency`.
 
 ## 8. pinky_pro 참조
 
-LiDAR, 초음파/IR, 모터 입력과 표시 서비스를 토픽 구독/서비스 호출로 이용한다. 벤더 코드는 변경하지 않는다.
+LiDAR, 초음파와 모터 입력을 이용한다. IR은 운영 안전 입력에 사용하지 않으며 벤더 코드는 변경하지 않는다.
 
 ## 9. 설정 파일 후보
 
@@ -49,4 +52,3 @@ LiDAR, 초음파/IR, 모터 입력과 표시 서비스를 토픽 구독/서비�
 4. 사람/keep-out/비상 래치를 추가한다.
 
 완료 조건은 정상·stale·노드 장애·비상 상황에서 fail-safe 정지가 검증되고, 실제 ROS graph에서 `/cmd_vel`의 유일한 운영 발행자인 것이다.
-
