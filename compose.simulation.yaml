@@ -1,0 +1,38 @@
+# Compose project for the web-facing portion of the local Open-RMF simulation.
+name: trihouse_simulation
+
+services:
+  rmf_api:
+    # This is the same pinned API image used by run_office_web.sh.
+    image: ${RMF_API_IMAGE:-ghcr.io/open-rmf/rmf-web/api-server:jazzy}
+    restart: unless-stopped
+    network_mode: host
+    ipc: host
+    environment:
+      TZ: Asia/Seoul
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
+      FASTDDS_BUILTIN_TRANSPORTS: ${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}
+      RMF_SERVER_USE_SIM_TIME: "true"
+
+  rmf_dashboard:
+    # Build from the protected control_system source without modifying it.
+    build:
+      context: ./control_system/openrmf/docker/rmf-web-dashboard
+      dockerfile: Dockerfile
+    image: robosapiens_rmf_dashboard:0.3.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${RMF_DASHBOARD_PORT:-3000}:80"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -qO- http://127.0.0.1/ | grep -q 'RMF Dashboard'
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+# Gazebo and the ROS 2 launch process remain on the host for the current demo.
+# Do not run this stack together with control_system/openrmf/scripts/run_office_web.sh,
+# because that script starts the same API and dashboard ports itself.

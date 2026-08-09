@@ -1,6 +1,7 @@
 # Pinky SR 구현·실행 안내
 
-이 구현은 `Pinky SR.md`의 Pinky 범위(SR_03, 23, 24, 25, 45, 48, 49, 54, 57)를
+이 구현은 `docs/requirements/pinky_requirements.md`의 Pinky 범위
+(SR_03, 23, 24, 25, 45, 48, 49, 54, 57)를
 세 책임으로 분리한다.
 
 ## 요구사항 추적표
@@ -38,7 +39,7 @@
 ## 빌드와 정책 테스트
 
 ```bash
-cd /Users/wonsiyeon/Documents/Codex/Trihouse
+cd /home/syw/Trihouse
 python3 -m unittest -v trihouse_pinky.test.test_pinky_sr_policies
 colcon build --base-paths trihouse_interfaces trihouse_pinky/trihouse_pinky_io trihouse_pinky/trihouse_pinky_safety trihouse_pinky/trihouse_pinky_fleet trihouse_pinky/trihouse_pinky_bringup
 source install/setup.bash

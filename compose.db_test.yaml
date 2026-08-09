@@ -1,0 +1,46 @@
+# Compose project name for the temporary database test stack.
+name: trihouse_db_test
+
+services:
+  mysql_test:
+    # Use the same MySQL version as the persistent development database.
+    image: mysql:8.4
+    restart: "no"
+
+    # Keep test behavior consistent with the development database.
+    command:
+      - --default-time-zone=+09:00
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+
+    # These fixed credentials are used only by the local disposable test database.
+    environment:
+      TZ: Asia/Seoul
+      MYSQL_ROOT_PASSWORD: test_root_password
+      MYSQL_DATABASE: trihouse_fms
+      MYSQL_USER: fms_gateway
+      MYSQL_PASSWORD: test_gateway_password
+
+    # Use port 3307 so the test database can run beside the development database.
+    ports:
+      - "127.0.0.1:3307:3306"
+
+    # Store MySQL data in memory and discard it with the container.
+    tmpfs:
+      - /var/lib/mysql
+
+    volumes:
+      # Recreate the complete v4 schema and test data on every new container.
+      - ./db/schema_mysql.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+      - ./db/seed_dev.sql:/docker-entrypoint-initdb.d/002_seed.sql:ro
+      - ./db/003_grant_gateway_recovery.sh:/docker-entrypoint-initdb.d/003_grant_gateway_recovery.sh:ro
+
+    # Report healthy only after MySQL accepts local connections.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 20s

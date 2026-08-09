@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 import mysql.connector
 import pytest
@@ -12,8 +13,169 @@ pytestmark = pytest.mark.integration
 
 
 def test_schema_applies_cleanly(fresh_schema):
-    """A deploy must create all 15 tables without an InnoDB key error."""
+    """A deploy must create both FMS and recovery schemas cleanly."""
     assert fresh_schema is None
+
+
+def test_recovery_memory_tables_are_created(mysql_db, recovery_mysql_db):
+    fms_tables = mysql_db.one(
+        """
+        SELECT COUNT(*) AS count
+        FROM information_schema.tables
+        WHERE table_schema = 'trihouse_fms'
+          AND table_type = 'BASE TABLE'
+        """
+    )
+    recovery_tables = recovery_mysql_db.one(
+        """
+        SELECT COUNT(*) AS count
+        FROM information_schema.tables
+        WHERE table_schema = 'trihouse_recovery'
+          AND table_type = 'BASE TABLE'
+        """
+    )
+
+    assert fms_tables["count"] == 16
+    assert recovery_tables["count"] == 2
+
+
+def test_all_tables_have_korean_comments(mysql_db):
+    tables = mysql_db.all(
+        """
+        SELECT
+          table_schema AS schema_name,
+          table_name AS table_name,
+          table_comment AS table_comment
+        FROM information_schema.tables
+        WHERE table_schema IN ('trihouse_fms', 'trihouse_recovery')
+          AND table_type = 'BASE TABLE'
+        ORDER BY table_schema, table_name
+        """
+    )
+
+    assert len(tables) == 18
+    missing = [
+        f"{row['schema_name']}.{row['table_name']}"
+        for row in tables
+        if not re.search(r"[가-힣]", str(row["table_comment"]))
+    ]
+    assert missing == []
+
+
+def test_all_columns_have_korean_comments(mysql_db):
+    columns = mysql_db.all(
+        """
+        SELECT
+          table_schema AS schema_name,
+          table_name AS table_name,
+          column_name AS column_name,
+          column_comment AS column_comment
+        FROM information_schema.columns
+        WHERE table_schema IN ('trihouse_fms', 'trihouse_recovery')
+        ORDER BY table_schema, table_name, ordinal_position
+        """
+    )
+
+    assert len(columns) == 253
+    missing = [
+        f"{row['schema_name']}.{row['table_name']}.{row['column_name']}"
+        for row in columns
+        if not re.search(r"[가-힣]", str(row["column_comment"]))
+    ]
+    assert missing == []
+
+
+def test_recovery_profile_is_unique_per_location(mysql_db):
+    mysql_db.execute(
+        """
+        INSERT INTO locations
+          (location_code, location_type, map_name, pose_x, pose_y, pose_yaw)
+        VALUES ('SAFE-TEST-01', 'safe_node', 'warehouse', 1.0, 2.0, 0.0)
+        """
+    )
+    location_id = mysql_db.one(
+        "SELECT location_id FROM locations WHERE location_code = 'SAFE-TEST-01'"
+    )["location_id"]
+    mysql_db.execute(
+        """
+        INSERT INTO location_recovery_profiles
+          (reference_node_uuid, location_id, map_revision, recovery_roles)
+        VALUES (%s, %s, 'warehouse-v1', JSON_ARRAY('wait', 'rejoin'))
+        """,
+        ("00000000-0000-0000-0000-000000000101", location_id),
+    )
+
+    with pytest.raises(mysql.connector.IntegrityError) as error:
+        mysql_db.execute(
+            """
+            INSERT INTO location_recovery_profiles
+              (reference_node_uuid, location_id, map_revision, recovery_roles)
+            VALUES (%s, %s, 'warehouse-v1', JSON_ARRAY('retreat'))
+            """,
+            ("00000000-0000-0000-0000-000000000102", location_id),
+        )
+
+    assert error.value.errno == 1062
+
+
+def test_recovery_episode_requires_consistent_model_lineage(recovery_mysql_db):
+    with pytest.raises(mysql.connector.Error) as error:
+        recovery_mysql_db.execute(
+            """
+            INSERT INTO recovery_episodes
+              (recovery_episode_uuid, device_id, map_name, map_revision, trigger_type,
+               vlm_model_name, recovery_policy_name, recovery_policy_version,
+               started_at, final_status)
+            VALUES
+              ('00000000-0000-0000-0000-000000000201', 'PINKY-01', 'warehouse',
+               'warehouse-v1', 'blocked', 'vlm-a', 'policy-a', '1.0',
+               '2026-08-09 12:00:00.000000', 'running')
+            """
+        )
+
+    assert error.value.errno == 3819
+
+
+def test_recovery_step_requires_observation_uri_and_hash_pair(recovery_mysql_db):
+    recovery_mysql_db.execute(
+        """
+        INSERT INTO recovery_episodes
+          (recovery_episode_uuid, device_id, map_name, map_revision, trigger_type,
+           recovery_policy_name, recovery_policy_version, started_at, final_status)
+        VALUES
+          ('00000000-0000-0000-0000-000000000301', 'PINKY-01', 'warehouse',
+           'warehouse-v1', 'blocked', 'policy-a', '1.0',
+           '2026-08-09 12:00:00.000000', 'running')
+        """
+    )
+
+    with pytest.raises(mysql.connector.Error) as error:
+        recovery_mysql_db.execute(
+            """
+            INSERT INTO recovery_steps
+              (recovery_episode_uuid, step_no, action_type, before_state_uri,
+               outcome_class, execution_status, is_terminal, started_at)
+            VALUES
+              ('00000000-0000-0000-0000-000000000301', 1, 'wait',
+               's3://recovery/before.json', 'safe', 'running', 0,
+               '2026-08-09 12:00:01.000000')
+            """
+        )
+
+    assert error.value.errno == 3819
+
+
+def test_recovery_schema_has_no_foreign_keys_to_fms(recovery_mysql_db):
+    cross_database_foreign_keys = recovery_mysql_db.one(
+        """
+        SELECT COUNT(*) AS count
+        FROM information_schema.key_column_usage
+        WHERE table_schema = 'trihouse_recovery'
+          AND referenced_table_schema = 'trihouse_fms'
+        """
+    )
+
+    assert cross_database_foreign_keys["count"] == 0
 
 
 def _insert_location(mysql_db) -> None:

@@ -1,0 +1,73 @@
+# Compose project for video ingress, recording, and QR processing on the RTX 4060 host.
+name: trihouse_edge_4060
+
+services:
+  mediamtx:
+    # Pin the media server so recording behavior is reproducible across hosts.
+    image: bluenviron/mediamtx:1.18.2
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Seoul
+      MTX_LOGLEVEL: info
+      MTX_API: "yes"
+      MTX_APIADDRESS: ":9997"
+      MTX_METRICS: "yes"
+      MTX_METRICSADDRESS: ":9998"
+      MTX_PLAYBACK: "yes"
+      MTX_PLAYBACKADDRESS: ":9996"
+      MTX_RECORD: "yes"
+      MTX_RECORDPATH: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+      MTX_RECORDFORMAT: fmp4
+      MTX_RECORDSEGMENTDURATION: ${TRIHOUSE_RECORD_SEGMENT_DURATION:-60s}
+      MTX_RECORDDELETEAFTER: ${TRIHOUSE_RECORD_DELETE_AFTER:-168h}
+    ports:
+      # Set EDGE_BIND_ADDRESS to the 4060 LAN address when Pinky publishes remotely.
+      - "${EDGE_BIND_ADDRESS:-127.0.0.1}:8554:8554/tcp"
+      - "${EDGE_BIND_ADDRESS:-127.0.0.1}:8888:8888/tcp"
+      - "${EDGE_BIND_ADDRESS:-127.0.0.1}:8889:8889/tcp"
+      - "${EDGE_BIND_ADDRESS:-127.0.0.1}:8189:8189/udp"
+      - "127.0.0.1:9996:9996/tcp"
+      - "127.0.0.1:9997:9997/tcp"
+      - "127.0.0.1:9998:9998/tcp"
+    volumes:
+      # Use a large persistent server disk by overriding TRIHOUSE_VIDEO_DIR.
+      - "${TRIHOUSE_VIDEO_DIR:-./runtime/video}:/recordings"
+    networks:
+      - control_edge
+
+  qr_worker:
+    # This profile is enabled only after the QR worker image has a long-running entrypoint.
+    profiles: [application_images]
+    image: ${TRIHOUSE_QR_IMAGE:-trihouse_qr_worker:local}
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Seoul
+      FMS_GATEWAY_URL: http://fms_gateway:8080
+      RTSP_BASE_URL: rtsp://mediamtx:8554
+    depends_on:
+      - mediamtx
+    networks:
+      - control_edge
+
+  recording_catalog:
+    # This profile is enabled only after the recording catalog image is implemented.
+    profiles: [application_images]
+    image: ${TRIHOUSE_RECORDING_IMAGE:-trihouse_recording_catalog:local}
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Seoul
+      FMS_GATEWAY_URL: http://fms_gateway:8080
+      MEDIAMTX_API_URL: http://mediamtx:9997
+      MEDIAMTX_PLAYBACK_URL: http://mediamtx:9996
+    volumes:
+      - "${TRIHOUSE_VIDEO_DIR:-./runtime/video}:/recordings"
+    depends_on:
+      - mediamtx
+    networks:
+      - control_edge
+
+networks:
+  # compose.control.yaml creates this network on the same RTX 4060 host.
+  control_edge:
+    external: true
+    name: trihouse_control_edge

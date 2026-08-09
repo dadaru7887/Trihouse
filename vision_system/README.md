@@ -36,7 +36,7 @@ RTX 4060 영상 수신·저장과 RTX 5080 추론을 역할별로 분리한다. 
   생성기를 사용한다.
 
 ```bash
-cd /Users/wonsiyeon/Documents/Codex/Trihouse
+cd /home/syw/Trihouse
 python3 -m unittest -v \
   vision_system.tests.test_person_policy.PersonPolicyTest.test_roi_requires_consecutive_person_frames \
   vision_system.tests.test_person_policy.PersonPolicyTest.test_person_outside_roi_does_not_count_as_worker_presence \

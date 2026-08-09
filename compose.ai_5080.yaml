@@ -1,0 +1,42 @@
+# Compose project for the RTX 5080 YOLO, VLM, and RL runtime.
+name: trihouse_ai_5080
+
+services:
+  ai_runtime:
+    # Build this image from the env branch backend Docker definition on the GPU server.
+    image: ${TRIHOUSE_AI_IMAGE:-trihouse_ai_5080:env}
+    restart: unless-stopped
+    init: true
+    shm_size: ${TRIHOUSE_AI_SHM_SIZE:-16gb}
+
+    environment:
+      TZ: Asia/Seoul
+
+      # The 5080 sends records through the Gateway and never receives MySQL credentials.
+      FMS_GATEWAY_URL: ${FMS_GATEWAY_URL:-http://host.docker.internal:8080}
+      RECOVERY_QUEUE_DIR: /var/lib/trihouse/recovery_queue
+      MODEL_DIR: /models
+      DATASET_DIR: /data
+      ARTIFACT_DIR: /artifacts
+
+    extra_hosts:
+      # This supports a one-host smoke test. On two servers, set FMS_GATEWAY_URL to the 4060 address.
+      - host.docker.internal:host-gateway
+
+    volumes:
+      - "${TRIHOUSE_AI_MODEL_DIR:-./runtime/ai/models}:/models:ro"
+      - "${TRIHOUSE_AI_DATASET_DIR:-./runtime/ai/data}:/data:ro"
+      - "${TRIHOUSE_AI_ARTIFACT_DIR:-./runtime/ai/artifacts}:/artifacts"
+      - "${TRIHOUSE_AI_QUEUE_DIR:-./runtime/ai/recovery_queue}:/var/lib/trihouse/recovery_queue"
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+# The image entrypoint owns YOLO streaming, VLM interpretation, RL policy work,
+# and acknowledged recovery-record delivery. The Compose file does not duplicate
+# those process definitions before the env-branch image contract is finalized.

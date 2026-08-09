@@ -1,0 +1,49 @@
+# Compose project name for the persistent development database stack.
+name: trihouse_db
+
+services:
+  mysql:
+    # MySQL 8.4 is the long-term support release used by this project.
+    image: mysql:8.4
+    restart: unless-stopped
+
+    # Keep MySQL timestamps and Unicode settings consistent across hosts.
+    command:
+      - --default-time-zone=+09:00
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+
+    # Keep the database name aligned with db/schema_mysql.sql.
+    # Load credentials from the local .env file.
+    environment:
+      TZ: Asia/Seoul
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: trihouse_fms
+      MYSQL_USER: ${FMS_DB_USER:-fms_gateway}
+      MYSQL_PASSWORD: ${FMS_DB_PASSWORD}
+
+    # Expose MySQL only to the current host during development.
+    ports:
+      - "127.0.0.1:${FMS_DB_PORT:-3306}:3306"
+
+    volumes:
+      # Preserve MySQL data when the container is recreated.
+      - mysql_data:/var/lib/mysql
+
+      # Run schema and development seed files only when the volume is empty.
+      - ./db/schema_mysql.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+      - ./db/seed_dev.sql:/docker-entrypoint-initdb.d/002_seed.sql:ro
+      - ./db/003_grant_gateway_recovery.sh:/docker-entrypoint-initdb.d/003_grant_gateway_recovery.sh:ro
+    # Report healthy only after MySQL accepts local connections.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+volumes:
+  # Compose scopes this volume to the trihouse_db project.
+  mysql_data:

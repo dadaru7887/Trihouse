@@ -1,0 +1,59 @@
+# Compose project for the database-writing FMS Gateway API.
+name: trihouse_control
+
+services:
+  fms_gateway:
+    # Build only the small Python 3.12 API image, not the ROS or AI environment.
+    build:
+      context: ./fms_gateway
+      dockerfile: Dockerfile
+    image: trihouse_fms_gateway:local
+    restart: unless-stopped
+    init: true
+
+    environment:
+      TZ: Asia/Seoul
+
+      # Use the MySQL service name on the external database network.
+      FMS_DB_HOST: mysql
+      FMS_DB_PORT: 3306
+      FMS_DB_DATABASE: ${FMS_DB_DATABASE:-trihouse_fms}
+      FMS_DB_USER: ${FMS_DB_USER:-fms_gateway}
+      FMS_DB_PASSWORD: ${FMS_DB_PASSWORD}
+      FMS_DB_POOL_SIZE: ${FMS_DB_POOL_SIZE:-5}
+
+    # Bind the API to the current host by default during local development.
+    ports:
+      - "${FMS_API_HOST:-127.0.0.1}:${FMS_API_PORT:-8080}:8080"
+
+    # The Gateway is the only application attached to both DB and API networks.
+    networks:
+      - db_internal
+      - control_edge
+
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=3).read()
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+networks:
+  # compose.db.yaml creates this network before the control stack starts.
+  db_internal:
+    external: true
+    name: trihouse_db_default
+
+  # Edge services on the same 4060 host can call the Gateway on this network.
+  control_edge:
+    name: trihouse_control_edge

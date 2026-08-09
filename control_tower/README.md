@@ -112,7 +112,7 @@ Pinky 재배정은 기존 readiness를 폐기한다.
 `inventory_workflow.finalize_outbound()`에 전달한다.
 
 ```bash
-cd /Users/wonsiyeon/Documents/Codex/Trihouse
+cd /home/syw/Trihouse
 python3 -m unittest -v \
   control_tower.tests.test_operations_feed \
   control_tower.tests.test_operations_http_server \
