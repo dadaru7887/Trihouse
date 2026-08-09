@@ -4,15 +4,26 @@
 .agents/
 tools/
 
-
 # folders
 references/
 docs/superpowers/
 
-
 # files
 *.DS_Store
 *.png
+
+# local secrets and generated database artifacts
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+*.log
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Python
 __pycache__/

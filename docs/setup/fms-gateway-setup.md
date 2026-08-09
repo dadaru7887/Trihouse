@@ -4,6 +4,9 @@
 Flutter 관제 UI 개발 환경을 동일하게 구성하기 위한 기록이다. 업무 시각은
 `Asia/Seoul`, MySQL 세션은 `+09:00`을 사용한다.
 
+DB만 새 서버에 재현하려면 설치·생성·검증 순서가 한 문서로 정리된
+[서버 PC 데이터베이스 재현 가이드](server-db-reproduction-guide.md)를 먼저 따른다.
+
 ## 1. 확인된 시작 상태
 
 2026-08-03에 `/home/luna/trihouse/Trihouse`에서 확인했다.
@@ -234,7 +237,12 @@ cd ../..
 비밀값 파일을 만들고 Git에 커밋하지 않는다.
 
 ```bash
-cp .env.example .env
+if [ -e .env ]; then
+  echo "STOP: 기존 .env가 있습니다. 덮어쓰지 않습니다." >&2
+else
+  cp .env.example .env
+  chmod 600 .env
+fi
 ```
 
 `.env`의 `MYSQL_ROOT_PASSWORD`와 `FMS_DB_PASSWORD`를 변경한 뒤:
@@ -266,12 +274,26 @@ docker compose up -d --wait mysql
 테스트 DB는 포트 3307과 tmpfs를 사용하며 운영 volume을 건드리지 않는다.
 
 ```bash
-docker compose -f compose.test.yaml up -d --wait
+set -euo pipefail
+cleanup_test_db() {
+  docker compose -p trihouse-test -f compose.test.yaml down -v
+}
+trap cleanup_test_db EXIT
+
+docker compose -p trihouse-test -f compose.test.yaml up -d --wait mysql-test
+test "$(docker inspect --format '{{.State.Health.Status}}' trihouse-mysql-test)" = healthy
+test "$(docker compose -p trihouse-test -f compose.test.yaml port mysql-test 3306)" = 127.0.0.1:3307
+
+FMS_DB_HOST=127.0.0.1 \
 FMS_DB_PORT=3307 \
+FMS_DB_USER=fms_gateway \
 FMS_DB_PASSWORD=test_gateway_password \
+FMS_DB_DATABASE=trihouse_fms \
 PYTHONPATH= PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
 fms_gateway/.venv/bin/pytest -c fms_gateway/pytest.ini fms_gateway/tests -v
-docker compose -f compose.test.yaml down -v
+
+trap - EXIT
+cleanup_test_db
 ```
 
 이 머신에는 ROS 2의 `launch_testing` pytest 플러그인이 전역 자동 로드되며 Python
@@ -343,7 +365,7 @@ Linux 창을 실제로 띄우려면 3절의 시스템 패키지를 먼저 설치
 
 ```bash
 docker compose down
-docker compose -f compose.test.yaml down -v
+docker compose -p trihouse-test -f compose.test.yaml down -v
 ```
 
 MySQL 개발 데이터는 `docker compose down`만으로 삭제되지 않는다.
