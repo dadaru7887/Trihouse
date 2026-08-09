@@ -6,6 +6,7 @@ geometry_msgs/PoseWithCovariance pose
 geometry_msgs/Twist twist
 float32 battery_percentage
 trihouse_interfaces/BatteryPolicyState battery_policy
+trihouse_interfaces/CargoState cargo
 trihouse_interfaces/SafetyState safety
 string current_job_id
 string current_job_step_id

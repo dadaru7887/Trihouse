@@ -54,7 +54,7 @@ Pinky LED는 기존 `/set_led` (`pinky_interfaces/srv/SetLed`)를 그대로 사�
 | Action | Type | Server | Client |
 |---|---|---|---|
 | `/trihouse/dock` | `trihouse_interfaces/action/Dock` | docking | fleet |
-| `/trihouse/transport/execute` | `trihouse_interfaces/action/ExecuteTransport` | fleet | onboard gateway |
+| `/trihouse/transport/execute` | `trihouse_interfaces/action/ExecuteTransport` | fleet | onboard gateway; `mode`은 운반·대기 복귀·충전소 복귀를 구분 |
 | `/navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | Nav2 | Nav2 command adapter |
 
 ## 외부 통신 경계

@@ -1,0 +1,3 @@
+from setuptools import find_packages, setup
+
+setup(name='trihouse_pinky_io', version='0.1.0', packages=find_packages(), data_files=[('share/ament_index/resource_index/packages', ['resource/trihouse_pinky_io']), ('share/trihouse_pinky_io', ['package.xml'])], install_requires=['setuptools'], zip_safe=True, entry_points={'console_scripts': ['battery_adapter = trihouse_pinky_io.battery_adapter:main', 'ultrasonic_adapter = trihouse_pinky_io.ultrasonic_adapter:main', 'led_indicator_client = trihouse_pinky_io.led_indicator_client:main', 'buzzer_indicator_client = trihouse_pinky_io.buzzer_indicator_client:main', 'destination_display = trihouse_pinky_io.destination_display_node:main']})

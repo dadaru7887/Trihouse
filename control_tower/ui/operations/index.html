@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trihouse 통합 관제</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #10151d; color: #edf2f7; }
+    body { margin: 0 auto; padding: 1.25rem; max-width: 1440px; } header, .head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+    h1 { font-size: 1.45rem; } h2 { font-size: 1rem; } section { margin-top: 1rem; padding: 1rem; border: 1px solid #334150; border-radius: .5rem; background: #19222d; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; } .map { position: relative; height: 240px; background: #101820; border-radius: .4rem; overflow: hidden; }
+    .robot { position: absolute; translate: -50% -50%; border-radius: 50%; background: #2775b9; padding: .35rem; font-size: .75rem; } .incident { margin-top: .5rem; padding: .75rem; border-left: .25rem solid #ff5964; background: #56242c; }
+    .incident[data-acknowledged="true"] { opacity: .65; border-left-color: #8894a3; } table { width: 100%; border-collapse: collapse; } th, td { padding: .45rem; border-bottom: 1px solid #334150; text-align: left; font-size: .85rem; }
+    video { width: 100%; min-height: 180px; margin-top: .75rem; background: #050505; } small { color: #aab7c6; }
+  </style>
+</head>
+<body>
+  <header><h1>Trihouse 통합 관제</h1><small id="connection-state">연결 중</small></header>
+  <section><div class="head"><h2>사람 위급상황</h2><small>일반 작업 오류보다 먼저 표시</small></div><div id="incidents" aria-live="assertive"></div></section>
+  <div class="grid">
+    <section><div class="head"><h2>창고 지도</h2><small>Gateway 위치 read model</small></div><div id="map" class="map" aria-label="Pinky 위치 지도"></div></section>
+    <section><div class="head"><h2>CCTV 재생</h2><small>선택할 때만 재생 URL 요청</small></div><label>카메라 <select id="camera-select"><option value="">재생 안 함</option></select></label><video id="camera-player" controls muted playsinline></video></section>
+  </div>
+  <div class="grid">
+    <section><h2>로봇 상태</h2><table><thead><tr><th>ID</th><th>배터리</th><th>안전</th><th>작업/단계</th><th>오류</th></tr></thead><tbody id="robots"></tbody></table></section>
+    <section><h2>작업 상태</h2><table><thead><tr><th>작업</th><th>주문·물품</th><th>배정</th><th>단계</th><th>상태</th></tr></thead><tbody id="jobs"></tbody></table></section>
+  </div>
+  <script src="/operations.js" defer></script>
+</body>
+</html>

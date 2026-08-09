@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<package format="3"><name>trihouse_omx_adapter</name><version>0.1.0</version><description>Trihouse OMX Gazebo and hardware adapter boundary</description><maintainer email="devnull@example.com">Trihouse</maintainer><license>Apache-2.0</license><buildtool_depend>ament_python</buildtool_depend><depend>rclpy</depend><depend>trihouse_interfaces</depend><exec_depend>python3</exec_depend></package>

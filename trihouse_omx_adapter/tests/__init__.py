@@ -1,0 +1,1 @@
+"""OMX adapter contract tests."""

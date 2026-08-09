@@ -4,9 +4,15 @@ string job_step_id
 string map_revision
 string pickup_location_id
 string dropoff_location_id
+string destination_code
 geometry_msgs/PoseStamped pickup_pose
 geometry_msgs/PoseStamped dropoff_pose
 uint8 priority
+bool requires_precise_stop
+uint8 MODE_TRANSPORT=0
+uint8 MODE_RETURN_TO_WAIT=1
+uint8 MODE_RETURN_TO_CHARGE=2
+uint8 mode
 ---
 uint16 CODE_OK=0
 uint16 CODE_REJECTED=1
