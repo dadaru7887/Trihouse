@@ -1,7 +1,7 @@
 # Trihouse FMS 데이터베이스 가이드라인
 
 기준 스키마: [db/schema_mysql.sql](../../db/schema_mysql.sql) (FMS MySQL 스키마 v3, 15개 도메인 테이블)
-관련 문서: [서버 DB 재현 가이드](../setup/server-db-reproduction-guide.md) · [FMS MySQL Integration Design](../superpowers/specs/2026-08-03-fms-mysql-integration-design.md) · [FMS Gateway Setup](../setup/fms-gateway-setup.md) · [Vision 환경](../setup/vision_environment/unified_env.yml)
+관련 문서: [서버 DB 재현 가이드](../setup/server-db-reproduction-guide.md) · [FMS MySQL Integration Design](../superpowers/specs/2026-08-03-fms-mysql-integration-design.md) · [FMS Gateway Setup](../setup/fms-gateway-setup.md) · [Vision 환경](../setup/vision_environment/unified_env.yml) · [VLM/RL 복구 데이터 경계 계획](vlm-rl-recovery-data-plan.md)
 
 이 문서는 `trihouse_fms` 스키마를 읽고 쓰는 모든 코드가 지켜야 할 규약을 정리한다. 스키마 자체의 정의는 SQL 파일이 기준이며, 이 문서는 **왜 그렇게 설계했고 어떻게 써야 하는가**를 설명한다.
 
@@ -1224,6 +1224,37 @@ artifacts(dataset) ──학습──> artifacts(model, model_version = "nav-rl-
 - **`sha256`으로 원본 무결성을 확인한 뒤 학습한다.** URI만 믿고 읽으면 파일이 교체되었는지 알 수 없다.
 - **모델의 출력은 여전히 제안이다.** 재추정된 경로도 RMF와 Safety Supervisor를 거친다. `vision` 컨테이너가 DB에 명령을 쓰지 않는다 (1.1, 2.2).
 
+### 10.7 VLM/RL 복구 Memory의 단계적 분리 계획
+
+현재 v3는 입고·출고·재고·예약의 운영 원장이다. 이 원장을 VLM/RL 실험의
+replay buffer나 후보 rollout 로그 때문에 변경하지 않는다. 복구 Memory의
+상세 계획과 아직 만들지 않는 테이블은
+[VLM/RL 복구 데이터 경계 계획](vlm-rl-recovery-data-plan.md)을 기준으로 한다.
+
+확정된 경계는 다음과 같다.
+
+```text
+trihouse_fms
+  locations + location_recovery_profiles
+      = 기본 주행 기준점과 Reference Memory
+
+trihouse_recovery
+  recovery_episodes + recovery_steps
+      = 실제 복구 경험(Episodic Memory)
+
+RTX 5080 RAM
+      = SAC replay buffer와 TGRPO 임시 trajectory group
+```
+
+- `locations`는 좌표와 현재 운영 점유 상태의 원본이다.
+- `location_recovery_profiles`는 일부 `safe_node` location이 복구 목표로
+  현재 사용 가능한지와 신뢰도만 기록한다. 좌표를 복제하지 않는다.
+- `recovery_steps`에는 실제로 실행된 복구 행동만 남긴다. VLM이 제안했지만
+  실행되지 않은 후보와 Safety의 승인·거부는 기존 `operation_events`에 남긴다.
+- VLM/RL은 어떤 DB에도 직접 접속하거나 쓰지 않는다. Gateway API만 사용한다.
+- 이 계획은 VLM/RL 복구 구현을 시작할 때 적용한다. 현재 v3 DDL에는 아직
+  `location_recovery_profiles`나 `trihouse_recovery` DDL을 추가하지 않는다.
+
 ---
 
 ## 11. 금지 사항과 안티패턴
@@ -1288,7 +1319,13 @@ job은 `completed`, step은 `succeeded`다. 공용 상태 매핑 함수를 만�
 
 ### 12.1 원칙
 
-- **현재 15개 도메인 테이블을 유지한다. 새 도메인 테이블은 추가하지 않는다.** 새 개념이 필요하면 먼저 기존 테이블의 컬럼·JSON·열거값으로 표현할 수 있는지 검토한다. 학습 관련 요구도 `artifacts` + `job_steps.result`로 해결한다 (10.4).
+- **현재 15개 운영 도메인 테이블을 유지한다.** 입고·출고·재고·예약·관제의
+  새 요구는 먼저 기존 테이블의 컬럼·JSON·열거값으로 표현할 수 있는지 검토한다.
+  학습 관련 기본 요구도 `artifacts` + `job_steps.result`로 해결한다 (10.4).
+- 단, VLM/RL이 실제 복구 경험으로 Reference 신뢰도를 갱신하고 SAC replay를
+  시작하는 시점에는 [복구 데이터 경계 계획](vlm-rl-recovery-data-plan.md)의
+  세 테이블을 단계적으로 추가할 수 있다. 이 예외는 운영 원장을 침범하지 않고
+  Reference와 Episodic Memory를 분리하기 위한 것이다.
 - 기준 스키마 파일은 [db/schema_mysql.sql](../../db/schema_mysql.sql) 하나다.
 - [control_system/db/schema.sql](../../control_system/db/schema.sql)은 기존 SQLite v2에 대응하는 **별도 스키마**다. 새 연동에 사용하지 않는다.
 - [control_system/db/migrate_sqlite_to_mysql.py](../../control_system/db/migrate_sqlite_to_mysql.py)는 `robosapiens` 스키마 전용이다. `trihouse_fms`에 실행하지 않는다.
