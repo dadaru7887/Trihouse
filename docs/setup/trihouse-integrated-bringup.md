@@ -23,12 +23,15 @@ Pinky Gazebo/Navigation, mock sensor, Safety Supervisor, fleet gateway, Gazebo O
 
 ## 2. Gazebo 통합 시연
 
-ROS 2 Jazzy와 vendor packages를 이미 build/source한 Ubuntu shell에서 실행한다. 현재 macOS
+ROS 2 Jazzy와 vendor packages를 이미 build/source한 Ubuntu shell에서 실행한다. Pinky 1은
+`ROS_DOMAIN_ID=51`로 DDS 네트워크를 분리한다. `robot_id=PK-01`은 관제의 업무·감사 식별자일
+뿐 ROS network 격리 수단이 아니다. 현재 macOS
 개발 환경에는 ROS/Gazebo가 없으므로 아래 명령은 여기서 실행하지 않았다.
 
 ```bash
 cd /path/to/Trihouse
 source /opt/ros/jazzy/setup.bash
+export ROS_DOMAIN_ID=51  # Pinky 1 전용 DDS domain
 colcon build --packages-select trihouse_interfaces trihouse_pinky_bringup trihouse_pinky_fleet trihouse_pinky_safety trihouse_pinky_io trihouse_omx_adapter
 source install/setup.bash
 
@@ -72,6 +75,7 @@ Gazebo 로그는 ROS launch stdout와 `~/.ros/log/`에 남는다. STOP이 아닌
 ```bash
 cd /path/to/Trihouse
 source /opt/ros/jazzy/setup.bash
+export ROS_DOMAIN_ID=51  # Pinky 1 전용 DDS domain
 source install/setup.bash
 ros2 launch trihouse_pinky_bringup trihouse_pinky.launch.py \
   robot_id:=PK-01 map_revision:=warehouse-2026-08 map:=/absolute/path/to/map.yaml \
@@ -84,6 +88,10 @@ Safety Supervisor, readiness, fleet/gateway를 조합한다. OMX는 endpoint가 
 않았으므로 `hardware_omx_adapter`가 **motion을 보내지 않는 진단 skeleton**으로만 시작한다.
 실제 MoveIt/gripper endpoint, TF frame, joint state, gripper/stop acknowledgement, payload 및
 workspace limit이 승인되기 전에는 hardware plugin을 추가하거나 motion을 켜지 않는다.
+
+OMX/로봇팔은 ROS interface와 배포 책임이 아직 확정되지 않았으므로 `ROS_DOMAIN_ID`를 임의로
+배정하지 않는다. 추후 OMX를 별도 PC/Domain으로 분리한다면 ROS topic 직접 통신 대신
+Control Tower/adapter bridge 경계를 먼저 확정한다.
 
 ## 4. 실기 연결 전 필수 점검·중단·rollback
 
