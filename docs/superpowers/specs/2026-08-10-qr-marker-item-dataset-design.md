@@ -23,6 +23,36 @@
 
 슬롯과 해당 슬롯에 보관되는 `inventory_lots.temperature_zone`의 일치는 Gateway가 검증한다.
 
+#### 2층 선반 위치 코드
+
+상온·냉장·냉동 창고는 각각 랙 1개, 2개 층, 층별 2개 슬롯으로 구성한다. 위치 코드는 다음 규칙을 사용한다.
+
+```text
+<TEMPERATURE>_RACK_<rack>_LEVEL_<level>_SLOT_<slot>
+```
+
+- `TEMPERATURE`: `AMBIENT`, `CHILLED`, `FROZEN`
+- `rack`, `level`, `slot`: 두 자리 숫자
+- 랙 행은 `AMBIENT_RACK_01`처럼 만들고 슬롯 행의 `parent_location_id`로 연결한다.
+- 층은 별도 `location_type`이 없으므로 슬롯의 `metadata.level`에도 같은 숫자를 저장한다.
+
+초기 시연용 배정은 다음과 같다. 실제 입고 시에는 이 표의 위치를 고정값으로 QR에 넣지 않고, FMS가 같은 온도 구역의 사용 가능한 슬롯을 예약한다.
+
+| 온도 구역 | 층 | 슬롯 | `location_code` | 초기 품목 |
+| --- | ---: | ---: | --- | --- |
+| 상온 | 1 | 1 | `AMBIENT_RACK_01_LEVEL_01_SLOT_01` | 오렌지 |
+| 상온 | 1 | 2 | `AMBIENT_RACK_01_LEVEL_01_SLOT_02` | 딸기 |
+| 상온 | 2 | 1 | `AMBIENT_RACK_01_LEVEL_02_SLOT_01` | 귤 |
+| 상온 | 2 | 2 | `AMBIENT_RACK_01_LEVEL_02_SLOT_02` | 비어 있음 |
+| 냉장 | 1 | 1 | `CHILLED_RACK_01_LEVEL_01_SLOT_01` | 커피 |
+| 냉장 | 1 | 2 | `CHILLED_RACK_01_LEVEL_01_SLOT_02` | 우유 |
+| 냉장 | 2 | 1 | `CHILLED_RACK_01_LEVEL_02_SLOT_01` | 샌드위치 |
+| 냉장 | 2 | 2 | `CHILLED_RACK_01_LEVEL_02_SLOT_02` | 요구르트 |
+| 냉동 | 1 | 1 | `FROZEN_RACK_01_LEVEL_01_SLOT_01` | 냉동 삼겹살 |
+| 냉동 | 1 | 2 | `FROZEN_RACK_01_LEVEL_01_SLOT_02` | 아이스크림콘 |
+| 냉동 | 2 | 1 | `FROZEN_RACK_01_LEVEL_02_SLOT_01` | 아이스크림바 |
+| 냉동 | 2 | 2 | `FROZEN_RACK_01_LEVEL_02_SLOT_02` | 냉동 만두 |
+
 ### `map_features`
 
 지도에 고정 부착한 QR과 ArUco marker의 메타데이터를 저장한다. 실제 Nav2/RMF 지도 파일이나 이미지 파일은 DB에 넣지 않는다.
@@ -83,6 +113,10 @@ QR에는 UTF-8로 직렬화한 compact JSON을 넣는다.
 | `expiry_date` | `YYYY-MM-DD` | 생성 기준일 이후 날짜 |
 | `storage_code` | enum | `ambient`, `chilled`, `frozen` 중 하나 |
 | `quantity` | positive integer | 사용자가 CSV에 입력하며 PNG 생성 전 필수 검증 |
+
+정확한 `location_code`, 선반 번호와 슬롯 번호는 물품 QR에 넣지 않는다. QR의 `storage_code`는 보관해야 할 온도 구역이고, 실제 저장 위치는 FMS가 입고 시점의 빈 슬롯을 예약한 뒤 `inventory_lots.location_id`로 확정한다. 따라서 물품을 다른 슬롯으로 옮겨도 QR을 다시 만들 필요가 없다.
+
+QR payload의 최소 필수 정보는 `schema`, `item_id`, `product_code`, `item_name`, `expiry_date`, `storage_code`, `quantity`이다. JSON 끝의 불필요한 따옴표를 붙이지 않으며, 실제 QR에는 Markdown 코드 블록이 아니라 중괄호 안 JSON 문자열만 인코딩한다.
 
 CSV 템플릿의 `quantity`는 빈 칸이고 JSON 템플릿의 값은 `null`이다. QR PNG 생성기는 수량이 비어 있거나 양의 정수가 아니면 생성하지 않고 해당 행과 원인을 출력한다. 생성되는 실제 QR payload에는 반드시 양의 정수가 들어간다.
 
