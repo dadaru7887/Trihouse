@@ -136,8 +136,13 @@ Pinky가 포장대나 적재 위치로 이동할 때 Nav2에 주는 목표는 �
 정확한 부호는 TF tree의 marker 축 방향을 보고 결정해야 하며 고정 숫자를 추측하지 않는다.
 
 현재 `trihouse_pinky_docking`은 README와 `Dock.action` 계약만 있고 action server는 구현되지 않았다.
-따라서 내일 필수 완료 조건은 Nav2의 한 개 pose에 저속으로 정차하는 것이며, ArUco 기반 마지막 정밀
-도킹은 가능하면 별도 실험으로 기록한다.
+따라서 내일 필수 완료 조건은 Nav2의 한 개 pose에 저속으로 정차하는 것이다. 이 필수 검증이 모두
+통과하고 시간이 남으면 마지막 stretch task로 ArUco marker를 보고 정렬한 뒤 협로 입구의 지정
+offset까지 저속 진입한다. 마커 freshness·ID·신뢰도가 유효하지 않거나 관측이 소실되면 즉시
+`/cmd_vel_dock`을 0으로 만들고 제한된 재탐색 후 실패해야 한다.
+
+협로 진입 stretch task의 성공 기준은 marker 기준 목표 pose 허용 오차에 정지하는 것까지다. 협로
+내부의 장거리 자율주행, 반대편 이탈, OMX 정밀 인계와 자동 충전 접촉은 포함하지 않는다.
 
 ### 4점을 사용하는 경우
 
@@ -178,6 +183,7 @@ emergency latch를 한 번에 섞지 않고 한 시나리오씩 주입해 최초
 - emergency/keep-out에서 정지하고 승인 전 자동 재개하지 않는다.
 - 해제 후 기존 작업을 자동 재개하지 않고 지정 대기·충전 pose로 복귀해 health check를 수행한다.
 - 실기 검증은 저속으로 수행하고 rosbag, node log, Control Tower message ID를 같은 run 기록에 남긴다.
+- 필수 항목 통과 후에만 ArUco marker 정렬·협로 입구 진입을 수행하며, marker 소실 시 즉시 정지한다.
 
 ## 제외 범위
 
@@ -186,5 +192,4 @@ emergency latch를 한 번에 섞지 않고 한 시나리오씩 주입해 최초
 - Vision 모델 학습·정확도 평가와 SR_52
 - OMX/MoveIt 실물 동작
 - 물리 충전 단자 정렬과 충전 시작
-- 완성된 ArUco docking action server 구현
-
+- 협로 내부 장거리 주행, 반대편 이탈과 OMX/충전 접촉까지 포함한 완전 자동 도킹
