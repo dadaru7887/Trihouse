@@ -98,3 +98,19 @@ def test_aruco_pose_is_only_reported_with_calibration(notebook_namespace):
     assert len(calibrated[0]["rvec"]) == 3
     assert len(calibrated[0]["tvec_m"]) == 3
     assert calibrated[0]["tvec_m"][2] > 0
+
+
+def test_notebook_is_valid_and_all_code_cells_compile(notebook):
+    assert notebook["nbformat"] == 4
+    for index, cell in enumerate(notebook["cells"]):
+        if cell["cell_type"] == "code":
+            compile("".join(cell["source"]), f"cell-{index}", "exec")
+
+
+def test_operational_cells_cover_capture_calibration_live_and_cleanup(notebook):
+    roles = {
+        cell.get("metadata", {}).get("trihouse_role")
+        for cell in notebook["cells"]
+    }
+
+    assert {"capture", "calibrate", "live-detection", "cleanup"} <= roles
