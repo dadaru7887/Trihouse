@@ -40,17 +40,17 @@
 
 | 온도 구역 | 층 | 슬롯 | `location_code` | 초기 품목 |
 | --- | ---: | ---: | --- | --- |
-| 상온 | 1 | 1 | `AMBIENT_RACK_01_LEVEL_01_SLOT_01` | 오렌지 |
-| 상온 | 1 | 2 | `AMBIENT_RACK_01_LEVEL_01_SLOT_02` | 딸기 |
-| 상온 | 2 | 1 | `AMBIENT_RACK_01_LEVEL_02_SLOT_01` | 귤 |
-| 상온 | 2 | 2 | `AMBIENT_RACK_01_LEVEL_02_SLOT_02` | 비어 있음 |
-| 냉장 | 1 | 1 | `CHILLED_RACK_01_LEVEL_01_SLOT_01` | 커피 |
+| 상온 | 1 | 1 | `AMBIENT_RACK_01_LEVEL_01_SLOT_01` | 귤 |
+| 상온 | 1 | 2 | `AMBIENT_RACK_01_LEVEL_01_SLOT_02` | 비어 있음 |
+| 상온 | 2 | 1 | `AMBIENT_RACK_01_LEVEL_02_SLOT_01` | 오렌지 |
+| 상온 | 2 | 2 | `AMBIENT_RACK_01_LEVEL_02_SLOT_02` | 딸기 |
+| 냉장 | 1 | 1 | `CHILLED_RACK_01_LEVEL_01_SLOT_01` | 요구르트 |
 | 냉장 | 1 | 2 | `CHILLED_RACK_01_LEVEL_01_SLOT_02` | 우유 |
-| 냉장 | 2 | 1 | `CHILLED_RACK_01_LEVEL_02_SLOT_01` | 샌드위치 |
-| 냉장 | 2 | 2 | `CHILLED_RACK_01_LEVEL_02_SLOT_02` | 요구르트 |
-| 냉동 | 1 | 1 | `FROZEN_RACK_01_LEVEL_01_SLOT_01` | 냉동 삼겹살 |
+| 냉장 | 2 | 1 | `CHILLED_RACK_01_LEVEL_02_SLOT_01` | 커피 |
+| 냉장 | 2 | 2 | `CHILLED_RACK_01_LEVEL_02_SLOT_02` | 샌드위치 |
+| 냉동 | 1 | 1 | `FROZEN_RACK_01_LEVEL_01_SLOT_01` | 아이스크림바 |
 | 냉동 | 1 | 2 | `FROZEN_RACK_01_LEVEL_01_SLOT_02` | 아이스크림콘 |
-| 냉동 | 2 | 1 | `FROZEN_RACK_01_LEVEL_02_SLOT_01` | 아이스크림바 |
+| 냉동 | 2 | 1 | `FROZEN_RACK_01_LEVEL_02_SLOT_01` | 냉동 삼겹살 |
 | 냉동 | 2 | 2 | `FROZEN_RACK_01_LEVEL_02_SLOT_02` | 냉동 만두 |
 
 ### `map_features`
