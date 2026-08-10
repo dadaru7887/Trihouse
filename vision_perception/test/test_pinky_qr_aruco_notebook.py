@@ -1,13 +1,14 @@
 import json
 from pathlib import Path
+import re
 
 import cv2
 import numpy as np
 import pytest
 
 
-NOTEBOOK_PATH = (
-    Path(__file__).resolve().parents[1] / "pinky_qr_aruco_calibration.ipynb"
+NOTEBOOK_PATH = Path(__file__).resolve().with_name(
+    "test_pinky_qr_aruco_notebook.ipynb"
 )
 
 
@@ -105,6 +106,16 @@ def test_notebook_is_valid_and_all_code_cells_compile(notebook):
     for index, cell in enumerate(notebook["cells"]):
         if cell["cell_type"] == "code":
             compile("".join(cell["source"]), f"cell-{index}", "exec")
+
+
+def test_nbformat_45_cells_have_unique_valid_ids(notebook):
+    cell_ids = [cell.get("id") for cell in notebook["cells"]]
+
+    assert all(
+        isinstance(cell_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", cell_id)
+        for cell_id in cell_ids
+    )
+    assert len(cell_ids) == len(set(cell_ids))
 
 
 def test_operational_cells_cover_capture_calibration_live_and_cleanup(notebook):
