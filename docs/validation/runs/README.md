@@ -13,3 +13,8 @@
 - 기대 결과와 실제 관찰 결과
 - 로그·스크린샷·영상 경로
 - 실패 또는 차단 원인과 다음 조치
+
+## 현재 실행 기록
+
+- [2026-08-10 Pinky 시연 준비](2026_08_10_pinky_demo_validation.md): 정적 정책과
+  headless Gazebo·Safety 부분 검증, 통합 launch 차단점

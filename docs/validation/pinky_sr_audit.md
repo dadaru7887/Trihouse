@@ -29,6 +29,9 @@
 
 ## 재현 가능한 정적 검증
 
+명령별 의미, 테스트를 읽는 순서와 headless Gazebo 부분 검증은
+[Pinky SR 수동 정적 검증과 코드 분석](pinky_sr_manual_validation.md)에 정리한다.
+
 ```bash
 cd /home/syw/Trihouse
 PYTHONPATH='trihouse_pinky/trihouse_pinky_fleet:trihouse_pinky/trihouse_pinky_safety:trihouse_pinky/trihouse_pinky_io:trihouse_pinky/trihouse_pinky_bringup' \

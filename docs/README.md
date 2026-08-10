@@ -9,9 +9,10 @@
 1. [시스템 구성](architecture/system_overview.md)
 2. [System Requirements](requirements/system_requirements.md)
 3. [SR 구현·검증 상태](validation/implementation_map.md)
-4. [환경 구성](deployment/environment_overview.md)
-5. [로컬 시뮬레이션](deployment/local_simulation_demo.md)
-6. [데이터베이스](database/database_guide.md)
+4. [Pinky SR 수동 검증](validation/pinky_sr_manual_validation.md)
+5. [환경 구성](deployment/environment_overview.md)
+6. [로컬 시뮬레이션](deployment/local_simulation_demo.md)
+7. [데이터베이스](database/database_guide.md)
 
 ## 문서 영역
 

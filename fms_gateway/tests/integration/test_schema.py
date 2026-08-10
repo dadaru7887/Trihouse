@@ -39,7 +39,7 @@ def test_recovery_memory_tables_are_created(mysql_db, recovery_mysql_db):
     assert recovery_tables["count"] == 2
 
 
-def test_all_tables_have_korean_comments(mysql_db):
+def test_all_tables_have_english_comments(mysql_db):
     tables = mysql_db.all(
         """
         SELECT
@@ -54,15 +54,16 @@ def test_all_tables_have_korean_comments(mysql_db):
     )
 
     assert len(tables) == 18
-    missing = [
+    invalid = [
         f"{row['schema_name']}.{row['table_name']}"
         for row in tables
-        if not re.search(r"[가-힣]", str(row["table_comment"]))
+        if not str(row["table_comment"]).isascii()
+        or re.search(r"[가-힣]", str(row["table_comment"]))
     ]
-    assert missing == []
+    assert invalid == []
 
 
-def test_all_columns_have_korean_comments(mysql_db):
+def test_all_columns_have_english_comments(mysql_db):
     columns = mysql_db.all(
         """
         SELECT
@@ -77,12 +78,13 @@ def test_all_columns_have_korean_comments(mysql_db):
     )
 
     assert len(columns) == 253
-    missing = [
+    invalid = [
         f"{row['schema_name']}.{row['table_name']}.{row['column_name']}"
         for row in columns
-        if not re.search(r"[가-힣]", str(row["column_comment"]))
+        if not str(row["column_comment"]).isascii()
+        or re.search(r"[가-힣]", str(row["column_comment"]))
     ]
-    assert missing == []
+    assert invalid == []
 
 
 def test_recovery_profile_is_unique_per_location(mysql_db):

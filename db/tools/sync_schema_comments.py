@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Synchronize Korean schema comments with SQL, migration, XLSX, and draw.io.
+"""Synchronize English schema comments with SQL, migration, XLSX, and draw.io.
 
-The English database, table, column, and enum identifiers remain unchanged.
-This script only maintains human-readable Korean metadata.
+Database, table, column, and enum identifiers remain unchanged.
+This script maintains ASCII-only English metadata for reliable web display.
 """
 
 from __future__ import annotations
@@ -112,6 +112,30 @@ TABLE_META = {
         "복구 실행 단계",
         "복구 에피소드에서 실제 실행한 행동, 전후 관측, 보상, 결과와 완료 상태를 순서대로 기록한다.",
     ),
+}
+
+# English metadata is the canonical source used by the schema browser.  The
+# legacy Korean literals above are retained temporarily so older documentation
+# diffs remain reviewable; no generated artifact consumes them.
+TABLE_META = {
+    "locations": ("trihouse_fms", "Operational locations", "Manages warehouse racks, slots, docks, chargers, workstations, safety nodes, and RMF waypoints."),
+    "map_features": ("trihouse_fms", "Map features", "Manages spatial data for markers, static obstacles, bottlenecks, doors, and restricted areas by map revision."),
+    "workers": ("trihouse_fms", "Workers", "Manages worker accounts and permission scopes for control requests, manual recovery, and safety release actions."),
+    "devices": ("trihouse_fms", "Devices", "Manages models, fleets, locations, control modes, and capabilities for Pinky mobile robots and OMX robot arms."),
+    "inventory_lots": ("trihouse_fms", "Inventory lots", "Manages storage location, expiration date, available quantity, reserved quantity, and status for each inventory lot."),
+    "jobs": ("trihouse_fms", "Jobs", "Manages the full lifecycle of inbound, outbound, transfer, replenishment, disposal, recovery, and emergency jobs."),
+    "job_items": ("trihouse_fms", "Job items", "Manages products, requested and completed quantities, assigned lots, and verification status for each job."),
+    "job_steps": ("trihouse_fms", "Job steps", "Manages ordered execution steps for Pinky movement, OMX manipulation, verification, and handoff operations."),
+    "reservations": ("trihouse_fms", "Resource reservations", "Manages access to bottlenecks and exclusive or time-based reservations for docks, workstations, and devices."),
+    "inventory_moves": ("trihouse_fms", "Inventory movements", "Records immutable inventory and reservation quantity changes, resulting balances, reasons, and responsible actors."),
+    "device_states": ("trihouse_fms", "Latest device states", "Stores the latest heartbeat, location, battery level, progress, health, and active step for each device."),
+    "integration_messages": ("trihouse_fms", "Integration messages", "Manages idempotency, retries, and delivery status for commands and responses exchanged with RMF, Pinky, and OMX."),
+    "incidents": ("trihouse_fms", "Safety incidents", "Manages safety incidents from detection through resolution, including people, fall risks, collision risks, and emergency stops."),
+    "operation_events": ("trihouse_fms", "Operation events", "Records chronological audit events for jobs, devices, safety decisions, model decisions, and operator actions."),
+    "artifacts": ("trihouse_fms", "Artifacts", "Manages storage locations and integrity metadata for videos, images, rosbags, episodes, datasets, models, and reports."),
+    "location_recovery_profiles": ("trihouse_fms", "Location recovery profiles", "Manages recovery roles, availability, and beta-distribution reliability values for each safety node."),
+    "recovery_episodes": ("trihouse_recovery", "Recovery episodes", "Records each recovery incident from trigger to completion, including VLM and recovery-policy lineage."),
+    "recovery_steps": ("trihouse_recovery", "Recovery steps", "Records executed recovery actions, observations, rewards, outcomes, and completion status in sequence."),
 }
 
 COLUMN_COMMENTS = {
@@ -294,6 +318,80 @@ COLUMN_COMMENTS = {
     "zone_code": "창고 운영 구역을 식별하는 코드",
 }
 
+
+def _default_english_comment(column: str) -> str:
+    """Build a concise fallback description for a schema column."""
+    label = column.replace("_", " ")
+    if column.endswith("_at"):
+        return f"Timestamp when the {label[:-3]} event occurred."
+    if column.endswith("_id"):
+        return f"Identifier of the related {label[:-3]}."
+    if column.endswith("_uuid"):
+        return f"UUID of the related {label[:-5]}."
+    if column.endswith("_uri"):
+        return f"URI of the stored {label[:-4]} data."
+    if column.endswith("_sha256") or column == "sha256":
+        return f"SHA-256 hash used to verify the integrity of the {label.replace(' sha256', '')}."
+    if column.endswith("_qty"):
+        return f"Quantity for {label[:-4]}."
+    if column.endswith("_code"):
+        return f"Business code for {label[:-5]}."
+    if column.endswith("_name"):
+        return f"Name of the {label[:-5]}."
+    if column.endswith("_type"):
+        return f"Code identifying the {label[:-5]} type."
+    if column.endswith("_status") or column == "state":
+        return f"Current {label} code."
+    if column in {"metadata", "context", "details", "properties", "payload", "input", "result"}:
+        return f"JSON object containing additional {label} data."
+    return f"{label.capitalize()} for this record."
+
+
+_ENGLISH_COLUMN_OVERRIDES = {
+    "active": "Indicates whether this record is available for current operations.",
+    "active_resource_key": "Calculated unique key that prevents conflicting active resource reservations.",
+    "allowed_zones": "JSON array of zone codes the worker may access or operate.",
+    "attempts": "Total number of message delivery attempts.",
+    "available_qty": "Total physical quantity currently held in the inventory lot.",
+    "battery_pct": "Remaining battery percentage reported by the device.",
+    "capabilities": "JSON object describing actions and features supported by the device.",
+    "confidence": "Model confidence value from 0 through 1.",
+    "control_mode": "Device control mode, such as automatic, manual, offline, maintenance, or safety stop.",
+    "description": "Operator-readable description of the cause and circumstances of the safety incident.",
+    "direction": "Message direction: inbound or outbound.",
+    "failure_reason": "Specific reason the job or execution step failed.",
+    "geometry": "JSON geometry describing a point, line, or polygon in map coordinates.",
+    "health": "Device health code, such as healthy, warning, error, or unreachable.",
+    "idempotency_key": "Business key that prevents duplicate execution of the same request.",
+    "is_terminal": "Indicates whether this recovery action is the final step of the episode.",
+    "message": "Operator-readable summary of the operation event.",
+    "note": "Additional explanation for the inventory movement.",
+    "notes": "Review notes and cautions for the recovery reference node.",
+    "pose_x": "X coordinate in the map frame, in meters.",
+    "pose_y": "Y coordinate in the map frame, in meters.",
+    "pose_yaw": "Heading in the map frame, in radians.",
+    "priority": "Job priority code: critical, high, normal, or low.",
+    "priority_rank": "Automatically calculated numeric value used to sort priorities.",
+    "progress": "Progress of the current job step, from 0 through 1.",
+    "quantity_after": "Available quantity after applying the inventory movement.",
+    "quantity_delta": "Amount added to or removed from the available quantity.",
+    "reliability_alpha": "Accumulated beta-distribution alpha value for successful recovery-node outcomes.",
+    "reliability_beta": "Accumulated beta-distribution beta value for failed recovery-node outcomes.",
+    "reserved_after": "Reserved quantity after applying the inventory movement.",
+    "reserved_delta": "Amount added to or removed from the reserved quantity.",
+    "retry_count": "Total number of retries for this job step.",
+    "revision": "Optimistic-lock version used to detect concurrent updates.",
+    "reward_components": "JSON object containing individual reward components for reinforcement learning.",
+    "step_no": "Execution order within the same job or recovery episode.",
+    "target_pose": "JSON object containing the target position and orientation for the recovery action.",
+    "unit_weight_kg": "Weight of one product unit in kilograms.",
+}
+
+COLUMN_COMMENTS = {
+    column: _ENGLISH_COLUMN_OVERRIDES.get(column, _default_english_comment(column))
+    for column in COLUMN_COMMENTS
+}
+
 STATE_COMMENTS = {
     "locations": "위치의 현재 운영 상태이며 available, reserved, occupied, blocked, maintenance 중 하나",
     "inventory_lots": "재고 로트의 입고 대기, 보관, 보류, 소진, 만료 또는 손상 상태",
@@ -303,6 +401,17 @@ STATE_COMMENTS = {
     "device_states": "장비가 보고한 현재 동작 상태 코드",
     "integration_messages": "메시지의 pending, sent, acknowledged, failed 또는 dead 상태",
     "incidents": "안전 사건의 open, acknowledged, mitigating, resolved 또는 closed 상태",
+}
+
+STATE_COMMENTS = {
+    "locations": "Current location status: available, reserved, occupied, blocked, or maintenance.",
+    "inventory_lots": "Inventory-lot status, such as pending receipt, stored, held, depleted, expired, or damaged.",
+    "jobs": "Job lifecycle status from pending and planning through execution, completion, failure, cancellation, or safety hold.",
+    "job_steps": "Job-step status: pending, queued, running, succeeded, failed, held, or cancelled.",
+    "reservations": "Reservation status: reserved, in use, released, expired, or cancelled.",
+    "device_states": "Current operating-state code reported by the device.",
+    "integration_messages": "Message status: pending, sent, acknowledged, failed, or dead.",
+    "incidents": "Safety-incident status: open, acknowledged, mitigating, resolved, or closed.",
 }
 
 TABLE_COLUMN_OVERRIDES = {
@@ -322,12 +431,29 @@ TABLE_COLUMN_OVERRIDES = {
     ("recovery_steps", "reference_node_uuid"): "행동 목표로 선택한 FMS 복구 기준 노드 UUID이며 물리적 외래 키는 두지 않음",
 }
 
+TABLE_COLUMN_OVERRIDES = {
+    ("locations", "name"): "Location name displayed in operator interfaces.",
+    ("locations", "metadata"): "JSON object containing location-specific attributes and external integration values.",
+    ("map_features", "active"): "Indicates whether this feature is used by operating rules for the map revision.",
+    ("workers", "name"): "Worker name displayed in operator interfaces and audit records.",
+    ("workers", "active"): "Indicates whether this worker account may participate in job requests and approvals.",
+    ("devices", "name"): "Device name displayed in operator interfaces.",
+    ("devices", "active"): "Indicates whether this device is eligible for dispatch and job assignment.",
+    ("job_items", "metadata"): "JSON object containing item-specific verification and external-order values.",
+    ("jobs", "context"): "JSON object containing the job origin and extended context from external requests.",
+    ("incidents", "geometry"): "JSON geometry describing the point or area affected by the safety incident.",
+    ("incidents", "context"): "JSON object containing sensor observations, response procedures, and other incident details.",
+    ("operation_events", "payload"): "JSON object containing detailed observations and decision evidence for the event type.",
+    ("artifacts", "metadata"): "JSON object containing artifact-specific details such as codec, resolution, and dataset split.",
+    ("recovery_steps", "reference_node_uuid"): "UUID of the FMS recovery reference node selected as the action target; no physical cross-database foreign key is used.",
+}
+
 CREATE_TABLE_RE = re.compile(
     r"CREATE TABLE IF NOT EXISTS\s+`?(?P<table>[a-z0-9_]+)`?\s*\("
     r"(?P<body>.*?)\n\) ENGINE=InnoDB(?:\s+COMMENT='(?:''|[^'])*')?;",
     re.DOTALL,
 )
-KOREAN_RE = re.compile(r"[가-힣]")
+NON_ASCII_RE = re.compile(r"[^\x00-\x7f]")
 COMMENT_RE = re.compile(r"\s+COMMENT\s+'(?:''|[^'])*'\s*$", re.IGNORECASE)
 
 
@@ -393,15 +519,15 @@ def render_schema(source: str) -> tuple[str, dict[str, list[str]]]:
                 comment = comment_for(table, name)
             except KeyError as error:
                 raise ValueError(f"Missing column comment: {table}.{name}") from error
-            if not KOREAN_RE.search(comment):
-                raise ValueError(f"Comment is not Korean: {table}.{name}")
+            if NON_ASCII_RE.search(comment):
+                raise ValueError(f"Comment is not ASCII English: {table}.{name}")
             clean = COMMENT_RE.sub("", definition.rstrip())
             rendered.append(f"{clean} COMMENT '{escape_sql_comment(comment)}'")
             columns.append(name)
         seen[table] = columns
         database, _logical_name, table_comment = TABLE_META[table]
-        if not KOREAN_RE.search(table_comment):
-            raise ValueError(f"Table comment is not Korean: {database}.{table}")
+        if NON_ASCII_RE.search(table_comment):
+            raise ValueError(f"Table comment is not ASCII English: {database}.{table}")
         body = ",".join(rendered)
         return (
             f"CREATE TABLE IF NOT EXISTS {table} ({body}\n) ENGINE=InnoDB "
@@ -420,7 +546,7 @@ def render_schema(source: str) -> tuple[str, dict[str, list[str]]]:
 
 def render_migration(schema: str) -> str:
     lines = [
-        "-- Add Korean table and column comments to an existing v4 database.",
+        "-- Replace table and column comments with English metadata in an existing v4 database.",
         "-- This migration changes metadata only and does not delete application data.",
         "",
     ]
@@ -485,8 +611,8 @@ def update_dictionary(*, check: bool) -> None:
         infos = {info.filename: info for info in workbook.infolist()}
     root = ET.fromstring(entries["xl/worksheets/sheet1.xml"])
     rows = root.findall(f".//{{{namespace}}}row")
-    set_inline_cell(rows[0], "I", "column_description_ko", namespace)
-    set_inline_cell(rows[0], "J", "table_description_ko", namespace)
+    set_inline_cell(rows[0], "I", "column_description_en", namespace)
+    set_inline_cell(rows[0], "J", "table_description_en", namespace)
     seen: set[tuple[str, str]] = set()
     mismatches: list[str] = []
     for row in rows[1:]:
@@ -573,7 +699,7 @@ def main() -> None:
         if source != rendered_schema:
             raise ValueError("schema_mysql.sql comments are not synchronized")
         if not MIGRATION_PATH.exists() or MIGRATION_PATH.read_text(encoding="utf-8") != rendered_migration:
-            raise ValueError("Korean comment migration is not synchronized")
+            raise ValueError("English comment migration is not synchronized")
         update_dictionary(check=True)
         update_diagram(check=True)
         print("Schema metadata check: 18 tables and 253 columns are synchronized.")
@@ -583,7 +709,7 @@ def main() -> None:
     MIGRATION_PATH.write_text(rendered_migration, encoding="utf-8")
     update_dictionary(check=False)
     update_diagram(check=False)
-    print("Updated Korean comments for 18 tables and 253 columns.")
+    print("Updated English comments for 18 tables and 253 columns.")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,4 @@
 """SR_03 RobotStatus를 1초 heartbeat와 상태 변경 시 발행하는 ROS node."""
-from __future__ import annotations
 
 from time import monotonic
 

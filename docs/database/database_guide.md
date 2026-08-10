@@ -1470,8 +1470,8 @@ ALTER TABLE jobs ADD CONSTRAINT chk_jobs_state CHECK (state IN
 | [db/schema_mysql.sql](../../db/schema_mysql.sql) | DDL 갱신 + 주석 갱신 |
 | `db/migrations/` | 이미 데이터가 있는 DB에 적용할 비파괴 변경 SQL 추가 |
 | [db/seed_dev.sql](../../db/seed_dev.sql) | 개발 시드 데이터 정합성 확인 |
-| [data_dictionary.xlsx](data_dictionary.xlsx) | 컬럼·테이블 한국어 설명 동기화 |
-| [schema_diagram.drawio](schema_diagram.drawio) | 영문 물리명과 한국어 논리명 동기화 |
+| [data_dictionary.xlsx](data_dictionary.xlsx) | 컬럼·테이블 영문 설명 동기화 |
+| [schema_diagram.drawio](schema_diagram.drawio) | 영문 물리명과 영문 논리명 동기화 |
 | 이 문서 | 열거값 표, 테이블 가이드, 안티패턴 갱신 |
 | [Recovery Memory](../architecture/recovery_memory.md) | Memory 의미가 바뀌면 함께 갱신 |
 | `compose.db.yaml` / `compose.db_test.yaml` | 초기화 스크립트는 **최초 볼륨 생성 시에만** 실행된다 |
@@ -1480,8 +1480,9 @@ ALTER TABLE jobs ADD CONSTRAINT chk_jobs_state CHECK (state IN
 
 > `docker-entrypoint-initdb.d` 마운트는 **데이터 볼륨이 비어 있을 때만** 동작한다. 이미 데이터가 있는 개발 환경에 스키마 변경을 반영하려면 migration을 실행한다. `compose.db_test.yaml`은 `/var/lib/mysql`을 tmpfs로 두어 매 기동마다 스키마가 새로 적용된다.
 
-테이블·컬럼 설명을 바꿀 때는 영문 물리 이름과 코드 값을 번역하지 않는다. 한국어
-설명만 수정한 뒤 다음 명령으로 SQL, migration, XLSX, draw.io의 일치 여부를 확인한다.
+테이블·컬럼 설명을 바꿀 때는 물리 이름과 코드 값을 변경하지 않는다. 웹 표시 호환성을
+위해 설명은 ASCII 영문으로 작성한 뒤 다음 명령으로 SQL, migration, XLSX, draw.io의
+일치 여부를 확인한다.
 
 ```bash
 python3 db/tools/sync_schema_comments.py --check
