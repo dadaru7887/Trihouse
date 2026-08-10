@@ -1,3 +1,4 @@
+import ast
 import json
 from pathlib import Path
 import re
@@ -125,3 +126,21 @@ def test_operational_cells_cover_capture_calibration_live_and_cleanup(notebook):
     }
 
     assert {"capture", "calibrate", "live-detection", "cleanup"} <= roles
+
+
+def test_configured_checkerboard_has_9_by_7_internal_corners(notebook):
+    settings_cell = next(
+        cell for cell in notebook["cells"] if cell.get("id") == "environment-settings"
+    )
+    tree = ast.parse("".join(settings_cell["source"]))
+    assignment = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "CHECKERBOARD"
+            for target in node.targets
+        )
+    )
+
+    assert ast.literal_eval(assignment.value) == (9, 7)
