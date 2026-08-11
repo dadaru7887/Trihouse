@@ -40,14 +40,16 @@ class InboundHappyPathTest(unittest.TestCase):
         pinky_ready = successful_completion('READY', ActorRole.PINKY, 'PK-01', 'ready-pinky')
         omx_ready = successful_completion('READY', ActorRole.OMX, 'OMX-01', 'ready-omx')
         self.assertEqual((), tasks.record_completion(*pinky_ready, safety_approved=True).commands)
-        self.assertEqual('NAVIGATE_STORAGE', tasks.record_completion(*omx_ready, safety_approved=True).commands[0].command_kind)
+        transport_command = tasks.record_completion(*omx_ready, safety_approved=True).commands[0]
+        self.assertEqual('NAVIGATE_STORAGE', transport_command.command_kind)
 
-        transport_done = successful_completion('TRANSPORT', ActorRole.PINKY, 'PK-01', 'arrived')
-        self.assertEqual('START_PLACE', tasks.record_completion(*transport_done, safety_approved=True).commands[0].command_kind)
+        transport_done = successful_completion('TRANSPORT', ActorRole.PINKY, 'PK-01', 'arrived', transport_command)
+        place_command = tasks.record_completion(*transport_done, safety_approved=True).commands[0]
+        self.assertEqual('START_PLACE', place_command.command_kind)
         self.assertEqual(0, inventory.physical_quantity('ice-cream'))
-        inventory.finalize_inbound('job-1', 'lot-1', 'ice-cream', 2, date(2026, 9, 1))
-        placed = successful_completion('PLACE_SHELF', ActorRole.OMX, 'OMX-01', 'placed')
+        placed = successful_completion('PLACE_SHELF', ActorRole.OMX, 'OMX-01', 'placed', place_command)
         self.assertEqual((), tasks.record_completion(*placed, safety_approved=True).commands)
+        inventory.finalize_inbound('job-1', 'lot-1', 'ice-cream', 2, date(2026, 9, 1))
 
         self.assertEqual(2, inventory.physical_quantity('ice-cream'))
         self.assertEqual(('S-01', 'A-01'), inventory.location_of('lot-1'))

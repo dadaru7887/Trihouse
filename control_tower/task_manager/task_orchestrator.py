@@ -48,6 +48,8 @@ class _JobPlan:
     assignment_revision: int = -1
     actors: dict[ActorRole, str] | None = None
     deferred_result_id: str = ""
+    deferred_stage_id: str = ""
+    deferred_command_uuid: str = ""
 
 
 class TaskOrchestrator:
@@ -104,10 +106,7 @@ class TaskOrchestrator:
         safety_approved: bool,
     ) -> OrchestrationResult:
         self._validate_same_execution(event, fact)
-        outcome = classify_execution(fact)
-        if outcome.success != event.success:
-            raise ValueError("completion success must match classified execution outcome")
-        if not self._store.record_execution(event, fact, outcome):
+        if self._store.has_execution(event.event_id):
             return OrchestrationResult(
                 False,
                 duplicate=True,
@@ -123,7 +122,23 @@ class TaskOrchestrator:
         if plan.actors is None or plan.actors.get(event.actor_role) != event.actor_id:
             return OrchestrationResult(False, reason_code="UNEXPECTED_ACTOR")
 
-        if self._is_gate(stage):
+        is_gate = self._is_gate(stage)
+        if not is_gate:
+            command_rejection = self._command_rejection(event, fact, stage)
+            if command_rejection:
+                return OrchestrationResult(False, reason_code=command_rejection)
+
+        outcome = classify_execution(fact)
+        if outcome.success != event.success:
+            raise ValueError("completion success must match classified execution outcome")
+        if not self._store.record_execution(event, fact, outcome):
+            return OrchestrationResult(
+                False,
+                duplicate=True,
+                reason_code="DUPLICATE_EVENT",
+            )
+
+        if is_gate:
             decision = self._gate.record(event)
             if not decision.released:
                 return OrchestrationResult(
@@ -135,8 +150,14 @@ class TaskOrchestrator:
                 if self._stages.state_of(event.job_id) is not JobState.HELD:
                     self._stages.hold(event.job_id, reason="SAFETY_NOT_APPROVED")
                 plan.deferred_result_id = event.event_id
+                plan.deferred_stage_id = stage.stage_id
+                plan.deferred_command_uuid = ""
                 return OrchestrationResult(True, reason_code="GATE_RELEASED_DEFERRED")
-            commands = self._complete_and_start_next(event.job_id, event.event_id)
+            commands = self._complete_and_start_next(
+                event.job_id,
+                stage.stage_id,
+                event.event_id,
+            )
             return OrchestrationResult(
                 True,
                 commands=commands,
@@ -152,8 +173,15 @@ class TaskOrchestrator:
                 self._stages.hold(event.job_id, reason="SAFETY_NOT_APPROVED")
             if not plan.deferred_result_id:
                 plan.deferred_result_id = event.event_id
+                plan.deferred_stage_id = stage.stage_id
+                plan.deferred_command_uuid = fact.command_uuid
             return OrchestrationResult(True, reason_code="COMPLETION_DEFERRED")
-        commands = self._complete_and_start_next(event.job_id, event.event_id)
+        commands = self._complete_and_start_next(
+            event.job_id,
+            stage.stage_id,
+            event.event_id,
+            command_uuid=fact.command_uuid,
+        )
         return OrchestrationResult(True, commands=commands, reason_code="STEP_COMPLETED")
 
     def hold(self, job_id: str, *, reason: str) -> None:
@@ -174,8 +202,17 @@ class TaskOrchestrator:
                 )
             return OrchestrationResult(True, reason_code="JOB_RESUMED")
         result_id = plan.deferred_result_id
+        stage_id = plan.deferred_stage_id
+        command_uuid = plan.deferred_command_uuid
         plan.deferred_result_id = ""
-        commands = self._complete_and_start_next(job_id, result_id)
+        plan.deferred_stage_id = ""
+        plan.deferred_command_uuid = ""
+        commands = self._complete_and_start_next(
+            job_id,
+            stage_id,
+            result_id,
+            command_uuid=command_uuid,
+        )
         return OrchestrationResult(
             True,
             commands=commands,
@@ -188,15 +225,22 @@ class TaskOrchestrator:
         *,
         assignment_revision: int,
         pinky_id: str,
-    ) -> None:
+    ) -> OrchestrationResult:
         plan = self._plan(job_id)
         if plan.actors is None:
             raise ValueError("job must be assigned before reassignment")
         if assignment_revision <= plan.assignment_revision:
             raise ValueError("reassignment revision must increase")
+        old_revision = plan.assignment_revision
+        self._store.invalidate_commands(
+            job_id,
+            assignment_revision=old_revision,
+        )
         plan.assignment_revision = assignment_revision
         plan.actors[ActorRole.PINKY] = pinky_id
         plan.deferred_result_id = ""
+        plan.deferred_stage_id = ""
+        plan.deferred_command_uuid = ""
         stage = self._current_spec(job_id)
         if stage is not None and self._is_gate(stage):
             self._gate.reassign_pinky(
@@ -204,8 +248,21 @@ class TaskOrchestrator:
                 assignment_revision=assignment_revision,
                 pinky_id=pinky_id,
             )
+            return OrchestrationResult(True, reason_code="GATE_REASSIGNED")
+        if stage is not None and self._stages.stage_state(
+            job_id,
+            stage.stage_id,
+        ) is StageState.RUNNING:
+            command = self._new_command(job_id, stage)
+            return OrchestrationResult(
+                True,
+                commands=(command,) if command is not None else (),
+                reason_code="COMMAND_REASSIGNED",
+            )
+        return OrchestrationResult(True, reason_code="JOB_REASSIGNED")
 
     def cancel(self, job_id: str) -> None:
+        self._store.invalidate_commands(job_id)
         self._gate.cancel(job_id)
         self._stages.cancel(job_id)
 
@@ -235,15 +292,19 @@ class TaskOrchestrator:
     def _complete_and_start_next(
         self,
         job_id: str,
+        expected_stage_id: str,
         result_id: str,
+        *,
+        command_uuid: str = "",
     ) -> tuple[TaskCommand, ...]:
-        current = self._stages.current_stage(job_id)
-        if current is None or not self._stages.complete(
+        if not expected_stage_id or not self._stages.complete(
             job_id,
-            stage_id=current,
+            stage_id=expected_stage_id,
             result_id=result_id,
         ):
             return ()
+        if command_uuid:
+            self._store.complete_command(command_uuid)
         if self._stages.state_of(job_id) is JobState.COMPLETED:
             return ()
         return self._start_current(job_id)
@@ -275,6 +336,35 @@ class TaskOrchestrator:
             method_code=stage.method_code,
         )
         return command if self._store.save_command(command) else None
+
+    def _command_rejection(
+        self,
+        event: CompletionEvent,
+        fact: ExecutionFact,
+        stage: StageSpec,
+    ) -> str:
+        command = self._store.command_by_uuid(fact.command_uuid)
+        if command is None:
+            return "UNKNOWN_COMMAND"
+        if not self._store.is_command_active(command.command_uuid):
+            return "INACTIVE_COMMAND"
+        expected = (
+            event.job_id,
+            stage.stage_id,
+            event.assignment_revision,
+            event.actor_role.value,
+            event.actor_id,
+            fact.method_code,
+        )
+        actual = (
+            command.job_id,
+            command.job_step_id,
+            command.assignment_revision,
+            command.actor_role,
+            command.actor_id,
+            command.method_code,
+        )
+        return "COMMAND_MISMATCH" if expected != actual else ""
 
     def _current_spec(self, job_id: str) -> StageSpec | None:
         stage_id = self._stages.current_stage(job_id)

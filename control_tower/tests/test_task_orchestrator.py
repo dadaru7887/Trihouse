@@ -49,6 +49,8 @@ def _completion(
     success: bool = True,
     revision: int = 1,
     step_id: str = "READY_TO_TRANSFER",
+    command_uuid: str | None = None,
+    method_code: str = "ARRIVAL_CONFIRMATION",
 ) -> tuple[CompletionEvent, ExecutionFact]:
     event = CompletionEvent(
         event_id=event_id,
@@ -66,8 +68,8 @@ def _completion(
         assignment_revision=revision,
         actor_role=role,
         actor_id=actor_id,
-        command_uuid=f"command-{event_id}",
-        method_code="ARRIVAL_CONFIRMATION",
+        command_uuid=command_uuid or f"command-{event_id}",
+        method_code=method_code,
         command_outcome=(
             AttemptOutcome.SUCCEEDED if success else AttemptOutcome.FAILED
         ),
@@ -254,13 +256,18 @@ def test_single_actor_completion_while_held_advances_once_after_safe_resume() ->
     pinky = _completion("ready-p", ActorRole.PINKY, "PK-01")
     omx = _completion("ready-o", ActorRole.OMX, "OMX-01")
     orchestrator.record_completion(*pinky, safety_approved=True)
-    orchestrator.record_completion(*omx, safety_approved=True)
+    transfer_command = orchestrator.record_completion(
+        *omx,
+        safety_approved=True,
+    ).commands[0]
     orchestrator.hold("job-1", reason="PERSON_DETECTED")
     transfer = _completion(
         "transfer-done",
         ActorRole.OMX,
         "OMX-01",
         step_id="TRANSFER",
+        command_uuid=transfer_command.command_uuid,
+        method_code=transfer_command.method_code,
     )
 
     held_result = orchestrator.record_completion(
@@ -274,3 +281,64 @@ def test_single_actor_completion_while_held_advances_once_after_safe_resume() ->
     assert resumed.commands[0].command_kind == "VERIFY_TRANSFER"
     assert orchestrator.stage_state("job-1", "TRANSFER") is StageState.SUCCEEDED
     assert orchestrator.stage_state("job-1", "VERIFY") is StageState.RUNNING
+
+
+def test_non_gate_result_must_match_an_active_issued_command_and_method() -> None:
+    """job/step만 맞춘 위조·stale 결과가 단계를 완료하지 못하게 한다."""
+    orchestrator, store = _orchestrator()
+    pinky = _completion("ready-p", ActorRole.PINKY, "PK-01")
+    omx = _completion("ready-o", ActorRole.OMX, "OMX-01")
+    orchestrator.record_completion(*pinky, safety_approved=True)
+    issued = orchestrator.record_completion(*omx, safety_approved=True).commands[0]
+    fabricated = _completion(
+        "fabricated",
+        ActorRole.OMX,
+        "OMX-01",
+        step_id="TRANSFER",
+        command_uuid="00000000-0000-0000-0000-000000000000",
+        method_code=issued.method_code,
+    )
+
+    rejected = orchestrator.record_completion(
+        *fabricated,
+        safety_approved=True,
+    )
+
+    assert rejected.accepted is False
+    assert rejected.reason_code == "UNKNOWN_COMMAND"
+    assert orchestrator.stage_state("job-1", "TRANSFER") is StageState.RUNNING
+    assert len(store.executions) == 2
+
+
+def test_cancel_invalidates_pending_physical_command() -> None:
+    """취소 후 outbox dispatcher가 이미 생성된 물리 명령을 보내지 못하게 한다."""
+    orchestrator, store = _orchestrator()
+    pinky = _completion("ready-p", ActorRole.PINKY, "PK-01")
+    omx = _completion("ready-o", ActorRole.OMX, "OMX-01")
+    orchestrator.record_completion(*pinky, safety_approved=True)
+    command = orchestrator.record_completion(*omx, safety_approved=True).commands[0]
+
+    orchestrator.cancel("job-1")
+
+    assert store.is_command_active(command.command_uuid) is False
+    assert orchestrator.job_state("job-1") is JobState.CANCELLED
+
+
+def test_reassignment_invalidates_old_command_and_creates_fenced_replacement() -> None:
+    """재배정 후 이전 revision 명령이 전송되거나 결과로 수락되지 않게 한다."""
+    orchestrator, store = _orchestrator()
+    pinky = _completion("ready-p", ActorRole.PINKY, "PK-01")
+    omx = _completion("ready-o", ActorRole.OMX, "OMX-01")
+    orchestrator.record_completion(*pinky, safety_approved=True)
+    old_command = orchestrator.record_completion(*omx, safety_approved=True).commands[0]
+
+    reassigned = orchestrator.reassign_pinky(
+        "job-1",
+        assignment_revision=2,
+        pinky_id="PK-02",
+    )
+
+    assert store.is_command_active(old_command.command_uuid) is False
+    assert len(reassigned.commands) == 1
+    assert reassigned.commands[0].assignment_revision == 2
+    assert reassigned.commands[0].command_uuid != old_command.command_uuid

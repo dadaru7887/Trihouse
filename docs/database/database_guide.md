@@ -692,6 +692,7 @@ ON DUPLICATE KEY UPDATE
 | policy/model 계보, `data_quality_status` | 재현 가능한 학습 export의 필터가 된다 |
 
 `event_uuid`, `command_uuid`, `(job_step_id, assignment_revision, actor_role, attempt_no)`는 각각 유일하다. 명령 생성 시에는 아직 결과 이벤트가 없으므로 `event_uuid`는 NULL이며, terminal 결과를 반영할 때 채운다.
+`state='finished'`인 시도는 `started_at`과 `completed_at`이 모두 있어야 하며 `completed_at >= started_at`이어야 한다. 실행 전 취소는 attempt를 finished로 위장하지 않고 별도 취소 감사 이벤트로 남긴다.
 
 ### 5.11 `reservations` — 자원 점유
 

@@ -7,6 +7,7 @@ from control_tower.task_manager.execution_result import (
     ExecutionFact,
     FailureDomain,
 )
+from control_tower.task_manager.execution_store import TaskCommand
 
 
 def successful_completion(
@@ -14,6 +15,7 @@ def successful_completion(
     role: ActorRole,
     actor_id: str,
     event_id: str,
+    command: TaskCommand | None = None,
 ) -> tuple[CompletionEvent, ExecutionFact]:
     event = CompletionEvent(event_id, "job-1", step_id, 1, role, actor_id, True)
     fact = ExecutionFact(
@@ -23,8 +25,8 @@ def successful_completion(
         assignment_revision=1,
         actor_role=role,
         actor_id=actor_id,
-        command_uuid=f"command-{event_id}",
-        method_code="HARDWARE_CONFIRMATION",
+        command_uuid=command.command_uuid if command else f"command-{event_id}",
+        method_code=command.method_code if command else "HARDWARE_CONFIRMATION",
         command_outcome=AttemptOutcome.SUCCEEDED,
         failure_domain=FailureDomain.NONE,
     )

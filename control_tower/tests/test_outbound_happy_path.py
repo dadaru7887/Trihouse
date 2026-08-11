@@ -40,26 +40,30 @@ class OutboundHappyPathTest(unittest.TestCase):
         pinky_ready = successful_completion('READY', ActorRole.PINKY, 'PK-01', 'ready-pinky')
         omx_ready = successful_completion('READY', ActorRole.OMX, 'OMX-01', 'ready-omx')
         self.assertEqual((), tasks.record_completion(*pinky_ready, safety_approved=True).commands)
-        self.assertEqual('START_PICK', tasks.record_completion(*omx_ready, safety_approved=True).commands[0].command_kind)
+        pick_command = tasks.record_completion(*omx_ready, safety_approved=True).commands[0]
+        self.assertEqual('START_PICK', pick_command.command_kind)
 
         omx = OmxWorkflow(retry_offsets=((0.0, 0.0),))
         omx.start('job-1', order_id='order-1', expected_items=('milk-1',))
         self.assertTrue(omx.authorize_pick('job-1', 'milk-1', qr_matches=True, marker_valid=True).accepted)
         omx.pick_succeeded('job-1', 'milk-1')
-        pick_done = successful_completion('PICK', ActorRole.OMX, 'OMX-01', 'pick-done')
-        self.assertEqual('START_LOAD', tasks.record_completion(*pick_done, safety_approved=True).commands[0].command_kind)
+        pick_done = successful_completion('PICK', ActorRole.OMX, 'OMX-01', 'pick-done', pick_command)
+        load_command = tasks.record_completion(*pick_done, safety_approved=True).commands[0]
+        self.assertEqual('START_LOAD', load_command.command_kind)
         self.assertTrue(omx.confirm_handover('job-1', loaded_items=('milk-1',), gripper_open=True, retreated=True).accepted)
-        load_done = successful_completion('LOAD', ActorRole.OMX, 'OMX-01', 'load-done')
-        self.assertEqual('NAVIGATE_PACKING', tasks.record_completion(*load_done, safety_approved=True).commands[0].command_kind)
+        load_done = successful_completion('LOAD', ActorRole.OMX, 'OMX-01', 'load-done', load_command)
+        transport_command = tasks.record_completion(*load_done, safety_approved=True).commands[0]
+        self.assertEqual('NAVIGATE_PACKING', transport_command.command_kind)
 
         stations = PackingStationPolicy(); stations.register('PACK-1', worker_present=True)
         stations.reserve('PACK-1', job_id='job-1', robot_id='PK-01')
         stations.arrive('PACK-1', job_id='job-1', robot_id='PK-01')
-        transport_done = successful_completion('TRANSPORT', ActorRole.PINKY, 'PK-01', 'transport-done')
-        self.assertEqual('CONFIRM_HANDOVER', tasks.record_completion(*transport_done, safety_approved=True).commands[0].command_kind)
-        inventory.finalize_outbound('job-1', {'lot-1': 1})
-        handover_done = successful_completion('HANDOVER', ActorRole.OMX, 'OMX-01', 'handover-done')
+        transport_done = successful_completion('TRANSPORT', ActorRole.PINKY, 'PK-01', 'transport-done', transport_command)
+        handover_command = tasks.record_completion(*transport_done, safety_approved=True).commands[0]
+        self.assertEqual('CONFIRM_HANDOVER', handover_command.command_kind)
+        handover_done = successful_completion('HANDOVER', ActorRole.OMX, 'OMX-01', 'handover-done', handover_command)
         self.assertEqual((), tasks.record_completion(*handover_done, safety_approved=True).commands)
+        inventory.finalize_outbound('job-1', {'lot-1': 1})
         stations.release('PACK-1', job_id='job-1')
 
         self.assertEqual(0, inventory.physical_quantity('milk'))

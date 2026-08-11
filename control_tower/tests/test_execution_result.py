@@ -4,6 +4,7 @@ from control_tower.task_manager.execution_result import (
     ActorRole,
     AttemptOutcome,
     Criterion,
+    DataQualityStatus,
     ExecutionFact,
     FailureDomain,
     classify_execution,
@@ -40,7 +41,8 @@ def _fact(**overrides: object) -> ExecutionFact:
         "policy_version": "1.0",
         "model_name": "",
         "model_version": "",
-        "data_quality_status": "VALID",
+        "data_quality_status": DataQualityStatus.COMPLETE,
+        "required_criterion_codes": (),
     }
     values.update(overrides)
     return ExecutionFact(**values)
@@ -114,3 +116,30 @@ def test_cancelled_command_cannot_be_relabelled_as_failed_or_succeeded() -> None
     assert outcome.outcome is AttemptOutcome.CANCELLED
     assert outcome.outcome_reason_code == "OPERATOR_CANCELLED"
     assert outcome.failure_domain is FailureDomain.OPERATOR
+
+
+def test_incomplete_data_cannot_be_silently_labelled_success() -> None:
+    """필수 관측 누락을 ALL_CRITERIA_PASSED로 만드는 학습 오염을 막는다."""
+    outcome = classify_execution(
+        _fact(
+            data_quality_status=DataQualityStatus.INCOMPLETE,
+            detail="도착 pose 관측 누락",
+        )
+    )
+
+    assert outcome.success is False
+    assert outcome.outcome is AttemptOutcome.FAILED
+    assert outcome.outcome_reason_code == "UNCLASSIFIED_RESULT"
+    assert outcome.failure_domain is FailureDomain.UNKNOWN
+
+
+def test_missing_required_criterion_is_unclassified_instead_of_success() -> None:
+    """method별 필수 성공 기준 일부가 없는데 성공 처리되는 회귀를 막는다."""
+    outcome = classify_execution(
+        _fact(
+            required_criterion_codes=("TARGET_REACHED", "ROBOT_STOPPED"),
+        )
+    )
+
+    assert outcome.success is False
+    assert outcome.outcome_reason_code == "UNCLASSIFIED_RESULT"

@@ -44,6 +44,26 @@ class ExecutionStore(Protocol):
     def save_command(self, command: TaskCommand) -> bool:
         """새 idempotency key면 저장하고 True, 기존 명령이면 False를 반환한다."""
 
+    def has_execution(self, event_id: str) -> bool:
+        """이미 terminal 실행 사실을 저장한 event인지 반환한다."""
+
+    def command_by_uuid(self, command_uuid: str) -> TaskCommand | None:
+        """발행한 명령을 UUID로 조회한다."""
+
+    def is_command_active(self, command_uuid: str) -> bool:
+        """명령이 아직 결과 대기 또는 전송 대상인지 반환한다."""
+
+    def complete_command(self, command_uuid: str) -> None:
+        """terminal 결과를 수락한 명령을 비활성화한다."""
+
+    def invalidate_commands(
+        self,
+        job_id: str,
+        *,
+        assignment_revision: int | None = None,
+    ) -> int:
+        """취소·재배정으로 더 이상 실행하면 안 되는 명령을 무효화한다."""
+
 
 class InMemoryExecutionStore:
     """단위·통합 테스트에서 실제 중복 방지 동작을 검증하는 저장소."""
@@ -52,7 +72,10 @@ class InMemoryExecutionStore:
         self.executions: list[StoredExecution] = []
         self.commands: list[TaskCommand] = []
         self._event_ids: set[str] = set()
+        self._terminal_command_uuids: set[str] = set()
         self._command_keys: set[str] = set()
+        self._commands_by_uuid: dict[str, TaskCommand] = {}
+        self._active_command_uuids: set[str] = set()
 
     def record_execution(
         self,
@@ -60,9 +83,13 @@ class InMemoryExecutionStore:
         fact: ExecutionFact,
         outcome: ExecutionOutcome,
     ) -> bool:
-        if event.event_id in self._event_ids:
+        if (
+            event.event_id in self._event_ids
+            or fact.command_uuid in self._terminal_command_uuids
+        ):
             return False
         self._event_ids.add(event.event_id)
+        self._terminal_command_uuids.add(fact.command_uuid)
         self.executions.append(StoredExecution(event, fact, outcome))
         return True
 
@@ -71,4 +98,36 @@ class InMemoryExecutionStore:
             return False
         self._command_keys.add(command.idempotency_key)
         self.commands.append(command)
+        self._commands_by_uuid[command.command_uuid] = command
+        self._active_command_uuids.add(command.command_uuid)
         return True
+
+    def has_execution(self, event_id: str) -> bool:
+        return event_id in self._event_ids
+
+    def command_by_uuid(self, command_uuid: str) -> TaskCommand | None:
+        return self._commands_by_uuid.get(command_uuid)
+
+    def is_command_active(self, command_uuid: str) -> bool:
+        return command_uuid in self._active_command_uuids
+
+    def complete_command(self, command_uuid: str) -> None:
+        self._active_command_uuids.discard(command_uuid)
+
+    def invalidate_commands(
+        self,
+        job_id: str,
+        *,
+        assignment_revision: int | None = None,
+    ) -> int:
+        targets = {
+            command_uuid
+            for command_uuid in self._active_command_uuids
+            if (command := self._commands_by_uuid[command_uuid]).job_id == job_id
+            and (
+                assignment_revision is None
+                or command.assignment_revision == assignment_revision
+            )
+        }
+        self._active_command_uuids.difference_update(targets)
+        return len(targets)

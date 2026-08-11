@@ -359,7 +359,7 @@ CREATE TABLE IF NOT EXISTS job_step_attempts (
       AND outcome_reason_code IS NULL AND completed_at IS NULL) OR
      (state = 'finished' AND outcome IS NOT NULL AND success IS NOT NULL
       AND outcome_reason_code IS NOT NULL AND completed_at IS NOT NULL
-      AND (started_at IS NULL OR completed_at >= started_at))),
+      AND started_at IS NOT NULL AND completed_at >= started_at)),
   CONSTRAINT chk_attempts_success_outcome CHECK
     ((success IS NULL AND outcome IS NULL) OR
      (success = 1 AND outcome = 'succeeded' AND failure_domain = 'none') OR

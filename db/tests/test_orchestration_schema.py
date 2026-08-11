@@ -84,6 +84,7 @@ def test_attempt_history_keeps_structured_success_failure_and_lineage() -> None:
     assert "UNIQUE KEY uq_attempts_sequence" in attempts
     assert "(job_step_id, assignment_revision, actor_role, attempt_no)" in attempts
     assert "chk_attempts_terminal" in attempts
+    assert "started_at IS NOT NULL AND completed_at >= started_at" in attempts
 
 
 def test_audit_correlation_and_transactional_outbox_dedupe_remain_available() -> None:

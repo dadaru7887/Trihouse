@@ -46,6 +46,14 @@ class FailureDomain(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class DataQualityStatus(StrEnum):
+    """실행 결과가 학습·판정에 사용 가능한 정도."""
+
+    COMPLETE = "complete"
+    INCOMPLETE = "incomplete"
+    INVALID = "invalid"
+
+
 @dataclass(frozen=True)
 class CompletionEvent:
     """Gate와 단계 진행에 필요한 최소 완료 이벤트."""
@@ -107,7 +115,8 @@ class ExecutionFact:
     policy_version: str = ""
     model_name: str = ""
     model_version: str = ""
-    data_quality_status: str = "VALID"
+    data_quality_status: DataQualityStatus = DataQualityStatus.COMPLETE
+    required_criterion_codes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         identifiers = (
@@ -154,6 +163,25 @@ def classify_execution(fact: ExecutionFact) -> ExecutionOutcome:
             outcome_reason_code=reason_code,
             method_code=fact.method_code,
             failure_domain=failure_domain,
+            detail=fact.detail,
+            criteria=fact.criteria,
+            metrics=fact.metrics,
+        )
+
+    observed_criterion_codes = {criterion.code for criterion in fact.criteria}
+    missing_criteria = set(fact.required_criterion_codes).difference(
+        observed_criterion_codes
+    )
+    if (
+        fact.data_quality_status is not DataQualityStatus.COMPLETE
+        or missing_criteria
+    ):
+        return ExecutionOutcome(
+            success=False,
+            outcome=AttemptOutcome.FAILED,
+            outcome_reason_code="UNCLASSIFIED_RESULT",
+            method_code=fact.method_code,
+            failure_domain=FailureDomain.UNKNOWN,
             detail=fact.detail,
             criteria=fact.criteria,
             metrics=fact.metrics,
