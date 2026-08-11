@@ -7,6 +7,10 @@ from typing import Callable, Mapping, Protocol
 class EnergyEstimateError(RuntimeError):
     """RMF가 안전한 작업 종료 SOC를 제공하지 못했을 때 발생한다."""
 
+    def __init__(self, message: str, *, reason_code: str) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
 
 @dataclass(frozen=True)
 class EstimateRequest:
@@ -27,6 +31,8 @@ class RmfEstimateResponse:
     total_duration_s: float
     change_in_charge: float
     finish_state_of_charge: float
+    reason_code: str = ""
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -114,16 +120,27 @@ class RmfEnergyEstimator:
             attempts=2,
             reason_code="RMF_ENERGY_ESTIMATE_UNAVAILABLE",
         )
-        raise EnergyEstimateError("RMF energy estimate unavailable") from last_timeout
+        raise EnergyEstimateError(
+            "RMF energy estimate unavailable",
+            reason_code="RMF_ENERGY_ESTIMATE_UNAVAILABLE",
+        ) from last_timeout
 
     @staticmethod
     def _validated_result(response: RmfEstimateResponse) -> TaskEnergyEstimate:
         if not response.success:
-            raise EnergyEstimateError("RMF route unavailable")
+            raise EnergyEstimateError(
+                response.detail or "RMF route unavailable",
+                reason_code=response.reason_code or "RMF_ROUTE_UNAVAILABLE",
+            )
         if not 0.0 <= response.finish_state_of_charge <= 1.0:
-            raise EnergyEstimateError("RMF finish SOC is outside 0.0..1.0")
+            raise EnergyEstimateError(
+                "RMF finish SOC is outside 0.0..1.0",
+                reason_code="RMF_FINISH_SOC_INVALID",
+            )
         if response.travel_duration_s < 0 or response.total_duration_s < 0:
-            raise EnergyEstimateError("RMF duration is invalid")
+            raise EnergyEstimateError(
+                "RMF duration is invalid", reason_code="RMF_DURATION_INVALID"
+            )
         return TaskEnergyEstimate(
             response.travel_duration_s,
             response.total_duration_s,
@@ -136,7 +153,10 @@ class RmfEnergyEstimator:
         self, request: EstimateRequest, travel_duration_s: float
     ) -> TaskEnergyEstimate:
         if travel_duration_s < 0:
-            raise EnergyEstimateError("fallback travel duration is invalid")
+            raise EnergyEstimateError(
+                "fallback travel duration is invalid",
+                reason_code="RMF_DURATION_INVALID",
+            )
         total_duration_s = (
             travel_duration_s
             + request.expected_loading_duration_s
@@ -194,11 +214,4 @@ class RmfEnergyEstimator:
 
 
 def _reason_code(error: EnergyEstimateError) -> str:
-    message = str(error)
-    if "route unavailable" in message:
-        return "RMF_ROUTE_UNAVAILABLE"
-    if "SOC" in message:
-        return "RMF_FINISH_SOC_INVALID"
-    if "duration" in message:
-        return "RMF_DURATION_INVALID"
-    return "RMF_ENERGY_ESTIMATE_INVALID"
+    return error.reason_code

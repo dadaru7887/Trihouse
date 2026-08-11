@@ -91,6 +91,25 @@ class EnergyEstimatorTest(unittest.TestCase):
         with self.assertRaisesRegex(EnergyEstimateError, "route"):
             RmfEnergyEstimator(unavailable).estimate(self.request)
 
+    def test_server_failure_preserves_reason_code_and_detail(self) -> None:
+        response = RmfEstimateResponse(
+            False,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            "RMF_FLEET_STATE_STALE",
+            "last fleet state exceeded three seconds",
+        )
+
+        with self.assertRaises(EnergyEstimateError) as caught:
+            RmfEnergyEstimator(lambda request, timeout_s: response).estimate(
+                self.request
+            )
+
+        self.assertEqual("RMF_FLEET_STATE_STALE", caught.exception.reason_code)
+        self.assertIn("three seconds", str(caught.exception))
+
     def test_explicit_fallback_uses_total_time_consumption(self) -> None:
         def service(request, timeout_s):
             raise TimeoutError
