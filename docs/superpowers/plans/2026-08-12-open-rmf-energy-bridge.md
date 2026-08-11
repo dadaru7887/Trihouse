@@ -566,7 +566,7 @@ Expected: C++ unit/state-store/office ROS integration 테스트가 모두 PASS�
 
 - [ ] **Step 3: 기존 Python 회귀 테스트**
 
-Run: `python3 -m pytest control_tower/tests trihouse_interfaces/test trihouse_pinky/trihouse_pinky_fleet/test -q`
+Run: `python3 -m pytest control_tower/tests trihouse_interfaces/test trihouse_pinky/test trihouse_pinky/trihouse_pinky_vision/test -q`
 
 Expected: 기존 테스트와 새 Control Tower client/CLI 테스트가 모두 PASS한다.
 
