@@ -1,5 +1,4 @@
 """FMS 배차·예약·재할당 정책의 동작 테스트."""
-from __future__ import annotations
 
 import sys
 import unittest

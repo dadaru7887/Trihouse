@@ -1,5 +1,4 @@
 """OMX 상태 heartbeat와 즉시 발행 주기의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

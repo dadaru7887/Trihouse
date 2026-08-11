@@ -1,5 +1,4 @@
 """RMF adapter 좁은 통로 시간 예약의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

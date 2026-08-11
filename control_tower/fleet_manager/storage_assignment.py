@@ -1,5 +1,4 @@
 """입고 선반을 찾기 전에 QR 보관 코드를 검증하는 정책."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 

@@ -4,7 +4,6 @@
 관찰해 진단 상태만 기록하도록 두며, 실제 endpoint 계약이 확정된 뒤에만 hardware plugin을
 연결해야 한다.
 """
-from __future__ import annotations
 
 import rclpy
 from rclpy.node import Node

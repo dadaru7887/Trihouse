@@ -4,7 +4,6 @@
 않고 gateway/adapter가 검증한 사실(event)만 받아 상태를 바꾼다. 따라서 Gazebo mock과
 실기 adapter가 같은 순서·중복 제거·비상 복구 규칙을 재사용할 수 있다.
 """
-from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum

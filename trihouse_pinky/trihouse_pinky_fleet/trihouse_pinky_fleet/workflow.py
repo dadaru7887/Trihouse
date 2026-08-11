@@ -1,5 +1,4 @@
 """fleet action server가 쓰는 Pinky 운반·인계·복귀의 순수 상태 machine."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum

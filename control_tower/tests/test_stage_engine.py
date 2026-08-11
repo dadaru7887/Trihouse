@@ -1,5 +1,4 @@
 """멱등 FMS stage 전이의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

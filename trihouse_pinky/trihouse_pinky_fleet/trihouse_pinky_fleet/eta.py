@@ -3,7 +3,6 @@
 속도는 Pinky 반복 주행으로 정한 설정값이다. Nav2 최대 속도 대신 가속·회전·정차를 포함한
 실효 속도를 사용한다.
 """
-from __future__ import annotations
 
 from enum import StrEnum
 

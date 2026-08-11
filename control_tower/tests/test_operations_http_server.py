@@ -1,5 +1,4 @@
 """Gateway REST read-model adapter의 통합 테스트."""
-from __future__ import annotations
 
 import json
 import socket

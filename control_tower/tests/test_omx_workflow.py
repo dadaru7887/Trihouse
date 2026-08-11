@@ -1,5 +1,4 @@
 """OMX 파지·정지·임시 적재·인수인계 규칙의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

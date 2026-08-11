@@ -1,5 +1,4 @@
 """FMS 작업을 순서 있는 stage로 한 번씩만 진행하는 엔진."""
-from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum

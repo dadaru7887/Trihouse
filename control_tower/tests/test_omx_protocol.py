@@ -1,5 +1,4 @@
 """Control Tower→OMX NDJSON message의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

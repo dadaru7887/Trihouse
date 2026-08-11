@@ -1,5 +1,4 @@
 """고위험 Gateway 요청의 역할 권한 검사를 위한 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

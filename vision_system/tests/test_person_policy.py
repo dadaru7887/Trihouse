@@ -2,7 +2,6 @@
 
 쓰러짐 관련 test는 SR52 조사·승인 전에는 명시 실행 목록에 넣지 않는다.
 """
-from __future__ import annotations
 
 import unittest
 

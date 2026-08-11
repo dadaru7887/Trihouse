@@ -2,7 +2,6 @@
 
 RMF는 임시 구역을 받고, 즉시 물리 정지는 Pinky Safety Supervisor가 독립 수행한다.
 """
-from __future__ import annotations
 
 from dataclasses import dataclass
 

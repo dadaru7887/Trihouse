@@ -1,5 +1,4 @@
 """등록된 OMX 바구니 적재 pose에 제한된 2D 보정을 적용하는 정책."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 from math import cos, hypot, radians, sin

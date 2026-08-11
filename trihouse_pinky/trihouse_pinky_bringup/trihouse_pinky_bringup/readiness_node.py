@@ -1,5 +1,4 @@
 """fleet action server가 구독할 readiness gate를 ROS topic으로 발행한다."""
-from __future__ import annotations
 
 from time import monotonic
 

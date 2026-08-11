@@ -1,5 +1,4 @@
 """Control Tower↔OMX NDJSON payload를 엄격히 검증하는 경계."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any

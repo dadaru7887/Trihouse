@@ -1,5 +1,4 @@
 """H.264 recorder 명령과 카탈로그 hand-off 테스트."""
-from __future__ import annotations
 
 import unittest
 

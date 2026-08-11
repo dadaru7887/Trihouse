@@ -1,5 +1,4 @@
 """출고 주문 접수와 재고 부족 정책의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

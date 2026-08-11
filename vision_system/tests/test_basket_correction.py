@@ -1,5 +1,4 @@
 """OMX 적재 전 Pinky 바구니 pose 보정의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

@@ -3,7 +3,6 @@
 이 모듈은 재고를 차감하지 않는다. 실제 lot 예약은 다음 단계인
 ``InventoryWorkflow.reserve_outbound``만 수행한다.
 """
-from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum

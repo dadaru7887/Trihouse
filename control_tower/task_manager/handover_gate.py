@@ -1,5 +1,4 @@
 """물리 인수인계 전에 Pinky·OMX 두 준비 상태를 함께 확인하는 gate."""
-from __future__ import annotations
 
 from dataclasses import dataclass, field
 

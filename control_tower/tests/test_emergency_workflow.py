@@ -1,5 +1,4 @@
 """FMS 비상 구역과 해제 후 복귀 인수인계의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

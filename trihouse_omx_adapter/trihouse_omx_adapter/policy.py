@@ -3,7 +3,6 @@
 실제 MoveIt, gripper, load-cell endpoint는 이 저장소에서 확인되지 않았다. 따라서 이
 정책은 endpoint 이름을 가정하지 않고 adapter가 검증한 readiness/물리 확인 결과만 받는다.
 """
-from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum

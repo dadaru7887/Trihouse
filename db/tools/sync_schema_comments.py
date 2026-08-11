@@ -5,7 +5,6 @@ Database, table, column, and enum identifiers remain unchanged.
 This script maintains ASCII-only English metadata for reliable web display.
 """
 
-from __future__ import annotations
 
 import argparse
 import re

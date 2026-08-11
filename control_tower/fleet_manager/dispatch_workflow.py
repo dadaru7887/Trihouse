@@ -2,7 +2,6 @@
 
 RMF는 실제 교통 실행을 맡고, 이 계층은 작업 전 공간을 예약하며 terminal event에서 해제한다.
 """
-from __future__ import annotations
 
 from dataclasses import dataclass
 

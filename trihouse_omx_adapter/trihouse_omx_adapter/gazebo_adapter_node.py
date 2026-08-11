@@ -3,7 +3,6 @@
 실기 OMX endpoint를 추측하지 않는다. 이 node는 공용 HandoverState/CargoState만 발행하며,
 `mock_load_confirmed` parameter로 시연자가 적재 물리 확인을 명시적으로 켤 수 있다.
 """
-from __future__ import annotations
 
 import rclpy
 from rclpy.node import Node

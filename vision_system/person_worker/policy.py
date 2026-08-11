@@ -3,7 +3,6 @@
 GPU model은 box·pose·tracking ID·움직임을 제공한다. 이 module은 안전 규칙만 적용하며
 로봇을 직접 구동하지 않는다.
 """
-from __future__ import annotations
 
 from dataclasses import dataclass
 

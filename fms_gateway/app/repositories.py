@@ -1,6 +1,5 @@
 """Queries used by the first control-system vertical slice."""
 
-from __future__ import annotations
 
 from datetime import datetime
 import json

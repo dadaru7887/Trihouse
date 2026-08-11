@@ -1,5 +1,4 @@
 """SR_23·54의 최종 Pinky 속도 gate를 ROS topic/service로 연결하는 node."""
-from __future__ import annotations
 
 from time import monotonic
 from math import hypot

@@ -1,5 +1,4 @@
 """Control Tower 경계에서 ROS 없이 NDJSON 명령을 엄격히 해석하는 정책."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any

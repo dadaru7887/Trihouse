@@ -1,5 +1,4 @@
 """영상 증거를 포함한 OMX 최종 파지 실패 보고의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

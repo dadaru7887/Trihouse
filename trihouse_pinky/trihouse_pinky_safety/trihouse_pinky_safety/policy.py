@@ -2,7 +2,6 @@
 
 ROS node가 latch와 subscription을 맡고, 이 module은 한 관측 시점의 안전 출력만 결정한다.
 """
-from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum

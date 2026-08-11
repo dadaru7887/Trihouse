@@ -1,5 +1,4 @@
 """FMS 목적지 코드를 LCD로 출력하는 node. Pinky 감정 애니메이션 대신 실행한다."""
-from __future__ import annotations
 
 import rclpy
 from rclpy.node import Node

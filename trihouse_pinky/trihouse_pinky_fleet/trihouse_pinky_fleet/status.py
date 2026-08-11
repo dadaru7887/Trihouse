@@ -1,5 +1,4 @@
 """SR_03 로봇 상태를 조합하는 순수 정책. ROS message 변환은 node 경계가 맡는다."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 

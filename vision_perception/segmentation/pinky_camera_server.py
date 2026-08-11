@@ -10,7 +10,6 @@ PC 쪽은 그냥 URL만 받는 구조라 inference_stream.py는 코드 수정이
 의존성: pinkylib, opencv-python (Pinky 이미지에 이미 있음, 추가 설치 불필요)
 """
 
-from __future__ import annotations
 
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

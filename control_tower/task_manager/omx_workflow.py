@@ -2,7 +2,6 @@
 
 OMX/MoveIt adapter가 반환 명령을 실행하고 결과를 보고한다. 명령 전송만으로 성공을 가정하지 않는다.
 """
-from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum

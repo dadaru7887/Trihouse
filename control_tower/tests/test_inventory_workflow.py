@@ -1,5 +1,4 @@
 """FMS 재고·slot 최종 확정 규칙의 동작 테스트."""
-from __future__ import annotations
 
 import sys
 import unittest

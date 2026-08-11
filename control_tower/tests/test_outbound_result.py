@@ -1,5 +1,4 @@
 """작업자 확인 출고 결과 확정의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

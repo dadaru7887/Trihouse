@@ -1,5 +1,4 @@
 """FMS 관리자 개입의 멱등·감사 가능한 작업 상태 전이."""
-from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import StrEnum

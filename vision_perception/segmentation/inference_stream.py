@@ -10,7 +10,6 @@ vision-streaming-architecture-draft.html §8(스트림 단절 정의와 대응) 
 파이프라인만 먼저 검증하는 용도. --source로 웹캠/영상파일/RTSP 다 받을 수 있음.
 """
 
-from __future__ import annotations
 
 import argparse
 import enum

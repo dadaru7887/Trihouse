@@ -1,5 +1,4 @@
 """OMX 파지·적재 준비 전에 QR 물품 ID와 ArUco pose를 확인하는 guard."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 

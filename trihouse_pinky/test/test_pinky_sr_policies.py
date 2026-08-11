@@ -2,7 +2,6 @@
 
 ROS 없이 실행한다: python3 -m unittest trihouse_pinky.test.test_pinky_sr_policies
 """
-from __future__ import annotations
 
 import sys
 import unittest

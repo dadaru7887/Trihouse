@@ -2,7 +2,6 @@
 
 운영 DB repository는 이 전이를 transaction으로 저장해야 하며, 이 클래스는 ROS/UI에 의존하지 않는다.
 """
-from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date

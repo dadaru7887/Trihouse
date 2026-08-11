@@ -2,7 +2,6 @@
 
 UI에는 Gateway가 소유한 view만 공개한다. 인증과 지속 WebSocket fan-out은 배포 단계에서 추가한다.
 """
-from __future__ import annotations
 
 from dataclasses import asdict
 import base64

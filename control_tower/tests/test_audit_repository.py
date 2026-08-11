@@ -1,5 +1,4 @@
 """작업·비상 감사 이력의 영속성 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

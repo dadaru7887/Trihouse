@@ -1,5 +1,4 @@
 """RMF adapter 경계에서 단일 용량 통로 자원을 예약하는 정책."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 

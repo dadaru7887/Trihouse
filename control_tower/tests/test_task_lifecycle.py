@@ -1,5 +1,4 @@
 """관리자 개입과 비상 보류의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

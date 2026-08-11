@@ -1,5 +1,4 @@
 """Pinky 운반 요청을 Nav2 action으로 바꾸는 단일 소유 adapter."""
-from __future__ import annotations
 
 import rclpy
 from math import atan2

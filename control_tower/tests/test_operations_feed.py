@@ -1,5 +1,4 @@
 """UI 전용 Gateway 운영 feed의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

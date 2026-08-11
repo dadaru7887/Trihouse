@@ -1,5 +1,4 @@
 """FMS와 운영 UI가 함께 쓰는 최종 파지 실패 구조화 보고서."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 

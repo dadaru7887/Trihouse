@@ -1,5 +1,4 @@
 """FMS가 소유하는 포장대 예약과 작업자 존재 기반 선택 정책."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum

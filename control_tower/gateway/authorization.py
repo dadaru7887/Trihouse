@@ -2,7 +2,6 @@
 
 Identity provider/JWT 검증은 이 순수 정책의 밖에 둔다. HTTP adapter는 검증한 역할만 전달한다.
 """
-from __future__ import annotations
 
 from enum import StrEnum
 

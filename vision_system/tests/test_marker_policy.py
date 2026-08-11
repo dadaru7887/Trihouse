@@ -1,5 +1,4 @@
 """OMX 동작 전 QR 물품 ID·ArUco 선반 확인의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

@@ -1,5 +1,4 @@
 """운반 action을 받기 전 필요한 interface가 준비됐는지 판정하는 순수 정책."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 

@@ -1,5 +1,4 @@
 """작업자/운영자가 확인한 출고 전달 결과를 분류하는 정책."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum

@@ -1,5 +1,4 @@
 """필수 Pinky telemetry로 비상 해제 후 RobotHealth를 발행한다."""
-from __future__ import annotations
 
 from time import monotonic
 

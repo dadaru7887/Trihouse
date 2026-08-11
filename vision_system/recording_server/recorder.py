@@ -4,7 +4,6 @@
 이 모듈은 파일을 직접 삭제하지 않는다. 보존 정책이 안전하다고 판정한 segment ID만
 반환하고, 저장소 worker가 그 ID에 해당하는 파일을 삭제한다.
 """
-from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum

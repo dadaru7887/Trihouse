@@ -1,5 +1,4 @@
 """ROS 설치 없이 최상위 Gazebo·실기 launch의 공통 인자와 안전 연결을 점검한다."""
-from __future__ import annotations
 
 from pathlib import Path
 import unittest
@@ -25,4 +24,3 @@ class IntegratedBringupContractTest(unittest.TestCase):
         self.assertIn("gazebo_omx_adapter", launch)
         self.assertIn("sim_hardware", launch)
         self.assertIn("/cmd_vel_nav", launch)
-

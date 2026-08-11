@@ -1,5 +1,4 @@
 """Control Tower NDJSON 명령을 검증 후 ExecuteTransport action으로 바꾸는 경계."""
-from __future__ import annotations
 
 import math
 from collections import deque

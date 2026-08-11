@@ -1,5 +1,4 @@
 """OMX 상태를 1초 heartbeat 또는 상태 변경 즉시 발행하는 정책."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 

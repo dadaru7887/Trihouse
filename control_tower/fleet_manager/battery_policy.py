@@ -1,5 +1,4 @@
 """전압 추정이 아닌 실측 경로 소비량으로 새 작업을 제한하는 FMS 배터리 정책."""
-from __future__ import annotations
 
 from enum import StrEnum
 

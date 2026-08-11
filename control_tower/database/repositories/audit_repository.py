@@ -2,7 +2,6 @@
 
 운영 DB adapter로 바꿔도 request ID 멱등성과 승인 주체/시각 필드는 유지한다.
 """
-from __future__ import annotations
 
 from dataclasses import dataclass
 import sqlite3

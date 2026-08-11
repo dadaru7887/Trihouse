@@ -1,5 +1,4 @@
 """저조도 학습 증강과 dataset split 분리의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

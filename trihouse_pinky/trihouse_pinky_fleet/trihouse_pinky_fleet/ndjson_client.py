@@ -1,5 +1,4 @@
 """재연결하는 작은 NDJSON client. ROS publisher와 모터 제어 권한은 소유하지 않는다."""
-from __future__ import annotations
 
 import json
 import socket

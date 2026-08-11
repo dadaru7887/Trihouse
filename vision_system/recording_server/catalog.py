@@ -3,7 +3,6 @@
 recorder는 60초 파일의 시작/종료를 이 카탈로그에 알리고, UI는 재생 중 segment를 표시한다.
 삭제 후보는 완료됐고 재생 중이 아닌 segment로만 제한한다.
 """
-from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum

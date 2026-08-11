@@ -1,5 +1,4 @@
 """Gazebo OMX와 실기 OMX가 공유할 적재·비상·timeout 정책 테스트."""
-from __future__ import annotations
 
 import unittest
 
@@ -29,4 +28,3 @@ class OmxAdapterPolicyTest(unittest.TestCase):
         self.assertTrue(adapter.emergency_stop().accepted)
         self.assertEqual(OmxState.EMERGENCY, adapter.state)
         self.assertFalse(adapter.operator_reset().accepted)
-

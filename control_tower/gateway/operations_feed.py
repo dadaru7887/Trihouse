@@ -2,7 +2,6 @@
 
 HTTP/WebSocket adapter가 immutable view를 직렬화한다. UI는 DB·RMF·ROS를 직접 호출하지 않는다.
 """
-from __future__ import annotations
 
 from dataclasses import dataclass, replace
 

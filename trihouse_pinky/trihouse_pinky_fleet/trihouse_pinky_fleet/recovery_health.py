@@ -1,5 +1,4 @@
 """SR_57 비상 해제 후 재투입 전 점검 조건을 판정하는 순수 정책."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 

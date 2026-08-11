@@ -1,5 +1,4 @@
 """Pinky·OMX 인수인계 준비 상태 동기화의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

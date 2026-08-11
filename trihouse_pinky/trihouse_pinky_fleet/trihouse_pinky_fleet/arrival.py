@@ -1,5 +1,4 @@
 """일반 Nav2 도착과 OMX 인수인계 정차의 pose 허용오차를 구분하는 함수."""
-from __future__ import annotations
 
 from math import atan2, cos, hypot, sin
 

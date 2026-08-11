@@ -1,5 +1,4 @@
 """입고·출고·비상 공통 작업 계약의 순수 단위 테스트."""
-from __future__ import annotations
 
 import unittest
 
@@ -81,4 +80,3 @@ class TransportJobContractTest(unittest.TestCase):
         self.assertFalse(link.reconnect(job_id="job-1", phase=JobPhase.LOADING, checkpoint="different"))
         self.assertTrue(link.reconnect(job_id="job-1", phase=JobPhase.LOADING, checkpoint="step-5"))
         self.assertTrue(link.accept_new_work())
-

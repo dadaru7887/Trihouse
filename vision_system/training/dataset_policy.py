@@ -1,5 +1,4 @@
 """증강을 offline 학습에만 제한하고 실시간 영상 원본을 지키는 정책."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum

@@ -1,5 +1,4 @@
 """외부 장비 없이 FMS 정책 module을 잇는 출고 end-to-end 시나리오."""
-from __future__ import annotations
 
 from datetime import date
 import unittest

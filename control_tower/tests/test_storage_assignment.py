@@ -1,5 +1,4 @@
 """QR 값만 쓰는 입고 보관 구역 배정의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 

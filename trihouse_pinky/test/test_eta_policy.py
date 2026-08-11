@@ -1,5 +1,4 @@
 """Pinky SR 주행 ETA와 OMX 준비 시각의 인수 테스트."""
-from __future__ import annotations
 
 import unittest
 
