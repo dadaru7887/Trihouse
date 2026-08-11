@@ -10,6 +10,10 @@ def parameter_document() -> str:
     return (GUIDELINE_ROOT / "parameters_for_rmf.md").read_text(encoding="utf-8")
 
 
+def waypoint_document() -> str:
+    return (GUIDELINE_ROOT / "waypoint.md").read_text(encoding="utf-8")
+
+
 def test_guideline_covers_measured_inputs_rmf_outputs_and_jsonl_logs():
     document = parameter_document()
 
@@ -67,3 +71,28 @@ def test_guideline_maps_every_bridge_parameter_to_a_measurement():
         "task_time_buffer_s",
     ):
         assert f"`{parameter}`" in document
+
+
+def test_waypoint_guideline_covers_real_pinky_graph_connection():
+    document = waypoint_document()
+
+    for required in (
+        "final_map_08.yaml",
+        "final_map_08.pgm",
+        "robosapiens.png",
+        "기준점 4개",
+        "level_name",
+        "compute_plan_starts",
+        "nav_graph_file",
+        "fleet_name",
+        "robot_name",
+        "RMF_START_NOT_ON_GRAPH",
+        "RMF_ROUTE_UNAVAILABLE",
+        "FROZEN_PICKUP_01",
+        "PACKING_HANDOVER_01",
+        "CHARGE_01",
+        "미측정",
+        "원본 로그",
+        "검증 완료",
+    ):
+        assert required in document
