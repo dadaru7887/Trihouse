@@ -49,7 +49,7 @@ POC에서는 냉동 기능이 실제로 작동하지 않으므로 저온 보정�
 | route availability | 요청 waypoint 경로 생성 가능 여부 | 경로가 없으면 새 작업 배정 금지 |
 | estimate source | `open_rmf` 또는 명시적 POC fallback | 운영 판단과 실험 데이터를 구분 |
 
-현재 rmf-web `/fleets`에서 바로 볼 수 있는 배터리 값은 로봇의 **현재 SOC**다. 작업 종료 예상 SOC는 웹 API의 현재 상태 필드와 다르므로, fleet adapter가 RMF 경로·배터리 모델을 이용해 `EstimateTaskEnergy` service에 응답하도록 연결해야 한다. Control Tower의 `RmfEnergyEstimator`는 이 service를 호출하는 port와 검증·retry를 구현했으며, 실제 service server는 RMF nav graph와 fleet adapter를 연결할 때 구현한다.
+현재 rmf-web `/fleets`에서 바로 볼 수 있는 배터리 값은 로봇의 **현재 SOC**다. 작업 종료 예상 SOC는 웹 API의 현재 상태 필드와 다르므로, `trihouse_rmf_bridge`가 RMF 경로·배터리 모델을 이용해 `EstimateTaskEnergy` service에 응답한다. Control Tower의 `RmfEnergyEstimator`는 이 service를 호출하는 port와 검증·retry를 담당하며, 실제 연결 절차는 `docs/guideline/open_rmf_energy_bridge_test.md`를 따른다.
 
 전체 시간 계약은 다음과 같다.
 
@@ -122,4 +122,4 @@ ros2 interface show trihouse_interfaces/srv/EstimateTaskEnergy
 ros2 service list | grep estimate_task_energy
 ```
 
-마지막 service가 아직 표시되지 않으면 fleet adapter 쪽 `EstimateTaskEnergy` server 연결이 남은 상태다. `pinky_pro`는 배터리 원본과 하드웨어 안전만 담당하고, Control Tower가 RMF 예측과 배차 정책을 결합한다.
+마지막 service가 표시되지 않으면 `ros2 launch trihouse_rmf_bridge office_energy_bridge.launch.py` 실행 여부와 graph 설정을 확인한다. `pinky_pro`는 배터리 원본과 하드웨어 안전만 담당하고, Control Tower가 RMF 예측과 배차 정책을 결합한다.
