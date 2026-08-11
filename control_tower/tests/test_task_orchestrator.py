@@ -48,11 +48,12 @@ def _completion(
     *,
     success: bool = True,
     revision: int = 1,
+    step_id: str = "READY_TO_TRANSFER",
 ) -> tuple[CompletionEvent, ExecutionFact]:
     event = CompletionEvent(
         event_id=event_id,
         job_id="job-1",
-        job_step_id="READY_TO_TRANSFER",
+        job_step_id=step_id,
         assignment_revision=revision,
         actor_role=role,
         actor_id=actor_id,
@@ -61,7 +62,7 @@ def _completion(
     fact = ExecutionFact(
         event_id=event_id,
         job_id="job-1",
-        job_step_id="READY_TO_TRANSFER",
+        job_step_id=step_id,
         assignment_revision=revision,
         actor_role=role,
         actor_id=actor_id,
@@ -198,3 +199,78 @@ def test_reassignment_rejects_old_revision_and_uses_new_pinky() -> None:
 
     assert stale.reason_code == "STALE_ASSIGNMENT"
     assert len(released.commands) == 1
+
+
+def test_safe_resume_starts_stage_that_was_held_before_initial_start() -> None:
+    """최초 안전 미승인 후 승인돼도 작업이 ASSIGNED에 멈추는 회귀를 막는다."""
+    store = InMemoryExecutionStore()
+    orchestrator = TaskOrchestrator(store=store)
+    orchestrator.create("job-1", stages=_specs())
+    orchestrator.assign(
+        "job-1",
+        assignment_revision=1,
+        actors={ActorRole.PINKY: "PK-01", ActorRole.OMX: "OMX-01"},
+    )
+
+    held = orchestrator.start("job-1", safety_approved=False)
+    unsafe = orchestrator.resume("job-1", safety_approved=False)
+    resumed = orchestrator.resume("job-1", safety_approved=True)
+
+    assert held.reason_code == "SAFETY_NOT_APPROVED"
+    assert unsafe.commands == ()
+    assert resumed.reason_code == "STAGE_STARTED"
+    assert orchestrator.job_state("job-1") is JobState.RUNNING
+    assert orchestrator.stage_state("job-1", "READY_TO_TRANSFER") is StageState.RUNNING
+
+
+def test_single_actor_completion_while_held_advances_once_after_safe_resume() -> None:
+    """보류 중 저장한 단일 역할 완료가 중복 처리되어 영구 정체되는 회귀를 막는다."""
+    store = InMemoryExecutionStore()
+    orchestrator = TaskOrchestrator(store=store)
+    orchestrator.create(
+        "job-1",
+        stages=(
+            _specs()[0],
+            _specs()[1],
+            StageSpec(
+                stage_id="VERIFY",
+                required_roles=frozenset({ActorRole.FMS}),
+                command_kind="VERIFY_TRANSFER",
+                target_role=ActorRole.FMS,
+                method_code="FMS_VERIFY",
+            ),
+        ),
+    )
+    orchestrator.assign(
+        "job-1",
+        assignment_revision=1,
+        actors={
+            ActorRole.PINKY: "PK-01",
+            ActorRole.OMX: "OMX-01",
+            ActorRole.FMS: "CONTROL_TOWER",
+        },
+    )
+    orchestrator.start("job-1", safety_approved=True)
+    pinky = _completion("ready-p", ActorRole.PINKY, "PK-01")
+    omx = _completion("ready-o", ActorRole.OMX, "OMX-01")
+    orchestrator.record_completion(*pinky, safety_approved=True)
+    orchestrator.record_completion(*omx, safety_approved=True)
+    orchestrator.hold("job-1", reason="PERSON_DETECTED")
+    transfer = _completion(
+        "transfer-done",
+        ActorRole.OMX,
+        "OMX-01",
+        step_id="TRANSFER",
+    )
+
+    held_result = orchestrator.record_completion(
+        *transfer,
+        safety_approved=False,
+    )
+    resumed = orchestrator.resume("job-1", safety_approved=True)
+
+    assert held_result.commands == ()
+    assert len(resumed.commands) == 1
+    assert resumed.commands[0].command_kind == "VERIFY_TRANSFER"
+    assert orchestrator.stage_state("job-1", "TRANSFER") is StageState.SUCCEEDED
+    assert orchestrator.stage_state("job-1", "VERIFY") is StageState.RUNNING

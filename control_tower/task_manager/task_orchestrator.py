@@ -148,7 +148,11 @@ class TaskOrchestrator:
         if event.actor_role not in stage.required_roles:
             return OrchestrationResult(False, reason_code="UNEXPECTED_ACTOR_ROLE")
         if self._stages.state_of(event.job_id) is JobState.HELD or not safety_approved:
-            return OrchestrationResult(True, reason_code="COMPLETION_RECORDED_WHILE_HELD")
+            if self._stages.state_of(event.job_id) is not JobState.HELD:
+                self._stages.hold(event.job_id, reason="SAFETY_NOT_APPROVED")
+            if not plan.deferred_result_id:
+                plan.deferred_result_id = event.event_id
+            return OrchestrationResult(True, reason_code="COMPLETION_DEFERRED")
         commands = self._complete_and_start_next(event.job_id, event.event_id)
         return OrchestrationResult(True, commands=commands, reason_code="STEP_COMPLETED")
 
@@ -161,6 +165,13 @@ class TaskOrchestrator:
         plan = self._plan(job_id)
         self._stages.resume(job_id)
         if not plan.deferred_result_id:
+            if self._stages.state_of(job_id) is JobState.ASSIGNED:
+                commands = self._start_current(job_id)
+                return OrchestrationResult(
+                    True,
+                    commands=commands,
+                    reason_code="STAGE_STARTED",
+                )
             return OrchestrationResult(True, reason_code="JOB_RESUMED")
         result_id = plan.deferred_result_id
         plan.deferred_result_id = ""
