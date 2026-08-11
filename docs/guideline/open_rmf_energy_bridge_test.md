@@ -1,5 +1,24 @@
 # Open-RMF 에너지 Bridge 검증 가이드
 
+## 문서 범위와 실제 Pinky 전환 순서
+
+이 문서는 `tinyRobot1`과 office graph를 사용하는 **office demo 검증** 절차다. 여기의 테스트 성공은 RMF bridge 구조와 서비스 계약을 검증한 것이며 **실제 Pinky 적용 완료가 아님**을 의미한다.
+
+실제 Pinky 연결은 다음 순서로 진행한다.
+
+```text
+이 문서의 office bridge 자동·수동 검증
+→ parameters_for_rmf.md의 필수값 측정 완료
+→ waypoint.md의 좌표 정합·필수 경로 검증 완료
+→ 별도 Pinky config/launch 생성
+→ 실제 Pinky /fleet_states와 에너지 예측 연결 시험
+```
+
+- 차량·배터리·작업시간 측정: [parameters_for_rmf.md](parameters_for_rmf.md)
+- SLAM map·waypoint·navigation graph 연결: [waypoint.md](waypoint.md)
+
+office의 fleet, robot, graph, 차량·배터리 숫자를 실제 Pinky 설정에 그대로 복사하지 않는다. 두 선행 문서에서 `측정 완료` 또는 `검증 완료`로 승인된 값만 별도 Pinky 설정에 반영한다.
+
 ## 검증 대상
 
 이 절차는 Open-RMF office demo의 `/fleet_states`와 실제 office navigation graph를 `trihouse_rmf_bridge`에 연결해 다음 항목을 확인한다.

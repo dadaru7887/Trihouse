@@ -14,6 +14,12 @@ def waypoint_document() -> str:
     return (GUIDELINE_ROOT / "waypoint.md").read_text(encoding="utf-8")
 
 
+def office_test_document() -> str:
+    return (GUIDELINE_ROOT / "open_rmf_energy_bridge_test.md").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_guideline_covers_measured_inputs_rmf_outputs_and_jsonl_logs():
     document = parameter_document()
 
@@ -96,3 +102,12 @@ def test_waypoint_guideline_covers_real_pinky_graph_connection():
         "검증 완료",
     ):
         assert required in document
+
+
+def test_office_test_guide_links_pinky_conversion_prerequisites():
+    document = office_test_document()
+
+    assert "parameters_for_rmf.md" in document
+    assert "waypoint.md" in document
+    assert "office demo 검증" in document
+    assert "실제 Pinky 적용 완료가 아님" in document
