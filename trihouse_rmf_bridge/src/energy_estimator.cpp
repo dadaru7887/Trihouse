@@ -152,12 +152,23 @@ EstimateResult EnergyEstimator::estimate(const EstimateInput& input) const
         implementation_->motion_sink.compute_change_in_charge(trajectory);
     }
 
-    const auto& final = plan->get_waypoints().back();
-    const auto graph_index = final.graph_index();
-    if (!graph_index)
-      return EstimateError{"RMF_ROUTE_UNAVAILABLE", "route did not finish on a graph waypoint"};
-    starts = {rmf_traffic::agv::Planner::Start(
-      final.time(), *graph_index, final.position()[2])};
+    if (plan->get_waypoints().empty())
+    {
+      const auto& selected_start = plan->get_start();
+      starts = {rmf_traffic::agv::Planner::Start(
+        selected_start.time(),
+        goal_waypoint->index(),
+        selected_start.orientation())};
+    }
+    else
+    {
+      const auto& final = plan->get_waypoints().back();
+      const auto graph_index = final.graph_index();
+      if (!graph_index)
+        return EstimateError{"RMF_ROUTE_UNAVAILABLE", "route did not finish on a graph waypoint"};
+      starts = {rmf_traffic::agv::Planner::Start(
+        final.time(), *graph_index, final.position()[2])};
+    }
   }
 
   const double total_duration_s = travel_duration_s

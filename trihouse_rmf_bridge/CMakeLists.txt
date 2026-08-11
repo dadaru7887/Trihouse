@@ -6,10 +6,12 @@ if(NOT CMAKE_CXX_STANDARD)
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
 find_package(rmf_fleet_msgs REQUIRED)
 find_package(rmf_battery REQUIRED)
 find_package(rmf_fleet_adapter REQUIRED)
 find_package(rmf_traffic REQUIRED)
+find_package(trihouse_interfaces REQUIRED)
 
 add_library(fleet_state_store src/fleet_state_store.cpp)
 target_include_directories(fleet_state_store PUBLIC
@@ -25,8 +27,15 @@ ament_target_dependencies(energy_estimator rmf_battery rmf_traffic)
 target_link_libraries(energy_estimator
   fleet_state_store rmf_fleet_adapter::rmf_fleet_adapter)
 
+add_executable(trihouse_rmf_bridge_node src/energy_estimator_node.cpp)
+target_include_directories(trihouse_rmf_bridge_node PRIVATE include)
+ament_target_dependencies(trihouse_rmf_bridge_node
+  rclcpp rmf_fleet_msgs trihouse_interfaces)
+target_link_libraries(trihouse_rmf_bridge_node energy_estimator fleet_state_store)
+
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
   ament_add_gtest(test_fleet_state_store test/test_fleet_state_store.cpp)
   target_include_directories(test_fleet_state_store PRIVATE include)
   ament_target_dependencies(test_fleet_state_store rmf_fleet_msgs)
@@ -40,11 +49,16 @@ if(BUILD_TESTING)
     rmf_battery rmf_traffic)
   target_link_libraries(test_energy_estimator
     energy_estimator rmf_fleet_adapter::rmf_fleet_adapter)
+
+  ament_add_pytest_test(test_office_service test/test_office_service.py
+    TIMEOUT 30)
 endif()
 
 install(DIRECTORY include/ DESTINATION include)
-install(TARGETS fleet_state_store energy_estimator
+install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
+install(TARGETS fleet_state_store energy_estimator trihouse_rmf_bridge_node
   ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib)
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

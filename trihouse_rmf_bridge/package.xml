@@ -8,12 +8,19 @@
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
   <depend>rmf_fleet_msgs</depend>
   <depend>rmf_battery</depend>
   <depend>rmf_fleet_adapter</depend>
   <depend>rmf_traffic</depend>
+  <depend>trihouse_interfaces</depend>
+
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
