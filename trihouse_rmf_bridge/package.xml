@@ -9,6 +9,9 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rmf_fleet_msgs</depend>
+  <depend>rmf_battery</depend>
+  <depend>rmf_fleet_adapter</depend>
+  <depend>rmf_traffic</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
 
