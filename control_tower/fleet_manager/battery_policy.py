@@ -1,66 +1,206 @@
-"""전압 추정이 아닌 실측 경로 소비량으로 새 작업을 제한하는 FMS 배터리 정책."""
+"""검증된 배터리 관측으로 정책 state와 action을 각각 결정한다."""
 
+from dataclasses import dataclass
 from enum import StrEnum
 
 
-class BatteryDecision(StrEnum):
-    CONTINUE = 'CONTINUE'
-    COMPLETE_THEN_RETURN = 'COMPLETE_THEN_RETURN'
-    HOLD_CURRENT_AND_RETURN = 'HOLD_CURRENT_AND_RETURN'
-    IMMEDIATE_RETURN = 'IMMEDIATE_RETURN'
+POWER_SUPPLY_STATUS_CHARGING = 1
 
 
-class BatteryStatus(StrEnum):
-    NORMAL = 'NORMAL'
-    WORK_LIMITED = 'WORK_LIMITED'
-    RETURN_REQUIRED = 'RETURN_REQUIRED'
+class BatteryPolicyState(StrEnum):
+    UNKNOWN = "UNKNOWN"
+    NORMAL = "NORMAL"
+    LOCAL_ONLY = "LOCAL_ONLY"
+    RETURN_REQUIRED = "RETURN_REQUIRED"
+    CHARGE_WAIT = "CHARGE_WAIT"
+    CHARGING = "CHARGING"
+    RECOVERY_CHECK = "RECOVERY_CHECK"
 
 
-class BatteryPolicy:
-    def __init__(
-        self,
-        *,
-        return_threshold_percent: float,
-        emergency_threshold_percent: float,
-        consumption_percent_per_m: float,
-        safety_margin_percent: float,
-    ) -> None:
-        if not 0 <= emergency_threshold_percent <= return_threshold_percent <= 100:
-            raise ValueError('battery thresholds are invalid')
-        if consumption_percent_per_m <= 0 or safety_margin_percent < 0:
-            raise ValueError('consumption and margin are invalid')
-        self._return_threshold = return_threshold_percent
-        self._emergency_threshold = emergency_threshold_percent
-        self._consumption = consumption_percent_per_m
-        self._margin = safety_margin_percent
+class BatteryAction(StrEnum):
+    NONE = "NONE"
+    ALLOW_GENERAL_JOB = "ALLOW_GENERAL_JOB"
+    ALLOW_LOCAL_JOB = "ALLOW_LOCAL_JOB"
+    WAIT_AT_SAFE_NODE = "WAIT_AT_SAFE_NODE"
+    COMPLETE_THEN_RETURN = "COMPLETE_THEN_RETURN"
+    RETURN_TO_CHARGE = "RETURN_TO_CHARGE"
+    HOLD_SAFE = "HOLD_SAFE"
+    WAIT_FOR_CHARGE = "WAIT_FOR_CHARGE"
+    REQUIRE_OPERATOR = "REQUIRE_OPERATOR"
 
-    def decide(self, *, battery_percent: float, remaining_current_m: float, return_to_charge_m: float, has_cargo: bool) -> BatteryDecision:
-        if battery_percent < 0 or remaining_current_m < 0 or return_to_charge_m < 0:
-            raise ValueError('battery and route distance must be non-negative')
-        if battery_percent <= self._emergency_threshold:
-            return BatteryDecision.IMMEDIATE_RETURN
-        required = (remaining_current_m + return_to_charge_m) * self._consumption + self._margin
-        if battery_percent >= required:
-            after_current = battery_percent - (remaining_current_m * self._consumption + self._margin)
-            if has_cargo and after_current <= self._return_threshold:
-                return BatteryDecision.COMPLETE_THEN_RETURN
-            return BatteryDecision.CONTINUE
-        return BatteryDecision.HOLD_CURRENT_AND_RETURN
 
-    def status(self, battery_percent: float) -> BatteryStatus:
-        if battery_percent < 0:
-            raise ValueError('battery_percent must be non-negative')
-        if battery_percent <= self._emergency_threshold:
-            return BatteryStatus.RETURN_REQUIRED
-        if battery_percent <= self._return_threshold:
-            return BatteryStatus.WORK_LIMITED
-        return BatteryStatus.NORMAL
+@dataclass(frozen=True)
+class BatteryConditionInput:
+    percentage: float
+    present: bool
+    power_supply_status: int
+    measurement_valid: bool
+    has_valid_sample: bool
+    telemetry_fresh: bool
 
-    def can_accept_new_job(self, *, battery_percent: float, job_distance_m: float, return_to_charge_m: float) -> bool:
-        """작업 완료 후 복귀 여유까지 남는 경우에만 새 작업을 허용한다."""
-        if job_distance_m < 0 or return_to_charge_m < 0:
-            raise ValueError('route distances must be non-negative')
-        if self.status(battery_percent) == BatteryStatus.RETURN_REQUIRED:
-            return False
-        required = (job_distance_m + return_to_charge_m) * self._consumption + self._margin
-        return battery_percent >= required
+
+@dataclass(frozen=True)
+class BatteryPolicySnapshot:
+    state: BatteryPolicyState
+    ready: bool
+    percentage: float
+    reason_code: str
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class WorkflowContext:
+    source_zone: str = ""
+    destination_zone: str = ""
+    finish_state_of_charge: float | None = None
+    has_cargo: bool = False
+    handover_finish_soc: float | None = None
+    charger_reachable: bool = True
+
+
+@dataclass(frozen=True)
+class BatteryActionDecision:
+    action: BatteryAction
+    reason_code: str
+    detail: str = ""
+
+
+def classify_condition(
+    condition: BatteryConditionInput,
+    *,
+    recovery_check_required: bool = False,
+    at_charger: bool = False,
+    awaiting_reentry: bool = False,
+) -> BatteryPolicySnapshot:
+    """우선순위에 따라 하나의 현재 정책 state를 계산한다."""
+
+    if not (
+        condition.present
+        and condition.measurement_valid
+        and condition.has_valid_sample
+        and condition.telemetry_fresh
+        and 0.0 <= condition.percentage <= 100.0
+    ):
+        return BatteryPolicySnapshot(
+            BatteryPolicyState.UNKNOWN,
+            False,
+            condition.percentage,
+            _unknown_reason(condition),
+        )
+    if recovery_check_required:
+        return BatteryPolicySnapshot(
+            BatteryPolicyState.RECOVERY_CHECK,
+            False,
+            condition.percentage,
+            "RECOVERY_CHECK_REQUIRED",
+        )
+    if condition.power_supply_status == POWER_SUPPLY_STATUS_CHARGING:
+        return BatteryPolicySnapshot(
+            BatteryPolicyState.CHARGING,
+            False,
+            condition.percentage,
+            "BATTERY_CHARGING",
+        )
+    if at_charger or (awaiting_reentry and condition.percentage < 30.0):
+        return BatteryPolicySnapshot(
+            BatteryPolicyState.CHARGE_WAIT,
+            False,
+            condition.percentage,
+            "WAITING_FOR_CHARGE_OR_REENTRY_LEVEL",
+        )
+    if awaiting_reentry and condition.percentage >= 30.0:
+        return BatteryPolicySnapshot(
+            BatteryPolicyState.NORMAL,
+            True,
+            condition.percentage,
+            "REENTRY_THRESHOLD_REACHED",
+        )
+    if condition.percentage <= 10.0:
+        return BatteryPolicySnapshot(
+            BatteryPolicyState.RETURN_REQUIRED,
+            False,
+            condition.percentage,
+            "BATTERY_AT_OR_BELOW_RETURN_THRESHOLD",
+        )
+    if condition.percentage <= 20.0:
+        return BatteryPolicySnapshot(
+            BatteryPolicyState.LOCAL_ONLY,
+            True,
+            condition.percentage,
+            "BATTERY_LOCAL_WORK_ONLY",
+        )
+    return BatteryPolicySnapshot(
+        BatteryPolicyState.NORMAL,
+        True,
+        condition.percentage,
+        "BATTERY_NORMAL",
+    )
+
+
+def decide_action(
+    snapshot: BatteryPolicySnapshot,
+    workflow: WorkflowContext,
+    *,
+    hard_stop_percent: float = 5.0,
+    handover_reserve_soc: float = 0.03,
+) -> BatteryActionDecision:
+    """state와 작업 맥락을 이용해 실행 계층에 전달할 행동을 선택한다."""
+
+    if snapshot.state in (BatteryPolicyState.UNKNOWN, BatteryPolicyState.RECOVERY_CHECK):
+        return BatteryActionDecision(BatteryAction.HOLD_SAFE, snapshot.reason_code)
+    if snapshot.state == BatteryPolicyState.CHARGING:
+        return BatteryActionDecision(BatteryAction.WAIT_FOR_CHARGE, "CHARGING_IN_PROGRESS")
+    if snapshot.state == BatteryPolicyState.CHARGE_WAIT:
+        return BatteryActionDecision(BatteryAction.HOLD_SAFE, "WAITING_FOR_CHARGE")
+    if snapshot.state == BatteryPolicyState.NORMAL:
+        return BatteryActionDecision(BatteryAction.ALLOW_GENERAL_JOB, "GENERAL_JOB_ALLOWED")
+    if snapshot.state == BatteryPolicyState.LOCAL_ONLY:
+        local_route = {
+            workflow.source_zone.upper(),
+            workflow.destination_zone.upper(),
+        } == {"FROZEN", "PACKING"}
+        if not local_route:
+            return BatteryActionDecision(BatteryAction.WAIT_AT_SAFE_NODE, "LOCAL_ROUTE_REQUIRED")
+        if workflow.finish_state_of_charge is None:
+            return BatteryActionDecision(
+                BatteryAction.WAIT_AT_SAFE_NODE,
+                "RMF_ENERGY_ESTIMATE_UNAVAILABLE",
+            )
+        if workflow.finish_state_of_charge > 0.10:
+            return BatteryActionDecision(BatteryAction.ALLOW_LOCAL_JOB, "LOCAL_JOB_ALLOWED")
+        if workflow.finish_state_of_charge > hard_stop_percent / 100.0:
+            return BatteryActionDecision(
+                BatteryAction.COMPLETE_THEN_RETURN,
+                "FINAL_LOCAL_JOB_THEN_CHARGE",
+            )
+        return BatteryActionDecision(
+            BatteryAction.RETURN_TO_CHARGE,
+            "PREDICTED_FINISH_SOC_AT_HARD_STOP",
+        )
+
+    if not workflow.has_cargo:
+        return BatteryActionDecision(BatteryAction.RETURN_TO_CHARGE, "RETURN_THRESHOLD_REACHED")
+    if snapshot.percentage < hard_stop_percent:
+        return BatteryActionDecision(BatteryAction.REQUIRE_OPERATOR, "BATTERY_BELOW_HARD_STOP")
+    if workflow.handover_finish_soc is None:
+        return BatteryActionDecision(
+            BatteryAction.REQUIRE_OPERATOR,
+            "HANDOVER_ENERGY_ESTIMATE_UNAVAILABLE",
+        )
+    if workflow.handover_finish_soc < handover_reserve_soc:
+        return BatteryActionDecision(BatteryAction.REQUIRE_OPERATOR, "HANDOVER_RESERVE_UNSAFE")
+    if not workflow.charger_reachable:
+        return BatteryActionDecision(BatteryAction.REQUIRE_OPERATOR, "CHARGER_UNREACHABLE_AFTER_HANDOVER")
+    return BatteryActionDecision(BatteryAction.COMPLETE_THEN_RETURN, "SAFE_HANDOVER_THEN_RETURN")
+
+
+def _unknown_reason(condition: BatteryConditionInput) -> str:
+    if not condition.present:
+        return "BATTERY_NOT_PRESENT"
+    if not condition.measurement_valid:
+        return "BATTERY_PERCENTAGE_INVALID"
+    if not condition.has_valid_sample:
+        return "WAITING_FOR_FIRST_BATTERY_SAMPLE"
+    if not condition.telemetry_fresh:
+        return "BATTERY_TELEMETRY_STALE"
+    return "BATTERY_PERCENTAGE_INVALID"

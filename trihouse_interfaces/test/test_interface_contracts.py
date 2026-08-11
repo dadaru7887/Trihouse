@@ -12,6 +12,8 @@ from rosidl_adapter.parser import (
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
 MESSAGE_FILES = {
+    "BatteryActionDecision.msg",
+    "BatteryCondition.msg",
     "BatteryPolicyState.msg",
     "CargoState.msg",
     "ConnectionState.msg",
@@ -30,7 +32,11 @@ MESSAGE_FILES = {
     "TaskEvent.msg",
 }
 
-SERVICE_FILES = {"ClearEmergency.srv", "SetCargoLock.srv"}
+SERVICE_FILES = {
+    "ClearEmergency.srv",
+    "EstimateTaskEnergy.srv",
+    "SetCargoLock.srv",
+}
 ACTION_FILES = {"Dock.action", "ExecuteTransport.action"}
 
 FORBIDDEN_OVER_SPLIT_FILES = {
@@ -91,3 +97,42 @@ def test_package_declares_rosidl_adapter_for_contract_tests():
         dependency.text for dependency in package_xml.findall("test_depend")
     }
     assert "rosidl_adapter" in test_dependencies
+
+
+def test_battery_interfaces_keep_observation_policy_and_action_separate():
+    battery_condition = (PACKAGE_ROOT / "msg" / "BatteryCondition.msg").read_text(
+        encoding="utf-8"
+    )
+    battery_policy = (PACKAGE_ROOT / "msg" / "BatteryPolicyState.msg").read_text(
+        encoding="utf-8"
+    )
+    action_decision = (
+        PACKAGE_ROOT / "msg" / "BatteryActionDecision.msg"
+    ).read_text(encoding="utf-8")
+    estimate_service = (
+        PACKAGE_ROOT / "srv" / "EstimateTaskEnergy.srv"
+    ).read_text(encoding="utf-8")
+    robot_status = (PACKAGE_ROOT / "msg" / "RobotStatus.msg").read_text(
+        encoding="utf-8"
+    )
+
+    assert "float32 percentage" in battery_condition
+    assert "bool present" in battery_condition
+    assert "uint8 power_supply_status" in battery_condition
+    assert "bool measurement_valid" in battery_condition
+    assert "bool has_valid_sample" in battery_condition
+    assert "bool telemetry_fresh" in battery_condition
+
+    assert "uint8 STATE_LOCAL_ONLY=2" in battery_policy
+    assert "trihouse_interfaces/BatteryCondition condition" in battery_policy
+    assert "bool ready" in battery_policy
+    assert "string reason_code" in battery_policy
+    assert "string detail" in battery_policy
+
+    assert "uint8 ACTION_RETURN_TO_CHARGE=5" in action_decision
+    assert "float64 estimated_duration_s" in action_decision
+    assert "float64 finish_state_of_charge" in action_decision
+
+    assert "string[] waypoint_ids" in estimate_service
+    assert "float64 finish_state_of_charge" in estimate_service
+    assert "trihouse_interfaces/BatteryPolicyState battery_policy" in robot_status

@@ -1,27 +1,62 @@
-"""SR_03 로봇 상태를 조합하는 순수 정책. ROS message 변환은 node 경계가 맡는다."""
+"""센서 최신 여부를 이용해 로봇의 준비 상태를 판단하는 순수 정책 모듈.
+
+이 파일은 ROS 토픽을 직접 구독하거나 메시지를 발행하지 않는다.
+ROS 통신은 ``status_node.py``가 담당하고, 이 모듈은 전달받은 값만으로
+로봇이 새 작업을 받을 수 있는 상태인지와 어떤 오류가 있는지를 계산한다.
+"""
 
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class StatusInputs:
-    robot_id: str
-    job_id: str = ""
-    scan_fresh: bool = True
-    odom_fresh: bool = True
-    battery_fresh: bool = True
+    """상태 정책이 판단에 사용할 입력값을 하나로 묶은 불변 데이터 객체.
+
+    status_node.py가 각 센서의 마지막 수신 시각을 검사한 뒤,
+    현재 시각 기준으로 데이터가 최신이면 True, 오래됐으면 False를
+    각 *_fresh 필드에 넣어 이 객체를 생성한다.
+
+    frozen=True이므로 객체가 생성된 뒤에는 필드 값을 변경할 수 없다.
+    """
+
+    robot_id: str               # 로봇 고유  식별자
+    job_id: str = ""            # 현재 작업 식별자, 없으면 빈 문자열
+
+    scan_fresh: bool = True     # 라이다 스캔 메시지 수신 여부
+    odom_fresh: bool = True     # odometry 메시지 수신 여부
+    battery_fresh: bool = True  # 배터리 상태 메시지 수신 여부
 
 
 @dataclass(frozen=True)
 class StatusSummary:
+    """상태 정책의 판단 결과를 하나로 묶은 불변 데이터 객체.
+
+    build_status()가 StatusInputs를 검사한 뒤 생성하며,
+    status_node.py는 이 결과의 ready와 errors를
+    최종 RobotStatus ROS 메시지에 복사한다.
+    """
+
     robot_id: str
     job_id: str
-    ready: bool
-    errors: tuple[str, ...]
+
+    ready: bool                 # 모든 필수 센서가 최신이어서 새 작업을 받을 수 있으면 True다.
+
+    errors: tuple[str, ...]     # 오래된 센서에 대응하는 오류 이름들을 순서대로 담는다.
 
 
 def build_status(inputs: StatusInputs) -> StatusSummary:
-    """A robot with stale motion/safety/battery telemetry is not assignable."""
+    """센서 최신 여부를 검사해 로봇의 준비 상태와 오류 목록을 반환한다.
+
+    Args:
+        inputs: 로봇·작업 식별자와 scan, odom, battery 최신 여부를 담은 값.
+
+    Returns:
+        하나라도 오래된 센서가 있으면 ready=False와 해당 stale 오류를,
+        모든 센서가 최신이면 ready=True와 빈 오류 tuple을 담은 결과.
+    """
+
+    # 센서별 오류 이름과 최신 여부를 한 쌍으로 묶어 차례대로 검사한다.
+    # fresh가 False인 센서의 오류 이름만 tuple에 포함된다.
     errors = tuple(
         name for name, fresh in (
             ("scan_stale", inputs.scan_fresh),
@@ -29,4 +64,7 @@ def build_status(inputs: StatusInputs) -> StatusSummary:
             ("battery_stale", inputs.battery_fresh),
         ) if not fresh
     )
+
+    # 빈 tuple은 False로 평가되므로 `not errors`는 오류가 없을 때만 True다.
+    # 로봇·작업 식별자와 계산한 준비 여부 및 오류 목록을 결과로 반환한다.
     return StatusSummary(inputs.robot_id, inputs.job_id, not errors, errors)

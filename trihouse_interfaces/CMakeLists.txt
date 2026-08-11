@@ -9,6 +9,8 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/BatteryActionDecision.msg"
+  "msg/BatteryCondition.msg"
   "msg/BatteryPolicyState.msg"
   "msg/CargoState.msg"
   "msg/ConnectionState.msg"
@@ -26,6 +28,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/StreamHealth.msg"
   "msg/TaskEvent.msg"
   "srv/ClearEmergency.srv"
+  "srv/EstimateTaskEnergy.srv"
   "srv/SetCargoLock.srv"
   "action/Dock.action"
   "action/ExecuteTransport.action"

@@ -32,6 +32,7 @@ def generate_launch_description():
         Node(package='trihouse_pinky_bringup', executable='sim_hardware', parameters=[{'use_sim_time': True}]),
         Node(package='trihouse_pinky_safety', executable='safety_supervisor', parameters=[{'robot_id': robot_id, 'use_sim_time': True}]),
         Node(package='trihouse_pinky_bringup', executable='readiness_checker', parameters=[{'robot_id': robot_id, 'use_sim_time': True}]),
+        Node(package='trihouse_pinky_fleet', executable='battery_condition', parameters=[{'robot_id': robot_id, 'use_sim_time': True}]),
         Node(package='trihouse_pinky_fleet', executable='status_node', parameters=[{'robot_id': robot_id, 'use_sim_time': True}]),
         Node(package='trihouse_pinky_fleet', executable='recovery_health', parameters=[{'robot_id': robot_id, 'use_sim_time': True}]),
         Node(package='trihouse_pinky_fleet', executable='fleet_node', parameters=[{'robot_id': robot_id, 'map_revision': map_revision, 'use_sim_time': True}]),
