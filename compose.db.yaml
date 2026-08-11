@@ -33,7 +33,7 @@ services:
       # Run schema and development seed files only when the volume is empty.
       - ./db/schema_mysql.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
       - ./db/seed_dev.sql:/docker-entrypoint-initdb.d/002_seed.sql:ro
-      - ./db/003_grant_gateway_recovery.sh:/docker-entrypoint-initdb.d/003_grant_gateway_recovery.sh:ro
+      - ./db/init/003_grant_gateway_recovery.sh:/docker-entrypoint-initdb.d/003_grant_gateway_recovery.sh:ro
     # Report healthy only after MySQL accepts local connections.
     healthcheck:
       test:

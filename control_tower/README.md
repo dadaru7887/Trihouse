@@ -10,7 +10,7 @@ Trihouse 중앙 관제 서버의 역할별 모듈 루트다. Pinky와는 TCP 878
 | `task_manager/` | 작업 단계·취소·인계·incident workflow |
 | `fleet_manager/` | 배차·로봇 상태·배터리·충전소 정책 |
 | `rmf_adapter/` | Open-RMF task/traffic 연동 |
-| `database/` | migration과 repository |
+| `database/` | DB connection·repository adapter (`../db/`가 schema·migration 소유) |
 | `monitoring/` | health, metrics, audit, alert, report |
 | `ui/` | operations, RMF diagnostics, map authoring |
 | `tests/` | gateway·workflow·다중 로봇 통합 시험 |

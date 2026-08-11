@@ -78,4 +78,4 @@ ros2 launch trihouse_pinky_bringup trihouse_gazebo_demo.launch.py \
 ## 4. DB 스키마
 
 [DB 시연 가이드](database_demo.md)에 따라 두 database와 18개 table, recovery 관계를
-보여준다. `schema_mysql_bf.sql`은 v3 백업, `schema_mysql.sql`은 v4 신규 설치 기준이다.
+보여준다. 이전 v3 스키마는 Git 이력으로 보존하며, `schema_mysql.sql`만 v4 신규 설치 기준으로 사용한다.
