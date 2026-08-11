@@ -1,57 +1,150 @@
-# Open-RMF 배터리·시간 파라미터 POC 가이드
+# 실제 Pinky Open-RMF 파라미터 측정·보정 가이드
 
-## 적용 범위
+## 1. 목적과 적용 범위
 
-이 문서는 냉동창고↔포장대 배차의 이동시간과 작업 종료 예상 SOC를 검증하기 위해 반드시 필요한 최소 항목만 다룬다. 현재 확인된 환경은 ROS 2 Jazzy, `rmf_demos 2.3.0`, `rmf_ros2 2.7.2`, `rmf_battery 0.3.1`, `rmf_task 2.5.1`, `rmf_traffic 3.3.3`이다.
+이 문서는 `trihouse_rmf_bridge`의 office demo 설정을 실제 Pinky 설정으로 바꾸기 전에 반드시 측정하고 검증해야 할 최소 파라미터를 관리한다. 대상 기능은 냉동창고↔포장대 작업의 이동시간과 작업 종료 예상 SOC 계산이다.
 
-Open-RMF는 등록된 graph와 차량·배터리 모델로 경로와 소비량을 계산하지만, 실제 Pinky의 특성값은 자동으로 알아내지 못한다. 따라서 아래 입력값은 직접 측정해서 fleet adapter 설정에 넣어야 한다.
+현재 확인된 개발 환경은 ROS 2 Jazzy, `rmf_demos 2.3.0`, `rmf_ros2 2.7.2`, `rmf_battery 0.3.1`, `rmf_task 2.5.1`, `rmf_traffic 3.3.3`이다.
 
-## 직접 측정해야 하는 최소 파라미터
+> `trihouse_rmf_bridge/config/office_bridge.yaml`의 숫자는 office demo용 **초기 참고값**이다. 실제 Pinky 설정 반영 금지 상태이며, 이 문서의 측정·검증 절차를 통과하기 전에는 복사하지 않는다.
 
-| 파라미터 | 단위 | POC에서 필요한 이유 | 측정 방법 |
-|---|---:|---|---|
-| waypoint `x`, `y`, 접근 `yaw` | m, rad | RMF 경로와 실제 적재·인계·충전 위치를 일치시킴 | SLAM map에서 후보 좌표를 정한 뒤 로봇을 5회 정차시켜 성공한 평균 좌표·방향을 기록 |
-| 기준 좌표 대응점 | map 좌표↔RMF 좌표 | Nav2 map과 RMF graph 정렬 | 서로 멀리 떨어진 식별점 4개 이상을 두 좌표계에서 측정하고 변환 오차 확인 |
-| 선속도·선가속도 제한 | m/s, m/s² | 경로 ETA 계산 | 무적재 직선 왕복 로그에서 안정적으로 재현되는 속도와 정지거리를 측정 |
-| 각속도·각가속도 제한 | rad/s, rad/s² | 회전이 포함된 ETA 계산 | 제자리 90°·180° 회전을 각 5회 수행하고 소요시간과 overshoot를 측정 |
-| footprint·vicinity 반경 | m | 충돌 회피 및 통로 통과 가능성 판단 | Pinky와 적재 바구니의 최대 외곽 치수를 실측하고 POC 안전 여유를 더함 |
-| nominal voltage | V | RMF 배터리 모델 입력 | 배터리 사양값을 쓰고 완충·운행 중 전압 로그로 확인 |
-| usable capacity | Ah | SOC 소비 예측의 기준 용량 | 사양값으로 시작하고 완충 후 동일 코스 반복 결과로 보정 |
-| charging current | A | 충전 완료 예상시간 계산 | 충전 중 `BatteryState.current`를 기록하거나 충전기 사양값을 사용 |
-| 무적재·최대 적재 질량 | kg | 이동 소비량 차이 반영 | 저울로 Pinky 기본 질량과 최대 POC 적재물을 각각 측정 |
-| ambient power | W | 정지·대기 중 기본 소비 반영 | 모터 정지 상태로 20~30분 대기하며 SOC 감소량을 기록해 환산 |
-| 적재·인계 시간 | s | 이동 외 로봇팔 작업시간 포함 | 각 단계를 10회 수행한 뒤 실패를 포함한 P90 시간을 사용 |
-| 작업 고정 여유시간 | s | 통신·정렬 등 짧은 변동 흡수 | 초기 15초로 시작하고 실제 총시간 오차 로그로 조정 |
+## 2. 값 상태와 적용 규칙
 
-POC에서는 냉동 기능이 실제로 작동하지 않으므로 저온 보정과 별도 tool power는 0 또는 제외한다. 관성모멘트와 마찰계수는 RMF 배터리 모델에 필요할 때 제조사·형상 기반 초기값으로 시작하고 아래 왕복 실험으로 보정한다.
-
-## 반드시 수행할 최소 배터리 소비 실험
-
-| 실험 | 조건 | 기록할 값 | 적용 위치 |
-|---|---|---|---|
-| 유휴 소비 | 완충 후 모터 정지 20~30분 | 시작/종료 SOC, 시간 | ambient power 보정 |
-| 냉동→포장 무적재 왕복 | 같은 경로·속도, 최소 5회 | 실제 시간, 시작/종료 SOC | RMF ETA·이동 sink 검증 |
-| 냉동→포장 최대 적재 왕복 | POC 최대 바구니, 최소 5회 | 질량, 실제 시간, 시작/종료 SOC | 적재 질량에 따른 소비 보정 |
-| 적재·인계 | 각 단계 10회 | 단계별 시간, 성공 여부 | P90 phase duration 설정 |
-| 충전 | 10% 부근부터 30% 이상 | 시간별 SOC, charging 상태 | charging current와 재투입 시간 검증 |
-| 예측 대 실제 비교 | 위 모든 작업 | 예측 종료 SOC, 실제 종료 SOC, 오차 | 안전 임계값·모델 보정 |
-
-`consumption_percent_per_minute`는 Open-RMF 연결이 없을 때만 쓰는 POC fallback 값이다. 실제 RMF 연결 후에도 위 실험은 필요하다. RMF 계산값이 현실과 맞는지 확인하고 차량·배터리 모델 파라미터를 보정해야 하기 때문이다.
-
-## Open-RMF에서 받는 값
-
-| 값 | 의미 | POC 사용법 |
+| 상태 | 의미 | 허용 범위 |
 |---|---|---|
-| `travel_duration_s` | graph 경로 주행 예상시간 | 적재·인계 시간을 제외한 이동 ETA로 기록 |
-| `total_duration_s` | 이동+적재+인계+고정 여유 예상시간 | 작업 전체 예상시간 표시와 검증에 사용 |
-| `change_in_charge` | 해당 작업의 예상 SOC 감소량(0.0~1.0) | 배터리 소비 모델 검증에 사용 |
-| `finish_state_of_charge` | 작업 종료 예상 SOC(0.0~1.0) | `LOCAL_ONLY`의 최종 배차 판단에 사용 |
-| route availability | 요청 waypoint 경로 생성 가능 여부 | 경로가 없으면 새 작업 배정 금지 |
-| estimate source | `open_rmf` 또는 명시적 POC fallback | 운영 판단과 실험 데이터를 구분 |
+| `미측정` | 실제 Pinky에서 측정하지 않았거나 원본 증거가 없음 | 실제 설정 반영 금지 |
+| `초기 참고값` | office demo 또는 제조사 자료의 비교용 숫자 | 측정 계획 수립에만 사용 |
+| `측정 완료` | 측정일·조건·반복 횟수·원본 로그가 있는 값 | 제한된 시험 설정에만 사용 |
+| `검증 완료` | 반복 시험 결과와 POC 적용 승인이 있는 값 | POC 운영 설정에 사용 가능 |
 
-현재 rmf-web `/fleets`에서 바로 볼 수 있는 배터리 값은 로봇의 **현재 SOC**다. 작업 종료 예상 SOC는 웹 API의 현재 상태 필드와 다르므로, `trihouse_rmf_bridge`가 RMF 경로·배터리 모델을 이용해 `EstimateTaskEnergy` service에 응답한다. Control Tower의 `RmfEnergyEstimator`는 이 service를 호출하는 port와 검증·retry를 담당하며, 실제 연결 절차는 `docs/guideline/open_rmf_energy_bridge_test.md`를 따른다.
+`미측정`은 빈칸이 아니라 작업 차단 상태다. 값을 입력할 때는 숫자만 바꾸지 말고 상태, 측정일, 원본 로그, 적용 승인도 함께 갱신한다.
 
-전체 시간 계약은 다음과 같다.
+## 3. office 참고값과 실제 Pinky 측정표
+
+아래 office 값은 연결 구조를 시험하기 위한 값이다. 실제 Pinky 값은 모두 `미측정`에서 시작한다.
+
+| bridge 필드 | 단위 | office 초기 참고값 | 실제 Pinky 값 | 상태 | 최소 측정 방법 | 원본 증거 | 적용 위치 |
+|---|---:|---:|---|---|---|---|---|
+| `linear_velocity` | m/s | 0.5 | 미측정 | 미측정 | 직선 왕복 5회에서 안정적으로 유지된 최고 속도 | 미생성 | Pinky bridge config |
+| `linear_acceleration` | m/s² | 0.75 | 미측정 | 미측정 | 정지→정속 및 정속→정지 로그 5회 | 미생성 | Pinky bridge config |
+| `angular_velocity` | rad/s | 0.6 | 미측정 | 미측정 | 제자리 90°·180° 회전 각 5회 | 미생성 | Pinky bridge config |
+| `angular_acceleration` | rad/s² | 2.0 | 미측정 | 미측정 | 회전 속도 변화와 overshoot 로그 | 미생성 | Pinky bridge config |
+| `footprint_radius` | m | 0.3 | 미측정 | 미측정 | Pinky와 바구니의 최대 외곽 치수 실측 | 미생성 | Pinky bridge config·RMF profile |
+| `vicinity_radius` | m | 0.5 | 미측정 | 미측정 | footprint에 POC 통로 안전 여유를 더해 주행 검증 | 미생성 | Pinky bridge config·RMF profile |
+| `nominal_voltage` | V | 12.0 | 미측정 | 미측정 | 배터리 사양서 확인 후 완충·운행 전압 기록 | 미생성 | Pinky bridge config |
+| `capacity` | Ah | 24.0 | 미측정 | 미측정 | 사양값으로 시작해 동일 코스 SOC 감소로 usable capacity 보정 | 미생성 | Pinky bridge config |
+| `charging_current` | A | 5.0 | 미측정 | 미측정 | 충전기 사양 또는 충전 중 `BatteryState.current` 기록 | 미생성 | Pinky bridge config |
+| `mass` | kg | 20.0 | 미측정 | 미측정 | Pinky+고정 장치+POC 대표 적재물을 저울로 측정 | 미생성 | Pinky bridge config |
+| `moment_of_inertia` | kg·m² | 10.0 | 미측정 | 미측정 | 형상·질량 기반 초기 계산 후 회전 소비 실험으로 보정 | 미생성 | Pinky bridge config |
+| `friction_coefficient` | 무차원 | 0.22 | 미측정 | 미측정 | 평탄 바닥 왕복의 실제 SOC 감소와 모델 결과를 비교해 보정 | 미생성 | Pinky bridge config |
+| `ambient_power` | W | 20.0 | 미측정 | 미측정 | 모터 정지 20~30분의 SOC 감소를 전력으로 환산 | 미생성 | Pinky bridge config |
+| `expected_loading_duration_s` | s | 30.0 | 미측정 | 미측정 | 냉동창고 적재 단계 10회, 실패 포함 P90 | 미생성 | `EstimateTaskEnergy` 요청 |
+| `expected_handover_duration_s` | s | 30.0 | 미측정 | 미측정 | 포장대 인계 단계 10회, 실패 포함 P90 | 미생성 | `EstimateTaskEnergy` 요청 |
+| `task_time_buffer_s` | s | 15.0 | 미측정 | 미측정 | 통신·정렬 지연의 예측 대비 실제 오차로 보정 | 미생성 | `EstimateTaskEnergy` 요청 |
+
+POC에서는 냉동 기능이 실제로 작동하지 않으므로 저온 보정은 제외한다. OMX가 Pinky 배터리를 사용하지 않는다는 결정에 따라 tool power도 제외한다. 두 항목 모두 `POC 제외`이며 0W로 측정 완료된 값이라는 의미가 아니다.
+
+## 4. 반드시 직접 측정해야 하는 최소 파라미터
+
+| 분류 | 측정 대상 | 완료 조건 |
+|---|---|---|
+| 차량 운동 | 선속도·선가속도·각속도·각가속도 | 무적재 반복 5회 원본 로그와 대표값 |
+| 외형 안전 | footprint·vicinity | 최대 적재 외곽 실측과 좁은 통로 시험 |
+| 배터리 | 전압·usable capacity·충전 전류 | 사양 근거와 실제 SOC/시간 로그 |
+| 기계 모델 | 질량·관성모멘트·마찰계수 | 초기 근거와 직선·회전 소비 보정 기록 |
+| 기본 소비 | ambient power | 모터 정지 20~30분 기록 |
+| 작업시간 | 적재·인계·buffer | 단계별 10회와 P90 계산표 |
+| 모델 검증 | 이동시간·시작 SOC·종료 SOC | 냉동↔포장 양방향 각각 5회 이상 |
+
+## 5. 항목별 측정 절차
+
+### 5.1 공통 준비
+
+1. 동일한 바닥, 속도 제한, 경로, 적재 조건을 사용한다.
+2. `TRIHOUSE_MEASUREMENT_RUN_ID`를 실험별 고유 값으로 설정한다.
+3. 출발 전 실제 SOC와 `BatteryState` freshness를 확인한다.
+4. 측정 시작·종료 시각, 적재 질량, 성공 여부를 기록한다.
+5. 실패 주행도 삭제하지 않고 실패 이유와 함께 보존한다.
+
+### 5.2 속도와 가속도
+
+- 3m 이상 직선 구간에서 무적재 왕복을 최소 5회 수행한다.
+- odometry의 시간·위치·속도로 가속 구간, 정속 구간, 감속 구간을 나눈다.
+- 최고 순간값 대신 5회 모두에서 안전하게 재현된 제한값을 채택한다.
+- 90°와 180° 회전은 각각 5회 수행해 실제 시간과 overshoot를 기록한다.
+
+### 5.3 footprint와 vicinity
+
+- 바구니와 돌출 부품을 포함한 최대 폭과 길이를 실측한다.
+- 원형 profile을 유지할 경우 중심에서 가장 먼 외곽점까지의 길이를 `footprint_radius` 후보로 쓴다.
+- `vicinity_radius`는 footprint보다 작게 두지 않는다.
+- 가장 좁은 POC 통로에서 교행 또는 정차 안전성을 확인한 뒤 검증 완료로 전환한다.
+
+### 5.4 배터리와 기계 모델
+
+- nominal voltage와 capacity는 제조사 사양을 원본 증거로 먼저 남긴다.
+- 유휴, 직선, 회전, 무적재 왕복, 최대 적재 왕복을 분리해 기록한다.
+- 한 번의 SOC 변화에 맞추기 위해 여러 파라미터를 동시에 바꾸지 않는다.
+- ambient power를 먼저 보정하고, 직선 소비로 friction, 회전 소비로 moment of inertia를 순서대로 조정한다.
+
+### 5.5 작업 단계 시간
+
+- 냉동창고 적재와 포장대 인계를 각각 10회 수행한다.
+- 정상 소요시간뿐 아니라 재정렬·재시도 시간을 포함한다.
+- 기본 입력값은 평균보다 P90을 사용한다.
+- `task_time_buffer_s`는 적재·인계 시간에 이미 포함된 지연을 중복 계산하지 않는다.
+
+## 6. 반드시 수행할 배터리·ETA 보정 실험
+
+| 순서 | 실험 | 조건·반복 | 기록할 값 | 보정 대상 |
+|---:|---|---|---|---|
+| 1 | 유휴 소비 | 모터 정지 20~30분 | 시작/종료 SOC, 시간 | `ambient_power` |
+| 2 | 직선 왕복 | 무적재, 동일 속도, 5회 | 거리, 시간, SOC 감소 | `friction_coefficient` |
+| 3 | 회전 반복 | 90°·180° 각 5회 | 회전시간, SOC 감소 | `moment_of_inertia` |
+| 4 | 냉동→포장 | 무적재 5회 | RMF ETA, 실제 시간, 예측/실제 SOC | 종합 모델 |
+| 5 | 포장→냉동 | 무적재 5회 | RMF ETA, 실제 시간, 예측/실제 SOC | 방향별 graph·모델 |
+| 6 | 최대 적재 왕복 | POC 최대 바구니, 5회 | 질량, 시간, SOC 감소 | 대표 `mass`와 보수성 |
+| 7 | 충전 | 10% 부근→30% 이상 | 시간별 SOC·충전 상태 | `charging_current`, 재투입 시간 |
+
+`consumption_percent_per_minute`는 Open-RMF가 없는 개발·단위 테스트의 명시적 fallback에만 사용한다. Open-RMF 연결 후에도 위 실험은 모델값이 실제 Pinky와 맞는지 확인하기 위해 반드시 필요하다.
+
+## 7. bridge 설정 필드 매핑
+
+office 설정 파일은 유지하고 수정하지 않는다. 실제 Pinky 연결 구현 시 별도의 Pinky config/launch를 만들며, 측정표가 `측정 완료` 이상인 값만 옮긴다.
+
+| 설정 그룹 | bridge 필드 | 근거 |
+|---|---|---|
+| 대상 식별 | `fleet_name`, `robot_name` | 실제 Pinky fleet adapter 등록 이름 |
+| graph | `nav_graph_file` | `waypoint.md`에서 export·검증한 nav graph |
+| 운동 | `linear_velocity`, `linear_acceleration`, `angular_velocity`, `angular_acceleration`, `reversible` | 이동·회전 시험 |
+| 외형 | `footprint_radius`, `vicinity_radius` | 최대 외곽 실측·통로 시험 |
+| 배터리 | `nominal_voltage`, `capacity`, `charging_current` | 사양·SOC·충전 로그 |
+| 기계 | `mass`, `moment_of_inertia`, `friction_coefficient` | 질량 실측·소비 보정 |
+| 장치 | `ambient_power` | 유휴 소비 시험 |
+
+설정 반영 후 다음 명령으로 실제 node 값을 확인한다.
+
+```bash
+ros2 param dump /trihouse_rmf_bridge
+```
+
+출력값을 측정표와 대조하고 office 초기 참고값이 의도치 않게 남아 있으면 적용 승인을 중단한다.
+
+## 8. Open-RMF에서 받는 값과 직접 측정값
+
+| 구분 | 값 | 의미·사용법 |
+|---|---|---|
+| Open-RMF 제공 | `travel_duration_s` | graph와 차량 운동 제한으로 계산한 이동 ETA |
+| Open-RMF 제공 | `total_duration_s` | 이동+적재+인계+고정 여유 예상시간 |
+| Open-RMF 제공 | `change_in_charge` | motion+ambient 모델의 예상 SOC 감소량 |
+| Open-RMF 제공 | `finish_state_of_charge` | 현재 SOC에서 예상 감소량을 뺀 작업 종료 SOC |
+| Open-RMF 제공 | route availability | 요청 waypoint까지 경로 생성 가능 여부 |
+| 직접 측정 | 실제 이동시간 | RMF ETA 오차 검증 근거 |
+| 직접 측정 | 실제 시작·종료 SOC | 예측 SOC 오차 검증 근거 |
+| 직접 측정 | 적재·인계 시간 | 이동 외 작업시간 입력값 |
+| 직접 측정 | 차량·배터리 파라미터 | RMF 모델 입력과 보정 근거 |
+
+rmf-web `/fleets`의 battery는 현재 SOC이며 예상 종료 SOC가 아니다. 예상 종료 SOC는 `/trihouse/rmf/estimate_task_energy`의 `finish_state_of_charge`를 사용한다.
 
 ```text
 total_duration_s
@@ -61,65 +154,70 @@ total_duration_s
  + task_time_buffer_s
 ```
 
-## POC 배차 규칙
+## 9. 측정 결과 기록 양식
+
+측정할 때 아래 표를 복사해 실험 기록 문서에 사용한다.
+
+| 항목 | 기록값 |
+|---|---|
+| run ID | 미생성 |
+| 파라미터 | 미측정 |
+| 측정값·단위 | 미측정 |
+| 측정일 | 미측정 |
+| 장소·바닥·온도 | 미측정 |
+| Pinky ID·software revision | 미측정 |
+| 적재 질량 | 미측정 |
+| 반복 횟수·성공 횟수 | 미측정 |
+| 원본 로그 경로 | 미생성 |
+| 계산 방법·대표값 | 미측정 |
+| 예측 대비 실제 오차 | 미측정 |
+| 상태 | 미측정 |
+| 적용 승인자·승인일 | 미승인 |
+
+## 10. 적용 승인 체크리스트
+
+- [ ] 필수 파라미터가 모두 `측정 완료` 이상이다.
+- [ ] 각 값에 측정일, 조건, 반복 횟수, 원본 로그가 있다.
+- [ ] 핵심 경로 양방향을 각각 5회 이상 실행했다.
+- [ ] RMF ETA와 실제 이동시간 오차를 계산했다.
+- [ ] 예상 종료 SOC와 실제 종료 SOC 오차를 계산했다.
+- [ ] 허용 오차는 반복 결과를 본 뒤 운영팀이 승인했다.
+- [ ] `office_bridge.yaml` 초기 참고값을 실제 설정에 그대로 복사하지 않았다.
+- [ ] `waypoint.md`의 graph 연결 체크리스트가 완료됐다.
+- [ ] 적용 승인자와 승인일을 기록했다.
+
+허용 오차 숫자는 실험 전 임의로 확정하지 않는다. 반복 결과가 나온 뒤 승인한 기준과 계산 근거를 기록해야 `검증 완료`로 전환한다.
+
+## 11. 자동 측정 로그
+
+기본 저장 위치는 `~/.ros/trihouse/measurements/<run_id>/`다. Pinky와 Control Tower에 같은 run ID를 설정한다.
+
+| 파일 | 자동 기록 내용 |
+|---|---|
+| `run_metadata.json` | schema, run ID, 생성시각, component |
+| `battery_telemetry_<robot_id>.jsonl` | 실제 SOC, freshness, 충전 상태, job/step, 정책 state |
+| `rmf_energy_estimates.jsonl` | waypoint, 단계시간, RMF ETA, 예상 감소량·종료 SOC, source·오류 |
+| `battery_policy_decisions.jsonl` | state/action/reason, 실제·예상 SOC, 배차 선택 여부 |
+
+```bash
+export TRIHOUSE_MEASUREMENT_RUN_ID=pinky_rmf_measure_01
+export TRIHOUSE_MEASUREMENT_LOG_ROOT=$HOME/.ros/trihouse/measurements
+
+find "$TRIHOUSE_MEASUREMENT_LOG_ROOT/$TRIHOUSE_MEASUREMENT_RUN_ID" \
+  -maxdepth 1 -type f -print
+tail -f \
+  "$TRIHOUSE_MEASUREMENT_LOG_ROOT/$TRIHOUSE_MEASUREMENT_RUN_ID"/rmf_energy_estimates.jsonl
+```
+
+로그 저장 실패는 배차 판단을 바꾸지 않지만 해당 실험값은 원본 증거가 없으므로 `측정 완료`로 전환하지 않는다.
+
+## 12. POC 배차 규칙 확인
 
 | 현재 정책 | RMF 예상 종료 SOC | 결정 |
 |---|---:|---|
 | `LOCAL_ONLY` | 10% 초과 | 냉동↔포장 작업 허용(`ALLOW_LOCAL_JOB`) |
-| `LOCAL_ONLY` | 5% 초과 10% 이하 | 이 작업까지만 완료 후 충전 복귀(`COMPLETE_THEN_RETURN`) |
+| `LOCAL_ONLY` | 5% 초과 10% 이하 | 해당 작업 완료 후 충전 복귀(`COMPLETE_THEN_RETURN`) |
 | `LOCAL_ONLY` | 5% 이하 | 새 작업 금지, 즉시 충전 복귀(`RETURN_TO_CHARGE`) |
-| `LOCAL_ONLY` | 값 없음/timeout/경로 없음 | 새 작업 금지, 가까운 냉동·포장 안전점 대기(`WAIT_AT_SAFE_NODE`) |
+| `LOCAL_ONLY` | 값 없음/timeout/경로 없음 | 안전점 대기(`WAIT_AT_SAFE_NODE`) |
 
-## rmf-web에서 확인 가능한 상태
-
-| API·항목 | 의미 |
-|---|---|
-| `/fleets`의 fleet/name | fleet와 로봇 식별자 |
-| status | 로봇 운행 상태 문자열 |
-| battery | 현재 SOC; 예상 종료 SOC가 아님 |
-| task_id | 현재 할당된 RMF task |
-| location의 map/x/y/yaw | 현재 level과 자세 |
-| issues | 로봇·task에서 보고한 문제 |
-| mutex groups | 현재 점유한 상호배제 자원 |
-| `/tasks`의 category/status/assigned_to | 작업 종류·진행상태·할당 로봇 |
-
-## 자동 측정 로그
-
-기본 저장 위치는 `~/.ros/trihouse/measurements/<run_id>/`다. 실험 전에 두 프로세스에 같은 `TRIHOUSE_MEASUREMENT_RUN_ID`를 설정한다.
-
-| 파일 | 자동 기록 내용 |
-|---|---|
-| `run_metadata.json` | schema, run ID, 생성시각, 기록 component |
-| `battery_telemetry_<robot_id>.jsonl` | 실제 SOC, 유효성·freshness, 충전 상태, job/step, 정책 state |
-| `rmf_energy_estimates.jsonl` | 요청 경로, phase 시간, RMF ETA, 예상 감소량·종료 SOC, source·오류 |
-| `battery_policy_decisions.jsonl` | 배차에 사용한 state/action/reason, 실제·예상 SOC, 선택 여부 |
-
-```bash
-export TRIHOUSE_MEASUREMENT_RUN_ID=poc_20260811_01
-export TRIHOUSE_MEASUREMENT_LOG_ROOT=$HOME/.ros/trihouse/measurements
-
-find "$TRIHOUSE_MEASUREMENT_LOG_ROOT/$TRIHOUSE_MEASUREMENT_RUN_ID" -maxdepth 1 -type f -print
-tail -f "$TRIHOUSE_MEASUREMENT_LOG_ROOT/$TRIHOUSE_MEASUREMENT_RUN_ID"/battery_telemetry_PK-01.jsonl
-jq . "$TRIHOUSE_MEASUREMENT_LOG_ROOT/$TRIHOUSE_MEASUREMENT_RUN_ID"/rmf_energy_estimates.jsonl
-```
-
-로그 저장 실패는 배터리 정책이나 주행 결정을 바꾸지 않는다. 파일이 없으면 노드 경고와 디렉터리 권한·환경변수를 확인한다.
-
-## 설치·연결 확인 명령
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source /home/syw/rmf_ws/install/setup.bash
-source /home/syw/Trihouse/install/setup.bash
-
-ros2 pkg prefix rmf_demos_gz
-ros2 pkg prefix rmf_demos_fleet_adapter
-python3 -c "import rmf_adapter, rmf_adapter.battery; print('RMF Python OK')"
-
-ros2 topic echo /trihouse/battery
-ros2 topic echo /trihouse/battery/policy_state
-ros2 interface show trihouse_interfaces/srv/EstimateTaskEnergy
-ros2 service list | grep estimate_task_energy
-```
-
-마지막 service가 표시되지 않으면 `ros2 launch trihouse_rmf_bridge office_energy_bridge.launch.py` 실행 여부와 graph 설정을 확인한다. `pinky_pro`는 배터리 원본과 하드웨어 안전만 담당하고, Control Tower가 RMF 예측과 배차 정책을 결합한다.
+파라미터 측정은 이 정책 임계값을 임의로 변경하지 않는다. 예측 오차가 크면 모델을 보정하고, 임계값 변경은 별도의 정책 결정으로 다룬다.
