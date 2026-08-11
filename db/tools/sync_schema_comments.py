@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Synchronize English schema comments with SQL, migration, XLSX, and draw.io.
+"""Synchronize English schema comments with SQL and existing XLSX/draw.io rows.
 
 Database, table, column, and enum identifiers remain unchanged.
-This script maintains ASCII-only English metadata for reliable web display.
+The historical v4 comment migration remains frozen; schema evolution uses a
+separate migration. This script maintains ASCII-only metadata for reliable web
+display and refreshes legacy dictionary/diagram entries that still exist.
 """
 
 
@@ -125,6 +127,7 @@ TABLE_META = {
     "jobs": ("trihouse_fms", "Jobs", "Manages the full lifecycle of inbound, outbound, transfer, replenishment, disposal, recovery, and emergency jobs."),
     "job_items": ("trihouse_fms", "Job items", "Manages products, requested and completed quantities, assigned lots, and verification status for each job."),
     "job_steps": ("trihouse_fms", "Job steps", "Manages ordered execution steps for Pinky movement, OMX manipulation, verification, and handoff operations."),
+    "job_step_attempts": ("trihouse_fms", "Job step attempts", "Records each Pinky, OMX, or FMS execution attempt with structured methods, evidence, criteria, metrics, and outcomes."),
     "reservations": ("trihouse_fms", "Resource reservations", "Manages access to bottlenecks and exclusive or time-based reservations for docks, workstations, and devices."),
     "inventory_moves": ("trihouse_fms", "Inventory movements", "Records immutable inventory and reservation quantity changes, resulting balances, reasons, and responsible actors."),
     "device_states": ("trihouse_fms", "Latest device states", "Stores the latest heartbeat, location, battery level, progress, health, and active step for each device."),
@@ -386,6 +389,44 @@ _ENGLISH_COLUMN_OVERRIDES = {
     "unit_weight_kg": "Weight of one product unit in kilograms.",
 }
 
+_ORCHESTRATION_COLUMN_COMMENTS = {
+    "actor_device_id": "Device identifier for the execution actor when the role is Pinky or OMX.",
+    "actor_role": "Execution actor role: Pinky, OMX, or FMS.",
+    "after_observation": "JSON object containing the state observed after execution.",
+    "assignment_revision": "Assignment revision used to reject stale execution results.",
+    "attempt_no": "One-based attempt number within the step, revision, and actor role.",
+    "attempt_uuid": "UUID that identifies one execution attempt across systems.",
+    "before_observation": "JSON object containing the state observed before execution.",
+    "causation_event_uuid": "UUID of the event that directly caused this event.",
+    "command_uuid": "UUID of the command that initiated this execution attempt.",
+    "correlation_uuid": "UUID that groups events belonging to the same distributed operation.",
+    "criteria": "JSON object containing expected, observed, and passed success criteria.",
+    "data_quality_status": "Quality status of the record: complete, incomplete, or invalid.",
+    "detail": "Operator-readable detail that is not used as a decision branch.",
+    "evidence_refs": "JSON array containing image, video, ROS bag, RMF log, or artifact references.",
+    "failure_domain": "Layer responsible for failure, or none for successful and active attempts.",
+    "final_method_code": "Method code used by the final execution attempt.",
+    "final_outcome_reason_code": "Stable reason code for the final step outcome.",
+    "method_code": "Stable code for the execution method selected before dispatch.",
+    "metrics": "JSON object containing measured execution values and units.",
+    "outcome": "Terminal attempt outcome: succeeded, failed, aborted, or cancelled.",
+    "outcome_reason_code": "Stable reason code produced from structured execution facts.",
+    "parameters": "JSON object containing command and method parameters.",
+    "policy_source": "Source that selected the method, such as rule, RMF, Nav2, VLM, RL, or operator.",
+    "result_code": "Stable final result code for a terminal job.",
+    "rmf_event_id": "Open-RMF event identifier associated with this job step.",
+    "rmf_phase_id": "Open-RMF phase identifier associated with this job step.",
+    "rmf_status": "Latest Open-RMF task status observed for this job step.",
+    "rmf_status_observed_at": "Timestamp when the latest Open-RMF status was observed.",
+    "selection_reason_code": "Stable reason code explaining why the execution method was selected.",
+    "state_detail": "Operator-readable detail for the current job state.",
+    "state_reason_code": "Stable reason code explaining the current job state.",
+    "success": "Indicates whether the terminal attempt satisfied every success criterion.",
+}
+
+COLUMN_COMMENTS.update(_ORCHESTRATION_COLUMN_COMMENTS)
+_ENGLISH_COLUMN_OVERRIDES.update(_ORCHESTRATION_COLUMN_COMMENTS)
+
 COLUMN_COMMENTS = {
     column: _ENGLISH_COLUMN_OVERRIDES.get(column, _default_english_comment(column))
     for column in COLUMN_COMMENTS
@@ -405,8 +446,9 @@ STATE_COMMENTS = {
 STATE_COMMENTS = {
     "locations": "Current location status: available, reserved, occupied, blocked, or maintenance.",
     "inventory_lots": "Inventory-lot status, such as pending receipt, stored, held, depleted, expired, or damaged.",
-    "jobs": "Job lifecycle status from pending and planning through execution, completion, failure, cancellation, or safety hold.",
-    "job_steps": "Job-step status: pending, queued, running, succeeded, failed, held, or cancelled.",
+    "jobs": "Job lifecycle status: queued, assigned, running, held, completed, failed, or cancelled.",
+    "job_steps": "Job-step status: pending, running, succeeded, failed, or cancelled.",
+    "job_step_attempts": "Attempt progress: created, dispatched, running, reconciling, or finished.",
     "reservations": "Reservation status: reserved, in use, released, expired, or cancelled.",
     "device_states": "Current operating-state code reported by the device.",
     "integration_messages": "Message status: pending, sent, acknowledged, failed, or dead.",
@@ -538,8 +580,8 @@ def render_schema(source: str) -> tuple[str, dict[str, list[str]]]:
         missing = sorted(set(TABLE_META) - set(seen))
         extra = sorted(set(seen) - set(TABLE_META))
         raise ValueError(f"Schema metadata mismatch: missing={missing}, extra={extra}")
-    if sum(map(len, seen.values())) != 253:
-        raise ValueError(f"Expected 253 columns, found {sum(map(len, seen.values()))}")
+    if sum(map(len, seen.values())) != 298:
+        raise ValueError(f"Expected 298 columns, found {sum(map(len, seen.values()))}")
     return rendered, seen
 
 
@@ -660,7 +702,9 @@ def update_diagram(*, check: bool) -> None:
         cell_id = f"table_{database}_{table}"
         cell = root.find(f".//mxCell[@id='{cell_id}']")
         if cell is None:
-            raise ValueError(f"Diagram table cell not found: {cell_id}")
+            # The v4 diagram is retained as a legacy overview. New v5 tables
+            # are documented in schema_mysql.sql and database_guide.md.
+            continue
         value = cell.attrib["value"]
         header = f"<b>{database}.{table}</b>"
         rest = value.removeprefix(header + "<br>")
@@ -693,22 +737,24 @@ def main() -> None:
 
     source = SCHEMA_PATH.read_text(encoding="utf-8")
     rendered_schema, _columns = render_schema(source)
-    rendered_migration = render_migration(rendered_schema)
     if args.check:
         if source != rendered_schema:
             raise ValueError("schema_mysql.sql comments are not synchronized")
-        if not MIGRATION_PATH.exists() or MIGRATION_PATH.read_text(encoding="utf-8") != rendered_migration:
-            raise ValueError("English comment migration is not synchronized")
         update_dictionary(check=True)
         update_diagram(check=True)
-        print("Schema metadata check: 18 tables and 253 columns are synchronized.")
+        print(
+            "Schema metadata check: 19 tables and 298 SQL columns; "
+            "253 legacy dictionary rows are synchronized."
+        )
         return
 
     SCHEMA_PATH.write_text(rendered_schema, encoding="utf-8")
-    MIGRATION_PATH.write_text(rendered_migration, encoding="utf-8")
     update_dictionary(check=False)
     update_diagram(check=False)
-    print("Updated English comments for 18 tables and 253 columns.")
+    print(
+        "Updated comments for 19 tables and 298 SQL columns; "
+        "refreshed 253 existing dictionary rows."
+    )
 
 
 if __name__ == "__main__":

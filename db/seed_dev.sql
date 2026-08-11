@@ -99,7 +99,7 @@ INSERT INTO jobs
    external_reference, source_location_id, destination_location_id, due_at,
    assigned_mobile_id, context, created_at)
 VALUES
-  ('JOB-DEV-001', 'outbound', 'normal', 'pending', 'W-OP-01',
+  ('JOB-DEV-001', 'outbound', 'normal', 'queued', 'W-OP-01',
    '00000000-0000-0000-0000-000000000001',
    (SELECT location_id FROM locations WHERE location_code = 'A-SLOT-01'),
    (SELECT location_id FROM locations WHERE location_code = 'OUT-DOCK-01'),

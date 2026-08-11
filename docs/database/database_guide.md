@@ -1,6 +1,6 @@
 # Trihouse FMS 데이터베이스 가이드라인
 
-기준 스키마: [db/schema_mysql.sql](../../db/schema_mysql.sql) (v4: FMS 16개 + recovery 2개 테이블)
+기준 스키마: [db/schema_mysql.sql](../../db/schema_mysql.sql) (v5: FMS 17개 + recovery 2개 테이블)
 관련 문서: [환경 구성](../deployment/environment_overview.md) · [DB 시연](../deployment/database_demo.md) · [Recovery Memory](../architecture/recovery_memory.md)
 
 이 문서는 `trihouse_fms` 스키마를 읽고 쓰는 모든 코드가 지켜야 할 규약을 정리한다. 스키마 자체의 정의는 SQL 파일이 기준이며, 이 문서는 **왜 그렇게 설계했고 어떻게 써야 하는가**를 설명한다.
@@ -414,7 +414,7 @@ FK의 삭제 동작은 다음과 같이 구분되어 있다.
 | 공간·작업장 | `locations`, `map_features` | 창고의 모든 운영 위치와 지도 feature |
 | 사람·권한 | `workers` | 책임 주체 계정 |
 | 장비 | `devices`, `device_states` | 마스터와 최신 상태 |
-| 업무 | `jobs`, `job_items`, `job_steps` | 업무 헤더 / 품목 / 실행 단계 |
+| 업무 | `jobs`, `job_items`, `job_steps`, `job_step_attempts` | 업무 헤더 / 품목 / 현재 단계 / 실행 시도 이력 |
 | 재고 | `inventory_lots`, `inventory_moves` | 현재 수량과 변동 원장 |
 | 점유 | `reservations` | 자원 잠금과 시간 예약 |
 | 연동 | `integration_messages` | 내구성 있는 메시지 큐 |
@@ -446,7 +446,7 @@ devices ──> device_states (1:1, PK = device_id)
 
 jobs ──self──> jobs (parent_job_id, 복구 계보)
      ──> job_items ──> inventory_lots
-     ──> job_steps ──> reservations, device_states, integration_messages, artifacts
+     ──> job_steps ──> job_step_attempts, reservations, device_states, integration_messages, artifacts
      ──> reservations, inventory_moves, operation_events, artifacts
 
 inventory_lots ──> inventory_moves (추가 전용 원장)
@@ -455,6 +455,7 @@ map_features ──> reservations.map_feature_id (병목 잠금)
 
 incidents ──> operation_events.incident_id
 
+job_step_attempts ──> operation_events.attempt_uuid
 operation_events ──> artifacts.event_id
 
 locations ──> location_recovery_profiles (1:0..1, location_id UNIQUE)
@@ -472,7 +473,7 @@ trihouse_recovery.recovery_episodes
 
 - `devices` 1 — 1 `device_states` (PK가 `device_id`이므로 장비당 정확히 한 행, 최신 상태만)
 - `jobs` 1 — N `job_items` / `job_steps` / `reservations`
-- `job_steps` 1 — N `integration_messages` / `artifacts`
+- `job_steps` 1 — N `job_step_attempts` / `integration_messages` / `artifacts`
 - `inventory_lots` 1 — N `inventory_moves`
 - `locations` 1 — N `locations` (자기 참조 트리: 랙 → 슬롯)
 - `jobs` 1 — N `jobs` (자기 참조: 원본 → 복구 job)
@@ -619,7 +620,9 @@ ON DUPLICATE KEY UPDATE
 | `parent_job_id` | 복구 계보. 원본 job을 가리킨다 |
 | `operation_type` | 7종 |
 | `priority` + `priority_rank` | `priority_rank`는 **생성 컬럼(STORED)**. 직접 쓰지 않는다 |
-| `state` | 9종 |
+| `state` | `queued`, `assigned`, `running`, `held`, `completed`, `failed`, `cancelled` |
+| `state_reason_code` / `state_detail` | 현재 상태의 기계 판독 코드와 운영자 설명 |
+| `result_code` | terminal 작업의 최종 결과 코드 |
 | `revision` | 낙관적 락 버전. 갱신마다 +1 |
 | `external_reference` | 외부 요청 멱등 키. 유니크. 내부 job은 NULL |
 | `assigned_mobile_id` | 배차된 Pinky |
@@ -645,15 +648,19 @@ ON DUPLICATE KEY UPDATE
 
 ### 5.10 `job_steps` — 실행 단계
 
-업무를 Pinky 이동 → OMX 조작 → 검수 → 인계 순서의 실행 단계로 나눈다. **학습 라벨의 1차 출처**이기도 하다 (10절).
+업무를 Pinky 이동 → OMX 조작 → 검수 → 인계 순서의 실행 단계로 나눈다. 이 테이블은 **현재 단계 상태의 원본**이고 재시도별 학습 라벨은 `job_step_attempts`가 소유한다.
 
 | 컬럼 | 설명 |
 | --- | --- |
 | `step_no` | job 내 순번. `(job_id, step_no)`가 유니크 |
 | `executor_type` | `mobile` / `arm` / `fms` |
 | `action_type` | 13종 |
+| `assignment_revision` | 재배정 전의 늦은 결과를 거부하는 fencing 값 |
 | `rmf_task_id` | RMF 작업 직접 연결. 전역 유니크 |
-| `policy_name` + `policy_version` | VLM/RL 판단 추적. 별도 테이블 없이 여기서 관리 |
+| `rmf_phase_id` / `rmf_event_id` | RMF task 내부 진행 단위와 연결 |
+| `rmf_status` / `rmf_status_observed_at` | 마지막 RMF 관측 사실과 시각 |
+| `final_outcome_reason_code` / `final_method_code` | 단계 최종 결과의 조회용 요약 |
+| `policy_name` + `policy_version` | 단계 수준의 마지막 정책 계보 요약 |
 | `retry_count` | 단순 재시도 횟수 |
 | `input` / `result` | 어댑터 명령 payload와 결과 JSON |
 | `started_at` / `completed_at` | 소요 시간 계산 근거 |
@@ -665,8 +672,26 @@ ON DUPLICATE KEY UPDATE
 - `rmf_task_id`는 유니크다. RMF task를 재제출하면 **새 `job_step`을 만들거나** 기존 행의 값을 갱신한다. 두 단계가 같은 RMF task를 가리킬 수 없다.
 - `retry_count` 증가는 같은 물리 명령의 재전송을 의미한다. 명령 내용이 달라지면 새 단계를 만든다.
 - 배차 대기 조회는 `idx_job_steps_dispatch (state, executor_type)`을 탄다.
-- **VLM/RL이 개입한 단계는 `policy_name` + `policy_version`을 반드시 채운다.** 특정 모델 버전의 성공률을 계산하는 유일한 근거다.
+- **VLM/RL이 개입한 시도는 `job_step_attempts`의 policy/model 계보를 반드시 채운다.** `job_steps` 값은 UI 조회를 위한 최종 요약일 뿐이다.
 - `started_at` / `completed_at`을 빠짐없이 채운다. 비어 있으면 그 단계는 학습 데이터에서 통째로 빠진다.
+
+### 5.10.1 `job_step_attempts` — 단계 실행 시도 이력
+
+동일 단계에서 Pinky·OMX·FMS가 수행한 **한 번의 실행**을 한 행으로 남긴다. `job_steps`를 재시도할 때 덮어쓰지 않으므로 성공하기 전 실패 과정도 학습 데이터에 보존된다.
+
+| 컬럼군 | 채우는 시점과 역할 |
+| --- | --- |
+| `attempt_uuid`, `command_uuid`, `attempt_no` | 명령 생성 transaction에서 확정한다 |
+| `assignment_revision`, `actor_role`, `actor_device_id` | 현재 배정과 결과 주체를 검증한다 |
+| `state` | `created → dispatched → running → reconciling/finished` 진행을 표시한다 |
+| `outcome`, `success` | `finished`일 때만 채운다. 모든 성공 기준을 통과해야 `success=1`이다 |
+| `method_code`, `selection_reason_code` | 명령 생성 시 정하며 결과를 보고 바꾸지 않는다 |
+| `outcome_reason_code`, `failure_domain`, `detail` | 구조화된 실행 사실을 결정적 분류기로 판정해 채운다 |
+| `criteria`, `metrics` | 무엇을 기준으로 어떻게 성공·실패했는지 저장한다 |
+| `before_observation`, `after_observation`, `evidence_refs` | 학습 관측과 원본 artifact를 연결한다 |
+| policy/model 계보, `data_quality_status` | 재현 가능한 학습 export의 필터가 된다 |
+
+`event_uuid`, `command_uuid`, `(job_step_id, assignment_revision, actor_role, attempt_no)`는 각각 유일하다. 명령 생성 시에는 아직 결과 이벤트가 없으므로 `event_uuid`는 NULL이며, terminal 결과를 반영할 때 채운다.
 
 ### 5.11 `reservations` — 자원 점유
 
@@ -913,13 +938,24 @@ Safety 승인·거부, Nav2 취소는 이 테이블이 아니라 `operation_even
 | --- | --- |
 | `jobs.operation_type` | `inbound`, `outbound`, `relocation`, `replenishment`, `disposal`, `recovery`, `emergency` |
 | `jobs.priority` | `critical`(rank 1), `high`(2), `normal`(3), `low`(4) |
-| `jobs.state` | `pending`, `planned`, `running`, `waiting`, `blocked`, `completed`, `failed`, `cancelled`, `safety_hold` |
+| `jobs.state` | `queued`, `assigned`, `running`, `held`, `completed`, `failed`, `cancelled` |
 | `job_items.verification_state` | `pending`, `matched`, `mismatch`, `manual_review` |
 | `job_steps.executor_type` | `mobile`, `arm`, `fms` |
 | `job_steps.action_type` | `navigate`, `dock`, `inspect`, `pick`, `load`, `unload`, `place`, `verify`, `handover`, `wait`, `recover`, `return_home`, `safety_stop` |
-| `job_steps.state` | `pending`, `queued`, `running`, `succeeded`, `failed`, `on_hold`, `cancelled` |
+| `job_steps.state` | `pending`, `running`, `succeeded`, `failed`, `cancelled` |
 
 > `jobs.state`와 `job_steps.state`는 **서로 다른 집합**이다. job은 `completed`, step은 `succeeded`다. 공용 헬퍼로 두 상태를 함께 처리하지 않는다.
+
+### job_step_attempts
+
+| 컬럼 | 값 |
+| --- | --- |
+| `actor_role` | `pinky`, `omx`, `fms` |
+| `state` | `created`, `dispatched`, `running`, `reconciling`, `finished` |
+| `outcome` | `succeeded`, `failed`, `aborted`, `cancelled` (진행 중에는 NULL) |
+| `failure_domain` | `none`, `robot`, `perception`, `navigation`, `manipulation`, `safety`, `integration`, `operator`, `unknown` |
+| `policy_source` | `rule`, `rmf`, `nav2`, `vlm`, `rl`, `operator`, `hardware` |
+| `data_quality_status` | `complete`, `incomplete`, `invalid` |
 
 ### reservations
 
@@ -1050,7 +1086,7 @@ SET state = 'running',
     started_at = NOW(6)
 WHERE job_id = ?
   AND revision = ?               -- 읽어온 시점의 revision
-  AND state IN ('planned');      -- 허용된 이전 상태
+  AND state IN ('assigned');     -- 허용된 이전 상태
 ```
 
 영향 행이 **0행이면 충돌이다.** 최신 job을 다시 읽어 API에 충돌 응답(409)을 반환한다. 조용히 성공으로 처리하지 않는다.
@@ -1172,8 +1208,11 @@ DB는 주행 경로를 **결정하지 않지만**, 경로 재추정 모델을 �
 **둘을 잇는 다리는 `artifacts.job_step_id` / `artifacts.event_id` / `artifacts.device_id`다.** 이 컬럼을 비워 두면 그 파일은 라벨 없는 데이터가 되어 학습에 쓸 수 없다. 수집 파이프라인의 최우선 규칙이다.
 
 ```text
-job_steps (라벨: 성공/실패/소요시간/재시도)
+job_steps (현재 단계 상태와 최종 요약)
     │  job_step_id
+    v
+job_step_attempts (시도별 method/reason/criteria/metrics/계보)
+    │  job_step_id / event_uuid
     v
 artifacts (관측: rosbag / pointcloud / episode)  ──> storage_uri + sha256
     ^  event_id
@@ -1185,10 +1224,12 @@ operation_events (시계열 관측, 모델 판단, safety_decision)
 
 | 신호 | 출처 | 계산 |
 | --- | --- | --- |
-| 단계 성공/실패 | `job_steps.state` | `succeeded` / `failed` |
-| 단계 소요 시간 | `job_steps.started_at`, `completed_at` | 차이 |
-| 재시도 비용 | `job_steps.retry_count` | 그대로 |
-| 실패 원인 분류 | `job_steps.failure_reason`, `jobs.failure_reason` | 문자열 |
+| 시도 성공/실패/중단/취소 | `job_step_attempts.outcome`, `success` | terminal 구조화 라벨 |
+| 성공·실패 판단 근거 | `criteria`, `metrics`, `outcome_reason_code` | 기준별 관측과 고정 코드 |
+| 실행 방법과 선택 이유 | `method_code`, `selection_reason_code` | 명령 생성 시 확정 |
+| 실패 원인 분류 | `failure_domain`, `outcome_reason_code`, `detail` | 영역·코드·설명 분리 |
+| 단계 소요 시간 | `job_step_attempts.started_at`, `completed_at` | 시도별 차이 |
+| 재시도 비용 | `attempt_no` | 동일 단계·revision·actor 내 순번 |
 | **대기·혼잡** | `reservations.planned_start_at` vs `entered_at` | 차이 = 실제 대기 시간 |
 | **점유 시간** | `reservations.entered_at` vs `exited_at` | 차이 |
 | 납기 지연 | `jobs.due_at` vs `completed_at` | 차이 |
@@ -1201,20 +1242,19 @@ operation_events (시계열 관측, 모델 판단, safety_decision)
 
 ### 10.3 정책 버전별 성과 집계
 
-`job_steps.policy_name` / `policy_version`이 채워져 있어야 성립한다.
+`job_step_attempts.policy_name` / `policy_version`이 채워져 있어야 성립한다.
 
 ```sql
 SELECT policy_name,
        policy_version,
        COUNT(*)                                   AS attempts,
-       SUM(state = 'succeeded')                   AS succeeded,
-       SUM(state = 'failed')                      AS failed,
-       SUM(state = 'succeeded') / COUNT(*)        AS success_rate,
-       SUM(retry_count)                           AS total_retries,
+       SUM(outcome = 'succeeded')                 AS succeeded,
+       SUM(outcome = 'failed')                    AS failed,
+       SUM(success = 1) / COUNT(*)                AS success_rate,
        AVG(TIMESTAMPDIFF(MICROSECOND, started_at, completed_at) / 1e6) AS avg_seconds
-FROM job_steps
+FROM job_step_attempts
 WHERE policy_name IS NOT NULL
-  AND state IN ('succeeded', 'failed')
+  AND state = 'finished'
   AND completed_at >= ? AND completed_at < ?
 GROUP BY policy_name, policy_version
 ORDER BY policy_name, policy_version;
@@ -1264,11 +1304,11 @@ WHERE s.state = 'failed'
   AND s.completed_at >= ? AND s.completed_at < ?;
 ```
 
-### 10.4 파생 지표는 새 컬럼이 아니라 `job_steps.result`에 넣는다
+### 10.4 파생 지표는 `job_step_attempts.metrics`에 넣는다
 
 DB에는 주행 **궤적 자체**가 없다. 궤적은 rosbag에 있다. 하지만 매번 rosbag을 파싱해 요약 지표를 다시 뽑는 것은 비효율적이다.
 
-**새 테이블이나 컬럼을 추가하지 않고**, 어댑터가 단계 완료 시 `job_steps.result` JSON에 요약 지표를 넣는 규약을 둔다.
+어댑터는 단계 결과를 보고할 때 `job_step_attempts.metrics` JSON에 시도별 요약 지표를 넣는다. 단계의 최종 호환 payload가 필요하면 `job_steps.result`에도 요약할 수 있지만 학습 원본은 attempt 행이다.
 
 ```json
 {
@@ -1434,9 +1474,9 @@ job은 `completed`, step은 `succeeded`다. 공용 상태 매핑 함수를 만�
 
 ### 12.1 원칙
 
-- **현재 FMS 16개 운영 도메인 테이블을 유지한다.** 입고·출고·재고·예약·관제의
+- **현재 FMS 17개 운영 도메인 테이블을 유지한다.** 입고·출고·재고·예약·관제의
   새 요구는 먼저 기존 테이블의 컬럼·JSON·열거값으로 표현할 수 있는지 검토한다.
-  학습 관련 기본 요구도 `artifacts` + `job_steps.result`로 해결한다 (10.4).
+  정상 작업의 세밀한 실행 이력은 `job_step_attempts`, 원본 파일은 `artifacts`로 해결한다 (10.4).
 - VLM/RL 복구 데이터는 v4의 세 테이블로 역할을 분리한다.
   `location_recovery_profiles`는 Reference Memory이고,
   `recovery_episodes`와 `recovery_steps`는 Episodic Memory다. replay buffer는

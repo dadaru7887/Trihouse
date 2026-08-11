@@ -177,7 +177,10 @@ CREATE TABLE IF NOT EXISTS jobs (
       WHEN 'low' THEN 4
     END
   ) STORED COMMENT 'Automatically calculated numeric value used to sort priorities.',
-  state                VARCHAR(24) NOT NULL DEFAULT 'pending' COMMENT 'Job lifecycle status from pending and planning through execution, completion, failure, cancellation, or safety hold.',
+  state                VARCHAR(24) NOT NULL DEFAULT 'queued' COMMENT 'Job lifecycle status: queued, assigned, running, held, completed, failed, or cancelled.',
+  state_reason_code    VARCHAR(96) NULL COMMENT 'Stable reason code explaining the current job state.',
+  state_detail         VARCHAR(1024) NULL COMMENT 'Operator-readable detail for the current job state.',
+  result_code          VARCHAR(96) NULL COMMENT 'Stable final result code for a terminal job.',
   revision             BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Optimistic-lock version used to detect concurrent updates.',
   requested_by         VARCHAR(64) NULL COMMENT 'Requested by for this record.',
   external_reference   VARCHAR(128) NULL COMMENT 'External reference for this record.',
@@ -190,6 +193,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   created_at           DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'Timestamp when the created event occurred.',
   started_at           DATETIME(6) NULL COMMENT 'Timestamp when the started event occurred.',
   completed_at         DATETIME(6) NULL COMMENT 'Timestamp when the completed event occurred.',
+  updated_at           DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                         ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'Timestamp when the updated event occurred.',
   PRIMARY KEY (job_id),
   UNIQUE KEY uq_jobs_code (job_code),
   UNIQUE KEY uq_jobs_external_reference (external_reference),
@@ -210,8 +215,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     ('inbound','outbound','relocation','replenishment','disposal','recovery','emergency')),
   CONSTRAINT chk_jobs_priority CHECK (priority IN ('critical','high','normal','low')),
   CONSTRAINT chk_jobs_state CHECK (state IN
-    ('pending','planned','running','waiting','blocked','completed','failed',
-     'cancelled','safety_hold'))
+    ('queued','assigned','running','held','completed','failed',
+     'cancelled'))
 ) ENGINE=InnoDB COMMENT='Manages the full lifecycle of inbound, outbound, transfer, replenishment, disposal, recovery, and emergency jobs.';
 
 -- [업무] 한 업무에 포함된 상품·lot·수량·검수 상태를 관리한다.
@@ -248,14 +253,21 @@ CREATE TABLE IF NOT EXISTS job_steps (
   step_no              SMALLINT UNSIGNED NOT NULL COMMENT 'Execution order within the same job or recovery episode.',
   executor_type        VARCHAR(16) NOT NULL COMMENT 'Code identifying the executor type.',
   assigned_device_id   VARCHAR(64) NULL COMMENT 'Identifier of the related assigned device.',
+  assignment_revision  BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Assignment revision used to reject stale execution results.',
   action_type          VARCHAR(32) NOT NULL COMMENT 'Code identifying the action type.',
   target_location_id   BIGINT UNSIGNED NULL COMMENT 'Identifier of the related target location.',
-  state                VARCHAR(24) NOT NULL DEFAULT 'pending' COMMENT 'Job-step status: pending, queued, running, succeeded, failed, held, or cancelled.',
+  state                VARCHAR(24) NOT NULL DEFAULT 'pending' COMMENT 'Job-step status: pending, running, succeeded, failed, or cancelled.',
   rmf_task_id          VARCHAR(128) NULL COMMENT 'Identifier of the related rmf task.',
+  rmf_phase_id         VARCHAR(128) NULL COMMENT 'Open-RMF phase identifier associated with this job step.',
+  rmf_event_id         VARCHAR(128) NULL COMMENT 'Open-RMF event identifier associated with this job step.',
+  rmf_status           VARCHAR(32) NULL COMMENT 'Latest Open-RMF task status observed for this job step.',
+  rmf_status_observed_at DATETIME(6) NULL COMMENT 'Timestamp when the latest Open-RMF status was observed.',
   policy_name          VARCHAR(128) NULL COMMENT 'Name of the policy.',
   policy_version       VARCHAR(128) NULL COMMENT 'Policy version for this record.',
   retry_count          SMALLINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Total number of retries for this job step.',
   failure_reason       VARCHAR(512) NULL COMMENT 'Specific reason the job or execution step failed.',
+  final_outcome_reason_code VARCHAR(96) NULL COMMENT 'Stable reason code for the final step outcome.',
+  final_method_code    VARCHAR(96) NULL COMMENT 'Method code used by the final execution attempt.',
   input                JSON NULL COMMENT 'JSON object containing additional input data.',
   result               JSON NULL COMMENT 'JSON object containing additional result data.',
   started_at           DATETIME(6) NULL COMMENT 'Timestamp when the started event occurred.',
@@ -276,8 +288,89 @@ CREATE TABLE IF NOT EXISTS job_steps (
     ('navigate','dock','inspect','pick','load','unload','place','verify',
      'handover','wait','recover','return_home','safety_stop')),
   CONSTRAINT chk_job_steps_state CHECK (state IN
-    ('pending','queued','running','succeeded','failed','on_hold','cancelled'))
+    ('pending','running','succeeded','failed','cancelled'))
 ) ENGINE=InnoDB COMMENT='Manages ordered execution steps for Pinky movement, OMX manipulation, verification, and handoff operations.';
+
+-- [업무 실행 이력] Pinky·OMX·FMS가 한 단계에서 수행한 개별 시도를 추가 전용으로 기록한다.
+-- 현재 상태는 job_steps에, 재시도별 방법·근거·성공 조건·관측값은 이 테이블에 보존한다.
+CREATE TABLE IF NOT EXISTS job_step_attempts (
+  attempt_uuid          CHAR(36) NOT NULL COMMENT 'UUID that identifies one execution attempt across systems.',
+  job_step_id           BIGINT UNSIGNED NOT NULL COMMENT 'Identifier of the related job step.',
+  assignment_revision   BIGINT UNSIGNED NOT NULL COMMENT 'Assignment revision used to reject stale execution results.',
+  actor_role            VARCHAR(16) NOT NULL COMMENT 'Execution actor role: Pinky, OMX, or FMS.',
+  actor_device_id       VARCHAR(64) NULL COMMENT 'Device identifier for the execution actor when the role is Pinky or OMX.',
+  attempt_no            SMALLINT UNSIGNED NOT NULL COMMENT 'One-based attempt number within the step, revision, and actor role.',
+  event_uuid            CHAR(36) NULL COMMENT 'UUID of the related event.',
+  command_uuid          CHAR(36) NOT NULL COMMENT 'UUID of the command that initiated this execution attempt.',
+  state                 VARCHAR(16) NOT NULL DEFAULT 'created' COMMENT 'Attempt progress: created, dispatched, running, reconciling, or finished.',
+  outcome               VARCHAR(16) NULL COMMENT 'Terminal attempt outcome: succeeded, failed, aborted, or cancelled.',
+  success               TINYINT(1) NULL COMMENT 'Indicates whether the terminal attempt satisfied every success criterion.',
+  method_code           VARCHAR(96) NOT NULL COMMENT 'Stable code for the execution method selected before dispatch.',
+  selection_reason_code VARCHAR(96) NULL COMMENT 'Stable reason code explaining why the execution method was selected.',
+  outcome_reason_code   VARCHAR(96) NULL COMMENT 'Stable reason code produced from structured execution facts.',
+  failure_domain        VARCHAR(32) NOT NULL DEFAULT 'none' COMMENT 'Layer responsible for failure, or none for successful and active attempts.',
+  detail                VARCHAR(1024) NULL COMMENT 'Operator-readable detail that is not used as a decision branch.',
+  parameters            JSON NULL COMMENT 'JSON object containing command and method parameters.',
+  criteria              JSON NULL COMMENT 'JSON object containing expected, observed, and passed success criteria.',
+  metrics               JSON NULL COMMENT 'JSON object containing measured execution values and units.',
+  before_observation    JSON NULL COMMENT 'JSON object containing the state observed before execution.',
+  after_observation     JSON NULL COMMENT 'JSON object containing the state observed after execution.',
+  evidence_refs         JSON NULL COMMENT 'JSON array containing image, video, ROS bag, RMF log, or artifact references.',
+  policy_source         VARCHAR(16) NOT NULL DEFAULT 'rule' COMMENT 'Source that selected the method, such as rule, RMF, Nav2, VLM, RL, or operator.',
+  policy_name           VARCHAR(128) NULL COMMENT 'Name of the policy.',
+  policy_version        VARCHAR(128) NULL COMMENT 'Policy version for this record.',
+  model_name            VARCHAR(128) NULL COMMENT 'Name of the model.',
+  model_version         VARCHAR(128) NULL COMMENT 'Model version for this record.',
+  data_quality_status   VARCHAR(16) NOT NULL DEFAULT 'complete' COMMENT 'Quality status of the record: complete, incomplete, or invalid.',
+  started_at            DATETIME(6) NULL COMMENT 'Timestamp when the started event occurred.',
+  completed_at          DATETIME(6) NULL COMMENT 'Timestamp when the completed event occurred.',
+  created_at            DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'Timestamp when the created event occurred.',
+  PRIMARY KEY (attempt_uuid),
+  UNIQUE KEY uq_attempts_event (event_uuid),
+  UNIQUE KEY uq_attempts_command (command_uuid),
+  UNIQUE KEY uq_attempts_sequence
+    (job_step_id, assignment_revision, actor_role, attempt_no),
+  KEY idx_attempts_actor_time (actor_device_id, created_at),
+  KEY idx_attempts_outcome (outcome, failure_domain, completed_at),
+  CONSTRAINT fk_attempts_step FOREIGN KEY (job_step_id)
+    REFERENCES job_steps (job_step_id) ON DELETE CASCADE,
+  CONSTRAINT fk_attempts_device FOREIGN KEY (actor_device_id)
+    REFERENCES devices (device_id),
+  CONSTRAINT chk_attempts_number CHECK (attempt_no > 0),
+  CONSTRAINT chk_attempts_actor CHECK (actor_role IN ('pinky','omx','fms')),
+  CONSTRAINT chk_attempts_actor_device CHECK
+    ((actor_role IN ('pinky','omx') AND actor_device_id IS NOT NULL) OR
+     (actor_role = 'fms')),
+  CONSTRAINT chk_attempts_state CHECK (state IN
+    ('created','dispatched','running','reconciling','finished')),
+  CONSTRAINT chk_attempts_outcome CHECK
+    (outcome IS NULL OR outcome IN ('succeeded','failed','aborted','cancelled')),
+  CONSTRAINT chk_attempts_failure_domain CHECK (failure_domain IN
+    ('none','robot','perception','navigation','manipulation','safety',
+     'integration','operator','unknown')),
+  CONSTRAINT chk_attempts_policy_source CHECK (policy_source IN
+    ('rule','rmf','nav2','vlm','rl','operator','hardware')),
+  CONSTRAINT chk_attempts_data_quality CHECK (data_quality_status IN
+    ('complete','incomplete','invalid')),
+  CONSTRAINT chk_attempts_success CHECK
+    (success IS NULL OR success IN (0, 1)),
+  CONSTRAINT chk_attempts_terminal CHECK
+    ((state <> 'finished' AND outcome IS NULL AND success IS NULL
+      AND outcome_reason_code IS NULL AND completed_at IS NULL) OR
+     (state = 'finished' AND outcome IS NOT NULL AND success IS NOT NULL
+      AND outcome_reason_code IS NOT NULL AND completed_at IS NOT NULL
+      AND (started_at IS NULL OR completed_at >= started_at))),
+  CONSTRAINT chk_attempts_success_outcome CHECK
+    ((success IS NULL AND outcome IS NULL) OR
+     (success = 1 AND outcome = 'succeeded' AND failure_domain = 'none') OR
+     (success = 0 AND outcome IN ('failed','aborted','cancelled'))),
+  CONSTRAINT chk_attempts_lineage CHECK
+    ((policy_name IS NULL AND policy_version IS NULL) OR
+     (policy_name IS NOT NULL AND policy_version IS NOT NULL)),
+  CONSTRAINT chk_attempts_model_lineage CHECK
+    ((model_name IS NULL AND model_version IS NULL) OR
+     (model_name IS NOT NULL AND model_version IS NOT NULL))
+) ENGINE=InnoDB COMMENT='Records each Pinky, OMX, or FMS execution attempt with structured methods, evidence, criteria, metrics, and outcomes.';
 
 -- [점유] 병목 통로의 진입 권한과 도크·포장대·OMX의 사용 시간을 관리한다.
 -- 병목은 map_feature_id를 잠그고, 시간 예약은 예정 사용 구간이 겹치지 않도록
@@ -493,6 +586,9 @@ CREATE TABLE IF NOT EXISTS incidents (
 CREATE TABLE IF NOT EXISTS operation_events (
   event_id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'Identifier of the related event.',
   event_uuid           CHAR(36) NOT NULL COMMENT 'UUID of the related event.',
+  correlation_uuid     CHAR(36) NULL COMMENT 'UUID that groups events belonging to the same distributed operation.',
+  causation_event_uuid CHAR(36) NULL COMMENT 'UUID of the event that directly caused this event.',
+  attempt_uuid         CHAR(36) NULL COMMENT 'UUID that identifies one execution attempt across systems.',
   occurred_at          DATETIME(6) NOT NULL COMMENT 'Timestamp when the occurred event occurred.',
   actor_worker_id      VARCHAR(64) NULL COMMENT 'Identifier of the related actor worker.',
   device_id            VARCHAR(64) NULL COMMENT 'Identifier of the related device.',
@@ -516,6 +612,8 @@ CREATE TABLE IF NOT EXISTS operation_events (
   KEY idx_events_job_at (job_id, occurred_at),
   KEY idx_events_incident_at (incident_id, occurred_at),
   KEY idx_events_category_at (category, occurred_at),
+  KEY idx_events_correlation (correlation_uuid, occurred_at),
+  KEY idx_events_attempt (attempt_uuid, occurred_at),
   CONSTRAINT fk_events_device FOREIGN KEY (device_id)
     REFERENCES devices (device_id),
   CONSTRAINT fk_events_actor FOREIGN KEY (actor_worker_id)
@@ -524,6 +622,8 @@ CREATE TABLE IF NOT EXISTS operation_events (
     REFERENCES jobs (job_id),
   CONSTRAINT fk_events_step FOREIGN KEY (job_step_id)
     REFERENCES job_steps (job_step_id),
+  CONSTRAINT fk_events_attempt FOREIGN KEY (attempt_uuid)
+    REFERENCES job_step_attempts (attempt_uuid),
   CONSTRAINT fk_events_incident FOREIGN KEY (incident_id)
     REFERENCES incidents (incident_id),
   CONSTRAINT chk_events_severity CHECK (severity IN
