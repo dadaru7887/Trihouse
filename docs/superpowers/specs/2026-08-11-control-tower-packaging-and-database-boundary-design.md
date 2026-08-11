@@ -45,7 +45,15 @@ The repository-level `db/` directory is the sole owner of database lifecycle ass
 - `db/seed_dev.sql`: development seed data;
 - `db/tools/` and `db/tests/`: schema maintenance and validation.
 
-`control_tower/database/` owns application persistence code only: connection configuration, repository interfaces, and concrete adapters. It must not contain a second schema copy or independently maintained migration chain. Therefore the empty `control_tower/database/migrations/` directory will be removed and the README responsibility description will be corrected.
+`control_tower/database/` owns application persistence code only. Its tracked structure is:
+
+```text
+control_tower/database/
+├── connections/     # connection configuration and factories
+└── repositories/    # repository interfaces and concrete adapters
+```
+
+The `connections/` Python package will be created now as the designated boundary, but production connection behavior will not be invented during packaging. This directory must not contain a second schema copy or independently maintained migration chain. Therefore the empty `control_tower/database/migrations/` directory will be removed and the README responsibility description will be corrected.
 
 The current `AuditRepository` is SQLite-backed and creates its own test tables. It will be treated as a test/local adapter until a MySQL repository using the canonical schema is designed and integration-tested. Packaging must not imply production MySQL completion.
 
