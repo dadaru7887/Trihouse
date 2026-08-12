@@ -1,0 +1,32 @@
+schema_version: 1
+experiment:
+  name: lego_yoloe_gpu_smoke
+  seeds: [42]
+  continue_on_failure: false
+dataset:
+  data_yaml: dataset/raw_examples/data.yaml
+  posture_manifest: null
+  allow_posture_gap: true
+  min_fallen_per_eval_split: 10
+model:
+  weights: 26s
+  image_size: 640
+training:
+  epochs: 1
+  patience: 0
+  batch: 2
+  workers: 1
+  device: gpu
+  augmentation: true
+  augmentation_seed: 42
+  deterministic: true
+evaluation:
+  # orchestration smoke test이므로 성능 gate는 적용하지 않는다.
+  min_mask_recall: 0.0
+  min_mask_map50: 0.0
+  test_all_seeds: true
+output:
+  run_root: runs/lego_worker_smoke
+selection:
+  metric: mask_map50_95
+  tie_breaker: mask_recall

@@ -28,7 +28,7 @@ SECTION_KEYS = {
     "experiment": {"name", "seeds", "continue_on_failure"},
     "dataset": {"data_yaml", "posture_manifest", "allow_posture_gap", "min_fallen_per_eval_split"},
     "model": {"weights", "image_size"},
-    "training": {"epochs", "patience", "batch", "workers", "device", "augmentation", "deterministic"},
+    "training": {"epochs", "patience", "batch", "workers", "device", "augmentation", "augmentation_seed", "deterministic"},
     "evaluation": {"min_mask_recall", "min_mask_map50", "test_all_seeds"},
     "output": {"run_root"},
     "selection": {"metric", "tie_breaker"},
@@ -83,6 +83,7 @@ def load_experiment_config(path: Path | str, project_root: Path | str | None = N
     config = TrainingConfig(
         model=str(model.get("weights", "26s")), data=data, run_root=run_base / name,
         augmentation=bool(training.get("augmentation", True)), epochs=int(training.get("epochs", 200)),
+        augmentation_seed=int(training.get("augmentation_seed", 42)),
         imgsz=int(model.get("image_size", 640)), patience=int(training.get("patience", 20)),
         batch=int(training.get("batch", -1)), device=str(training.get("device", "auto")),
         workers=int(training.get("workers", 8)), seed=seeds[0],

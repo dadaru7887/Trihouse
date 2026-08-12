@@ -73,6 +73,7 @@ def test_pipeline_runs_validation_before_test_and_writes_manifest(tmp_path: Path
     assert manifest["model"]["class_name"] == "person"
     assert manifest["model"]["class_id"] == 1
     assert manifest["weights"].endswith("best.pt")
+    assert manifest["seeds"] == {"training": 42, "augmentation": 42}
     assert (run_dir / "evaluation/validation_metrics.json").is_file()
     assert (run_dir / "evaluation/test_metrics.json").is_file()
 

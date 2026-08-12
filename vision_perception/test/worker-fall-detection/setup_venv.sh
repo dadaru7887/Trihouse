@@ -13,7 +13,7 @@ fi
 "$PYTHON_BIN" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
 "$PYTHON_BIN" -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip setuptools wheel
-"$VENV_DIR/bin/python" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+"$VENV_DIR/bin/python" -m pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
 "$VENV_DIR/bin/python" -m pip install -r "$SCRIPT_DIR/requirements/dev.txt"
 "$VENV_DIR/bin/python" -c 'import sys, torch; assert sys.version_info[:2] == (3, 12); assert tuple(map(int, torch.version.cuda.split(".")[:2])) >= (12, 8); print("Python", sys.version.split()[0], "PyTorch", torch.__version__, "CUDA", torch.version.cuda)'
 echo "완료: $VENV_DIR"

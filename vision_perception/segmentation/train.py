@@ -11,6 +11,7 @@ Data_Aug_Test_Combined_merged.ipynb / train_yoloe.ipynb에서 그대로 옮겨�
 """
 
 import argparse
+from contextlib import contextmanager
 import io
 import os
 import random
@@ -29,6 +30,41 @@ SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
+
+_augmentation_seed = SEED
+_augmentation_seed_stream = np.random.default_rng(SEED)
+
+
+def configure_augmentation_seed(seed):
+    """Reset only the online-augmentation RNG stream."""
+    global _augmentation_seed, _augmentation_seed_stream
+    _augmentation_seed = int(seed)
+    _augmentation_seed_stream = np.random.default_rng(_augmentation_seed)
+
+
+def _augmentation_rng(seed=None):
+    if seed is not None:
+        return np.random.default_rng(int(seed))
+    child_seed = int(_augmentation_seed_stream.integers(0, np.iinfo(np.uint32).max))
+    return np.random.default_rng(child_seed)
+
+
+@contextmanager
+def _isolated_augmentation_random_state():
+    """Run one augmentation without consuming the model-training RNG state."""
+    python_state = random.getstate()
+    numpy_state = np.random.get_state()
+    torch_state = torch.random.get_rng_state()
+    call_seed = int(_augmentation_seed_stream.integers(0, np.iinfo(np.uint32).max))
+    random.seed(call_seed)
+    np.random.seed(call_seed)
+    torch.manual_seed(call_seed)
+    try:
+        yield
+    finally:
+        random.setstate(python_state)
+        np.random.set_state(numpy_state)
+        torch.random.set_rng_state(torch_state)
 
 KST = timezone(timedelta(hours=9))  # zoneinfo 대신 고정 오프셋 -- 도커 슬림 이미지엔 tzdata가 없을 수 있음
 
@@ -66,7 +102,7 @@ def gamma_brightness(image, factor=None, gamma=None):
 
 
 def poisson_gaussian_noise(image, a=0.02, b=0.01, seed=None):
-    rng = np.random.default_rng(seed)
+    rng = _augmentation_rng(seed)
     x = image.astype(np.float32) / 255.0
     lam = np.clip(x / a, 0, None)
     shot = rng.poisson(lam).astype(np.float32) * a
@@ -179,7 +215,7 @@ def generate_frost_overlay_v3(image, coverage_ratio, temperature_delta, seed=Non
     - frost_color는 ambient_brightness(장면 평균 밝기)에 맞춰 정해서, 어두운
       장면에서는 성에도 칙칙하게 나오도록 함.
     '''
-    rng = np.random.default_rng(seed)
+    rng = _augmentation_rng(seed)
     h, w = image.shape[:2]
 
     combined = np.zeros((h, w), dtype=np.float32)
@@ -291,7 +327,7 @@ def generate_frost_overlay_chunky(image, coverage_ratio, temperature_delta, seed
     사진(4000px+)에서 그대로 계산하면 매우 느려짐 -> 작은 캔버스에서 계산 후
     업샘플하면 수십 배 빨라지고 육안상 차이는 거의 없음.
     '''
-    rng = np.random.default_rng(seed)
+    rng = _augmentation_rng(seed)
     h, w = image.shape[:2]
 
     scale = min(1.0, work_size / max(h, w))
@@ -414,7 +450,7 @@ def _load_frost_texture(url):
 def _sample_texture_patch(h, w, seed=None):
     '''실사 텍스처에서 (h,w) 크기의 디테일 패치를 뽑아 0~1로 정규화해서 반환.
     2x2 미러 타일링으로 이음새를 줄이고, 랜덤 크롭+스케일로 매번 다르게 보이게 함.'''
-    rng = np.random.default_rng(seed)
+    rng = _augmentation_rng(seed)
     url = FROST_TEXTURE_URLS[rng.integers(0, len(FROST_TEXTURE_URLS))]
     tex = _load_frost_texture(url)
     tw, th = tex.size
@@ -446,7 +482,7 @@ def generate_frost_overlay_textured(image, coverage_ratio, temperature_delta, se
     '''chunky 마스크(모양/커버리지 제어) + 실사 성에 텍스처(결정 디테일)를 합성.
     모양은 procedural로 계속 제어하고, 안쪽 결의 디테일만 실제 성에 매크로사진에서
     가져와서 노이즈 기반보다 훨씬 자연스러운 결정 무늬가 나오게 함.'''
-    rng = np.random.default_rng(seed)
+    rng = _augmentation_rng(seed)
     h, w = image.shape[:2]
 
     scale = min(1.0, work_size / max(h, w))
@@ -553,7 +589,7 @@ SEED = 42
 def add_condensation(image, coverage_ratio, intensity, center=None, seed=None, work_size=800):
     '''렌즈에 맺힌 결로(물방울) 모사. 축소 캔버스에서 계산(work_size 트릭, 고해상도에서 빠름) +
     블러 후 mask 정규화(피크값 복원) + haze 블렌딩까지 반영된 최종 버전.'''
-    rng = np.random.default_rng(seed)
+    rng = _augmentation_rng(seed)
     h, w = image.shape[:2]
 
     scale = min(1.0, work_size / max(h, w))
@@ -601,7 +637,7 @@ def add_condensation(image, coverage_ratio, intensity, center=None, seed=None, w
 
 
 def add_glare(image, intensity, size_ratio, center=None, seed=None):
-    rng = np.random.default_rng(seed)
+    rng = _augmentation_rng(seed)
     h, w = image.shape[:2]
     if center is None:
         center = (rng.integers(0, w), rng.integers(0, h))
@@ -693,7 +729,7 @@ def _s3_glare(image):
 
 def _s4_frost(image):
     coverage, temperature = random.choice([(0.15, 0.30), (0.45, 0.55)])
-    return generate_frost_overlay_textured(image, coverage, temperature, seed=None, n_anchors=4)
+    return generate_frost_overlay_chunky(image, coverage, temperature, seed=None, n_anchors=4)
 
 
 def _s4_night_frost(image):
@@ -701,7 +737,7 @@ def _s4_night_frost(image):
         (0.45, 0.35, 0.45, 1.0),   # night_light
         (0.60, 0.35, 0.45, 1.3),   # night_heavy
     ])
-    return synthesize_night_frost_textured(
+    return synthesize_night_frost_chunky(
         image, exposure_ratio=exposure, coverage_ratio=coverage,
         temperature_delta=temperature, blur_strength=blur_strength,
     )
@@ -736,18 +772,18 @@ def _s5_condensation_glare(image):
 
 def _s5_lowlight_frost(image):
     if random.random() < 0.5:
-        frosted = generate_frost_overlay_textured(adjust_gamma(image, 0.65), 0.15, 0.30, seed=None, n_anchors=4)
+        frosted = generate_frost_overlay_chunky(adjust_gamma(image, 0.65), 0.15, 0.30, seed=None, n_anchors=4)
         return add_motion_blur(frosted, 45, 18)
-    frosted = generate_frost_overlay_textured(adjust_gamma(image, 0.55), 0.45, 0.55, seed=None, n_anchors=4)
+    frosted = generate_frost_overlay_chunky(adjust_gamma(image, 0.55), 0.45, 0.55, seed=None, n_anchors=4)
     return add_motion_blur(frosted, 70, 18)
 
 
 def _s5_frost_glare(image):
     h, w = image.shape[:2]
     if random.random() < 0.5:
-        frosted = generate_frost_overlay_textured(image, 0.15, 0.30, seed=None, n_anchors=4)
+        frosted = generate_frost_overlay_chunky(image, 0.15, 0.30, seed=None, n_anchors=4)
         return add_motion_blur(add_glare(frosted, 0.45, 0.25, (int(w * 0.5), int(h * 0.30))), 45, 18)
-    frosted = generate_frost_overlay_textured(image, 0.45, 0.55, seed=None, n_anchors=4)
+    frosted = generate_frost_overlay_chunky(image, 0.45, 0.55, seed=None, n_anchors=4)
     return add_motion_blur(add_glare(frosted, 0.65, 0.55, (int(w * 0.5), int(h * 0.85))), 70, 18)
 
 
@@ -764,8 +800,9 @@ MIXED_POOL = [
 
 def mixed_augmentation(image, **kwargs):
     '''S1~S5 풀에서 매번 하나를 무작위로 골라 적용.'''
-    fn = random.choice(MIXED_POOL)
-    return fn(image)
+    with _isolated_augmentation_random_state():
+        fn = random.choice(MIXED_POOL)
+        return fn(image)
 
 
 print(f"MIXED_POOL 구성 완료: 총 {len(MIXED_POOL)}개 증강 함수 (S1~S5 전부 포함)")
@@ -781,6 +818,8 @@ def parse_args():
                    help="모델 축약 이름({11,26}+{n,s,m,l,x}, 예: 26s) 또는 .pt 가중치 경로")
     p.add_argument("--augmentation", type=str, default="yes", choices=["yes", "no"],
                    help="S1~S5 온라인 증강 적용 여부 (yes/no)")
+    p.add_argument("--augmentation-seed", type=int, default=42,
+                   help="온라인 증강 전용 seed (모델 학습 seed와 독립)")
     p.add_argument("--data", type=str, required=True, help="data.yaml 경로")
     p.add_argument("--epochs", type=int, default=200,
                    help="GPU + patience 조기종료 기준이라 상한을 넉넉히 잡음")
@@ -808,6 +847,7 @@ def main():
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    configure_augmentation_seed(args.augmentation_seed)
 
     use_augmentation = args.augmentation == "yes"
     weight_path = resolve_model(args.model)

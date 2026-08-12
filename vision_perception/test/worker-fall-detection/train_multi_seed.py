@@ -22,15 +22,20 @@ def main() -> None:
     root = args.experiment_dir or experiment.training.run_root / datetime.now().strftime("%Y%m%d_%H%M%S")
     root = root.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    (root / "experiment.json").write_text(json.dumps({"config": str(experiment.config_path), "seeds": experiment.seeds}, indent=2) + "\n")
+    (root / "experiment.json").write_text(json.dumps({
+        "config": str(experiment.config_path),
+        "seeds": {"training": experiment.seeds, "augmentation": experiment.training.augmentation_seed},
+        "experiment_type": "fixed_augmentation_seed_training_seed_sensitivity",
+    }, indent=2) + "\n")
     report = audit_dataset(
         experiment.training.data, root / "preflight",
         posture_manifest=experiment.training.posture_manifest,
         allow_posture_gap=experiment.training.allow_posture_gap,
         min_fallen_per_eval_split=experiment.training.min_fallen_per_eval_split,
     )
-    environment_snapshot = capture_environment(report.fingerprint)
     device_selection = resolve_device(experiment.training.device)
+    gpu_index = int(device_selection.resolved) if device_selection.requires_cuda else 0
+    environment_snapshot = capture_environment(report.fingerprint, gpu_index=gpu_index)
     environment_snapshot["device"] = device_selection.to_dict()
     write_environment(root / "environment.json", environment_snapshot)
     validate_training_environment(environment_snapshot, require_cuda=device_selection.requires_cuda)

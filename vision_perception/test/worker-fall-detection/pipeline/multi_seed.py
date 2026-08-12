@@ -23,6 +23,7 @@ def build_seed_command(
     ]
     environment = dict(base_environment)
     environment["PYTHONHASHSEED"] = str(seed)
+    environment["NO_ALBUMENTATIONS_UPDATE"] = "1"
     return command, environment
 
 
@@ -94,6 +95,7 @@ def select_deployment_model(
         "selected_seed": seed,
         "weights": str((run_dir / "train/weights/best.pt").resolve()),
         "dataset_fingerprint": manifest.get("dataset_fingerprint"),
+        "seeds": manifest.get("seeds", {"training": seed}),
         "selection": {
             "split": "validation",
             "primary_metric": primary_metric,

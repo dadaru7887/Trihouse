@@ -40,6 +40,7 @@ def capture_environment(
     package_versions: dict[str, str] | None = None,
     git_info: dict[str, Any] | None = None,
     nvidia_info: dict[str, Any] | None = None,
+    gpu_index: int = 0,
 ) -> dict[str, Any]:
     if torch_module is None:
         try:
@@ -55,8 +56,9 @@ def capture_environment(
                 versions[package] = "unavailable"
     cuda_available = bool(torch_module and torch_module.cuda.is_available())
     gpu = {
-        "name": torch_module.cuda.get_device_name(0) if cuda_available else "unavailable",
-        "compute_capability": ".".join(map(str, torch_module.cuda.get_device_capability(0))) if cuda_available else "unavailable",
+        "index": gpu_index if cuda_available else None,
+        "name": torch_module.cuda.get_device_name(gpu_index) if cuda_available else "unavailable",
+        "compute_capability": ".".join(map(str, torch_module.cuda.get_device_capability(gpu_index))) if cuda_available else "unavailable",
     }
     pytorch = {
         "version": getattr(torch_module, "__version__", "unavailable"),

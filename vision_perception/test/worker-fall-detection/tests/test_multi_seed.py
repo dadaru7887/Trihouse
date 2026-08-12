@@ -13,7 +13,7 @@ def make_run(root: Path, seed: int, val: dict, test: dict) -> Path:
     (run / "evaluation/validation_metrics.json").write_text(json.dumps(val))
     (run / "evaluation/test_metrics.json").write_text(json.dumps(test))
     (run / "status.json").write_text(json.dumps({"state": "COMPLETED"}))
-    (run / "artifact_manifest.json").write_text(json.dumps({"dataset_fingerprint": "abc"}))
+    (run / "artifact_manifest.json").write_text(json.dumps({"dataset_fingerprint": "abc", "seeds": {"training": seed, "augmentation": 42}}))
     return run
 
 
@@ -49,6 +49,7 @@ def test_model_selection_uses_validation_only_and_deterministic_tie_break(tmp_pa
     assert selected["selected_seed"] == 42
     assert selected["selection"]["split"] == "validation"
     assert selected["test_metrics_used_for_selection"] is False
+    assert selected["seeds"] == {"training": 42, "augmentation": 42}
 
     # Exact validation tie selects the lower seed.
     (tmp_path / "seed_17/evaluation/validation_metrics.json").write_text(json.dumps({"mask_map50_95": 0.8, "mask_recall": 0.8}))

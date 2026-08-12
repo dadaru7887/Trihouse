@@ -66,7 +66,8 @@ def run_pipeline(config: TrainingConfig, backend: TrainingBackend) -> Path:
         )
         device_selection = resolve_device(config.device)
         config = dataclasses.replace(config, device=device_selection.resolved)
-        environment = capture_environment(report.fingerprint)
+        gpu_index = int(device_selection.resolved) if device_selection.requires_cuda else 0
+        environment = capture_environment(report.fingerprint, gpu_index=gpu_index)
         environment["device"] = device_selection.to_dict()
         write_environment(run_dir / "environment.json", environment)
         if not config.preflight_only:
@@ -121,6 +122,7 @@ def run_pipeline(config: TrainingConfig, backend: TrainingBackend) -> Path:
                 "test": "evaluation/test_metrics.json",
             },
             "validation_gate_passed": validation_gate_passed,
+            "seeds": {"training": config.seed, "augmentation": config.augmentation_seed},
         }
         _write_json(run_dir / "artifact_manifest.json", manifest)
         _write_json(run_dir / "status.json", {

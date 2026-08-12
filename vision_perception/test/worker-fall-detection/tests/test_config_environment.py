@@ -14,7 +14,7 @@ def write_config(path: Path, updates=None) -> Path:
         "experiment": {"name": "multi", "seeds": [17, 42], "continue_on_failure": True},
         "dataset": {"data_yaml": "dataset/data.yaml", "allow_posture_gap": True, "min_fallen_per_eval_split": 10},
         "model": {"weights": "26s", "image_size": 640},
-        "training": {"epochs": 20, "patience": 5, "batch": -1, "workers": 4, "device": "0", "augmentation": True, "deterministic": True},
+        "training": {"epochs": 20, "patience": 5, "batch": -1, "workers": 4, "device": "0", "augmentation": True, "augmentation_seed": 42, "deterministic": True},
         "evaluation": {"min_mask_recall": 0.9, "min_mask_map50": 0.8},
         "output": {"run_root": "runs/lego"},
         "selection": {"metric": "mask_map50_95", "tie_breaker": "mask_recall"},
@@ -34,6 +34,8 @@ def test_config_loads_strict_schema_and_resolves_project_paths(tmp_path: Path) -
     assert loaded.training.data == (tmp_path / "dataset/data.yaml").resolve()
     assert loaded.training.run_root == (tmp_path / "runs/lego/multi").resolve()
     assert loaded.training.deterministic is True
+    assert loaded.training.augmentation_seed == 42
+    assert loaded.training.seed == 17
 
 
 def test_config_rejects_unknown_keys(tmp_path: Path) -> None:
@@ -83,3 +85,21 @@ def test_environment_gate_rejects_rtx5080_without_sm120() -> None:
     snapshot["pytorch"]["supported_arches"] = ["sm_90"]
     with pytest.raises(EnvironmentError, match="sm_120"):
         validate_training_environment(snapshot, require_cuda=True)
+
+
+def test_environment_snapshot_records_selected_gpu_index() -> None:
+    seen = []
+    cuda = type("Cuda", (), {
+        "is_available": staticmethod(lambda: True),
+        "get_device_name": staticmethod(lambda index: seen.append(index) or f"GPU {index}"),
+        "get_device_capability": staticmethod(lambda index: (8, index)),
+        "get_arch_list": staticmethod(lambda: ["sm_80"]),
+    })()
+    torch_module = type("Torch", (), {
+        "__version__": "2.7.1", "version": type("Version", (), {"cuda": "12.8"})(),
+        "backends": FakeTorch.backends, "cuda": cuda,
+    })()
+    snapshot = capture_environment("abc", torch_module=torch_module, package_versions={}, git_info={}, nvidia_info={}, gpu_index=1)
+    assert seen == [1]
+    assert snapshot["gpu"]["index"] == 1
+    assert snapshot["gpu"]["name"] == "GPU 1"

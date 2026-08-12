@@ -8,6 +8,7 @@ def add_training_arguments(parser: argparse.ArgumentParser, *, include_run: bool
     parser.add_argument("--data", type=Path, required=True, help="YOLO segmentation data.yaml")
     parser.add_argument("--model", default="26s", help="YOLOE 축약명(예: 26s) 또는 .pt 경로")
     parser.add_argument("--augmentation", choices=("yes", "no"), default="yes")
+    parser.add_argument("--augmentation-seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--patience", type=int, default=20)
@@ -31,7 +32,8 @@ def config_from_args(args: argparse.Namespace, **overrides) -> TrainingConfig:
         "model": args.model, "data": args.data,
         "run_root": getattr(args, "run_root", Path("runs/lego_worker")),
         "name": getattr(args, "name", None),
-        "augmentation": args.augmentation == "yes", "epochs": args.epochs,
+        "augmentation": args.augmentation == "yes", "augmentation_seed": args.augmentation_seed,
+        "epochs": args.epochs,
         "imgsz": args.imgsz, "patience": args.patience, "batch": args.batch,
         "device": args.device, "workers": args.workers, "seed": args.seed,
         "posture_manifest": args.posture_manifest,

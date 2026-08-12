@@ -10,6 +10,7 @@ class TrainingConfig:
     run_root: Path
     name: str | None = None
     augmentation: bool = True
+    augmentation_seed: int = 42
     epochs: int = 200
     imgsz: int = 640
     patience: int = 20

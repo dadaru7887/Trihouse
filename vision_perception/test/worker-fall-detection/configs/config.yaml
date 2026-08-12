@@ -19,6 +19,7 @@ training:
   workers: 8
   device: auto
   augmentation: true
+  augmentation_seed: 42
   deterministic: true
 evaluation:
   min_mask_recall: 0.90

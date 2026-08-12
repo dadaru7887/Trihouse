@@ -75,7 +75,7 @@ vision_perception/test/worker-fall-detection/run_stage.sh evaluate \
 
 ## 4. config 기반 multi-seed 전체 실행 (권장)
 
-학습 파라미터와 seed는 `configs/config.yaml` 한 곳에서 관리한다. 각 seed는 별도 subprocess와 `PYTHONHASHSEED`로 격리된다.
+학습 파라미터와 seed는 `configs/config.yaml` 한 곳에서 관리한다. 각 seed는 별도 subprocess와 `PYTHONHASHSEED`로 격리된다. `training.augmentation_seed: 42`는 저조도·성에·결로 등 온라인 증강 난수열에만 적용되고, `experiment.seeds`는 모델 초기화·데이터 shuffle·PyTorch 학습 난수를 제어한다. 따라서 결과는 "고정 augmentation seed 아래 학습 seed 민감도" 실험이다.
 
 `training.device`는 다음 정책을 지원한다.
 
@@ -142,6 +142,15 @@ venv/yolo_segmentation/bin/python \
 `configs/realtime.yaml`의 `inference.device`도 동일한 `auto/cpu/gpu/index` 규칙을 사용한다.
 
 CPU에서 orchestration 코드 경로만 점검하려면 config 사본에서 `device: cpu`, `epochs: 1`, `batch: 2`, `workers: 1`, seed 하나만 사용한다. CPU smoke 결과는 성능 비교나 대표 모델 선정 자료로 사용하지 않는다.
+
+GPU PC에서는 먼저 1-epoch smoke config로 train→validation→test→selected model 경로를 확인한다.
+
+```bash
+./vision_perception/test/worker-fall-detection/train_multi_seed.sh \
+  --config vision_perception/test/worker-fall-detection/configs/smoke_gpu.yaml
+```
+
+완료 후 본 학습은 `configs/config.yaml`의 `device`를 `gpu`로 지정하고 실행한다.
 
 ## 7. 결과와 판정
 

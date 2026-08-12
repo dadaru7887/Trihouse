@@ -46,13 +46,14 @@ def _load_existing_training_module():
     return module
 
 
-def _default_components() -> tuple[Callable[[str], Any], Any, Callable[[bool], list[Any]]]:
+def _default_components() -> tuple[Callable[[str], Any], Any, Callable[[bool, int], list[Any]]]:
     from ultralytics import YOLOE
     from ultralytics.models.yolo.yoloe import YOLOEPESegTrainer
 
     training = _load_existing_training_module()
 
-    def augmentations(enabled: bool) -> list[Any]:
+    def augmentations(enabled: bool, augmentation_seed: int) -> list[Any]:
+        training.configure_augmentation_seed(augmentation_seed)
         if not enabled:
             return []
         return [training.A.Lambda(image=training.mixed_augmentation, p=1.0, name="mixed_s1_s5")]
@@ -66,7 +67,7 @@ class YOLOEBackend:
         self,
         model_factory: Callable[[str], Any] | None = None,
         trainer_class: Any = None,
-        augmentation_factory: Callable[[bool], list[Any]] | None = None,
+        augmentation_factory: Callable[[bool, int], list[Any]] | None = None,
     ) -> None:
         self.model_factory = model_factory
         self.trainer_class = trainer_class
@@ -85,7 +86,7 @@ class YOLOEBackend:
         self._ensure_components()
         assert self.model_factory is not None and self.augmentation_factory is not None
         model = self.model_factory(resolve_model(config.model))
-        transforms = self.augmentation_factory(config.augmentation)
+        transforms = self.augmentation_factory(config.augmentation, config.augmentation_seed)
 
         def set_augmentations(trainer: Any) -> None:
             trainer.args.augmentations = transforms
