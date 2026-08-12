@@ -7,6 +7,7 @@ from rclpy.node import Node
 
 from nav_msgs.msg import Odometry                       # 주행거리 측정 패키지
 from sensor_msgs.msg import BatteryState, LaserScan     # 배터리 잔량 반영, 라이다 데이터 수신 여부 확인
+from geometry_msgs.msg import PoseWithCovarianceStamped
 
 from trihouse_interfaces.msg import (
     BatteryCondition,
@@ -35,7 +36,9 @@ class StatusNode(Node):
 
         # 각 센서 메시지를 마지막으로 받은 monotonic 시각; 초기 상태는 0.0 -> stale
         self.last_scan = self.last_odom = self.last_battery = 0.0
+        self.last_map_pose = 0.0
         self.odom: Odometry | None = None
+        self.map_pose: PoseWithCovarianceStamped | None = None
         self.battery = 0.0
 
         # 작업 식별자
@@ -52,6 +55,8 @@ class StatusNode(Node):
 
         self.create_subscription(LaserScan, '/scan', self._scan, 10)
         self.create_subscription(Odometry, '/odom', self._odom, 10)
+        self.create_subscription(
+            PoseWithCovarianceStamped, '/amcl_pose', self._map_pose, 10)
         self.create_subscription(BatteryState, '/trihouse/battery', self._battery, 10)
         self.create_subscription(BatteryCondition, '/trihouse/battery/condition', self._battery_condition, 10)
         self.create_subscription(SafetyState, '/trihouse/safety/state', self._safety, 10)
@@ -73,6 +78,11 @@ class StatusNode(Node):
         """최신 위치·속도와 odometry 수신 시각을 기록한다."""
         self.odom = message                                 # pose와 twist를 복사할 원본 메시지를 보관한다.
         self.last_odom = monotonic()
+
+    def _map_pose(self, message: PoseWithCovarianceStamped) -> None:
+        """AMCL의 map 좌표 pose와 마지막 수신 시각을 저장한다."""
+        self.map_pose = message
+        self.last_map_pose = monotonic()
 
     def _battery(self, message: BatteryState) -> None:
         """최신 배터리 잔량과 배터리 메시지 수신 시각을 기록한다."""
@@ -157,11 +167,21 @@ class StatusNode(Node):
         message.navigation_state = self.navigation_state
         message.task_progress = self.task_progress
 
-        # odometry를 한 번이라도 받았다면 위치, 속도, 기준 좌표계를 복사한다.
-        if self.odom is not None:
+        # RMF에는 odom 좌표를 map 좌표처럼 전달하면 안 된다. 신선한 AMCL pose가
+        # 있으면 이를 우선하고, 없거나 stale이면 frame_id를 odom으로 남겨 상위
+        # adapter가 등록/갱신을 거절할 수 있게 한다.
+        if (
+            self.map_pose is not None
+            and now - self.last_map_pose <= self.timeout
+        ):
+            message.pose = self.map_pose.pose
+            message.frame_id = self.map_pose.header.frame_id
+        elif self.odom is not None:
             message.pose.pose = self.odom.pose.pose
-            message.twist = self.odom.twist.twist
             message.frame_id = self.odom.header.frame_id
+
+        if self.odom is not None:
+            message.twist = self.odom.twist.twist
 
         return message
 

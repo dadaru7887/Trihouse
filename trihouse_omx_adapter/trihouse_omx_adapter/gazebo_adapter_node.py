@@ -9,6 +9,15 @@ from rclpy.node import Node
 from trihouse_interfaces.msg import CargoState, HandoverState
 
 
+def cargo_state_for_confirmation(confirmed: bool) -> int:
+    """mock 적재 확인을 공용 cargo lock 상태로 변환한다."""
+    return (
+        CargoState.STATE_LOCKED
+        if confirmed
+        else CargoState.STATE_UNLOCKED
+    )
+
+
 class GazeboOmxAdapter(Node):
     """Gazebo의 명시적 mock cargo 확인을 ROS 공용 상태로 바꾸는 최소 adapter다."""
 
@@ -41,7 +50,7 @@ class GazeboOmxAdapter(Node):
         cargo.stamp = stamp
         cargo.robot_id = handover.robot_id
         cargo.job_id = handover.job_id
-        cargo.state = CargoState.STATE_LOCKED if confirmed else CargoState.STATE_EMPTY
+        cargo.state = cargo_state_for_confirmation(confirmed)
         cargo.sensor_confirmed = confirmed
         cargo.detail = handover.detail
         self.cargo_pub.publish(cargo)

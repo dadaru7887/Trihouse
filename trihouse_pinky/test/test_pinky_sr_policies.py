@@ -179,6 +179,37 @@ class TransportWorkflowTest(unittest.TestCase):
         self.assertTrue(accepted.accepted)
         self.assertEqual(JobPhase.IDLE, arrived.phase)
 
+    def test_rmf_navigation_needs_readiness_not_cargo_and_returns_idle(self) -> None:
+        """RMF의 일반 이동은 빈 바구니로 수행하고 인계 대기 없이 끝난다."""
+        command = JobCommand(
+            'rmf-cmd', 'rmf-task', 'map-7', 'RMF_NAVIGATION',
+            requires_cargo=False,
+        )
+
+        accepted = self.workflow.accept(
+            command, ready=True, cargo_confirmed=False
+        )
+        arrived = self.workflow.nav_result(succeeded=True, stationary=True)
+
+        self.assertTrue(accepted.accepted)
+        self.assertEqual(JobPhase.IDLE, arrived.phase)
+        self.assertEqual('', self.workflow.job_id)
+
+    def test_cancel_navigation_releases_the_active_rmf_command(self) -> None:
+        """RMF cancel 뒤 늦은 Nav2 결과가 현재 작업으로 남지 않아야 한다."""
+        command = JobCommand(
+            'rmf-cmd', 'rmf-task', 'map-7', 'RMF_NAVIGATION',
+            requires_cargo=False,
+        )
+        self.workflow.accept(command, ready=True, cargo_confirmed=False)
+
+        canceled = self.workflow.cancel_navigation()
+
+        self.assertTrue(canceled.accepted)
+        self.assertEqual(JobPhase.IDLE, canceled.phase)
+        self.assertEqual('', self.workflow.command_id)
+        self.assertEqual('', self.workflow.job_id)
+
     def test_waiting_handover_can_move_to_fms_reassigned_packing_station(self) -> None:
         """A reassign command preserves the job and resumes movement from waiting."""
         self.workflow.accept(self.command, ready=True, cargo_confirmed=True)

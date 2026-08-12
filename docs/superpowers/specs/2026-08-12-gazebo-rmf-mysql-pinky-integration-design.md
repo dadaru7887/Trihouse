@@ -28,6 +28,12 @@ Gazebo 센서·Nav2 상태
 - `/home/syw/Trihouse/control_system`
 - `/home/syw/Trihouse/pinky_pro`
 
+`control_system`은 실행 시 기본 입력 경로다. 통합 launch는 이 디렉터리의 파일을 직접
+읽을 수 있지만 world 패치, nav graph 생성, 로그·PID·schedule 상태 기록을 포함한 어떤
+쓰기 작업도 하지 않는다. 격리 시험이 필요할 때만 명시적인 복사 도구로
+`/home/syw/Trihouse/control_system_test`에 새 복사본을 만들고 launch의 CLI 경로를 그쪽으로
+바꾼다. 복사 도구는 `move`, 원본 삭제, 기존 대상 덮어쓰기를 허용하지 않는다.
+
 새 구현은 `trihouse_interfaces`, `trihouse_pinky`, `trihouse_rmf_bridge`,
 `trihouse_omx_adapter`, `control_tower`, `fms_gateway`, `db`, 루트 Compose와
 `docs` 안에서만 수행한다.
@@ -38,8 +44,8 @@ Gazebo 센서·Nav2 상태
 
 | 장비 | 통합 식별자 | 장비 유형 | fleet |
 | --- | --- | --- | --- |
-| Pinky 1 | `PK_01` | `mobile` | `pinky_fleet` |
-| Pinky 2 | `PK_02` | `mobile` | `pinky_fleet` |
+| Pinky 1 | `PK_01` | `mobile` | `project1_pinky` |
+| Pinky 2 | `PK_02` | `mobile` | `project1_pinky` |
 | OMX 1 | `OMX_01` | `arm` | `omx_fleet` |
 | OMX 2 | `OMX_02` | `arm` | `omx_fleet` |
 
@@ -48,10 +54,44 @@ Gazebo 센서·Nav2 상태
 호환 변환하지 않는다. 마이그레이션과 seed에서 한 번 변환하고 이후에는 잘못된 ID를
 거부한다.
 
-`fleet_name`은 장비 ID가 아니다. `pinky_fleet`은 실제 Open-RMF fleet이고,
+`fleet_name`은 장비 ID가 아니다. `project1_pinky`는 `project1_pinky_config.yaml`에
+선언된 실제 Open-RMF fleet이고,
 `omx_fleet`은 OMX 장비를 묶는 FMS 논리 그룹이다.
 
-### 2.3 지도 revision과 시간
+### 2.3 control_system project1 입력 계약
+
+기본 프로젝트는 `/home/syw/Trihouse/control_system/rmf_maps/project1`이다. 설정의 단일
+원본을 한 파일로 잘못 합치지 않고 다음처럼 책임을 나눈다.
+
+| 입력 | 원본으로 인정하는 필드 |
+| --- | --- |
+| `fleet.yaml` | robot ID, 표시 이름, kind, model, `gz_name`, zones, charger/station, spawn pose |
+| `project1_pinky_config.yaml` | RMF fleet 이름, 이동 한계, footprint/vicinity, battery·mechanical 계수, charger 매핑 |
+| `project1.building.yaml` | level, waypoint·lane·설비 위치의 편집 원본 |
+| `nav_graphs/0.yaml` | RMF가 실제 실행할 waypoint·lane·charger graph |
+| `nav2_map/project1.yaml` | Nav2 occupancy map과 원점·해상도 |
+| `project1.world` | Gazebo world 입력 |
+| `project1_gz_bridge.yaml` | Gazebo↔ROS topic 연결 |
+| `robots/<ID>/*` | 개별 robot spawn, Nav2, URDF와 namespace 설정 |
+
+같은 값이 둘 이상의 파일에 있을 때 무조건 한쪽을 덮어쓰지 않는다. preflight가 ID,
+charger, namespace와 waypoint 존재 여부를 교차 검증하고 불일치하면 실행 전에 실패한다.
+`fleet.yaml`에 RMF fleet 이름은 없으므로 이를 추측하지 않고
+`project1_pinky_config.yaml`에서 읽는다.
+
+현재 확인한 project1 장비 기준은 다음과 같다.
+
+| device_id | kind | model | gz_name | home/station | zones |
+| --- | --- | --- | --- | --- | --- |
+| `PK_01` | `mobile` | `PINKY-GZ` | `pinky_01` | `충전1` | ambient, chilled, frozen |
+| `PK_02` | `mobile` | `PINKY-GZ` | `pinky_02` | `충전2` | ambient, chilled, frozen |
+| `OMX_01` | `workcell` | `open_manipulator_x` | `omx_01` | `설비1` | 없음 |
+| `OMX_02` | `workcell` | `open_manipulator_x` | `omx_02` | `설비2` | 없음 |
+
+DB의 `device_type`은 project1의 `kind=workcell`을 허용하지 않으므로 동기화 경계에서만
+`workcell → arm`으로 명시 변환한다. ID, 이름, model, namespace는 변환하지 않는다.
+
+### 2.4 지도 revision과 시간
 
 - 모든 Trihouse 시뮬레이션의 `map_revision`은 문자열 `"1"`이다.
 - map 좌표를 보고하거나 이동 명령을 실행할 때 revision이 `"1"`이 아니면 거부한다.
@@ -105,6 +145,20 @@ MySQL                              Control Tower RMF Worker
                                             ▼
                                       Pinky FleetNode/Nav2
 ```
+
+### 3.3 선택한 control_system 연결 방식
+
+세 가지 방식을 비교한다.
+
+| 방식 | 판단 |
+| --- | --- |
+| `control_system` project 경로 직접 참조 | 기본 방식. 최신 map export를 중복 없이 사용하고 보호 대상은 읽기만 한다. |
+| `control_system_test` 복사본 참조 | 격리 재현이나 파생 파일 실험 때만 사용한다. 기존 대상을 덮어쓰지 않는 새 복사본이어야 한다. |
+| control_system 생성 launch 직접 수정 | 사용하지 않는다. UI 재생성 시 덮어써지고 Trihouse 책임이 외부 프로젝트로 샌다. |
+
+통합 launch 파일명은 프로젝트 이름을 포함하지 않는
+`trihouse_rmf_bridge/launch/control_system_rmf.launch.py`로 고정한다. 동일 launch가
+`project_name`과 경로 인자로 다른 control_system project에도 적용될 수 있어야 한다.
 
 ## 4. 책임 경계
 
@@ -497,7 +551,56 @@ POC internal API는 `127.0.0.1`로만 노출한다. 운영 배포의 service 인
 | `recovery_episodes` | 복구 workflow | 복구 사건과 정책·모델 계보 |
 | `recovery_steps` | 실제 복구 행동 | 행동·전후 관측·보상·결과 |
 
-### 11.1 원시 관측과 DB label 분리
+### 11.1 project1 fleet와 DB 장비 마스터 동기화
+
+launch는 DB를 수정하지 않는다. 별도 registry 동기화 단계가 project1 입력을 읽어 정규화된
+장비 manifest를 만들고 FMS Gateway 내부 API를 통해 검증·반영한다. Control Tower나 ROS
+노드가 MySQL에 직접 연결하지 않는다는 4.4의 원칙을 유지한다.
+
+동기화 입력과 DB 매핑은 다음과 같다.
+
+| project1 입력 | DB 대상 |
+| --- | --- |
+| `fleet.yaml.robots[].id` | `devices.device_id` |
+| `kind=mobile/workcell` | `devices.device_type=mobile/arm` |
+| `name` | `devices.name` |
+| `model` | `devices.model` |
+| mobile + RMF config fleet name | `devices.fleet_name=project1_pinky` |
+| workcell | `devices.fleet_name=omx_fleet` |
+| charger/station waypoint | `devices.home_location_id`과 `locations.rmf_waypoint_name` |
+| `gz_name`, zones, data source, RMF robot name | `devices.capabilities` JSON |
+| spawn pose | 초기 시험용 `device_states`가 아니라 capabilities의 simulation metadata |
+
+`capabilities`의 최소 형식은 다음과 같다.
+
+```json
+{
+  "data_source": "gazebo",
+  "gz_name": "pinky_01",
+  "rmf_robot_name": "PK_01",
+  "zones": ["ambient", "chilled", "frozen"],
+  "navigation": true,
+  "rmf": true
+}
+```
+
+초기 spawn pose를 최신 관측값처럼 `device_states`에 seed하지 않는다. Gazebo의 실제
+RobotStatus가 들어오기 전에는 상태를 `offline` 또는 미관측으로 유지한다. 위치 seed는
+`locations`의 charger/station 기준정보에만 사용한다.
+
+동기화 명령은 기본적으로 diff만 출력한다. 명시적 `--apply`에서만 다음을 수행한다.
+
+1. `충전1`, `충전2`, `설비1`, `설비2`가 building/nav graph에 존재하는지 확인한다.
+2. 기존 `PINKY-01`, `PINKY-02`, `OMX-01`, `OMX-02`, `PK-01`, `PK-02` 참조를 보고한다.
+3. FK와 논리 참조 migration이 준비되지 않았으면 적용을 거부한다.
+4. FMS Gateway transaction으로 locations와 devices를 upsert한다.
+5. 재조회해 네 장비의 ID, fleet, home location, capabilities가 manifest와 같은지 확인한다.
+
+현재 `db/seed_dev.sql`의 `PINKY-01`, `PINKY-02`, `OMX-01`, `OMX-02`와 `pinky_fleet`은
+project1 계약과 불일치한다. 구현 단계에서 12.3의 ID migration과 새 개발 seed를 함께
+수정해야 하며 문자열 치환만으로 기존 FK를 깨뜨리면 안 된다.
+
+### 11.2 원시 관측과 DB label 분리
 
 다음 고빈도 원시 데이터는 MySQL에 매 sample INSERT하지 않는다.
 
@@ -577,6 +680,101 @@ Gazebo, ROS 2, RMF schedule·dispatcher와 RMF worker는 호스트에서 실행�
 tmpfs는 시험 종료 후 사라지므로 장기 실험 데이터는 영구 `compose.db.yaml`에서 별도로
 수행한다.
 
+### 14.1 `control_system_rmf.launch.py` 경계
+
+launch는 control_system이 생성한 `project1.launch.xml`,
+`project1_bringup.launch.xml`, `project1_nav2.launch.xml` 전체를 그대로 include하지 않는다.
+이 파일들은 과거 절대경로, OMX 필수 의존성과 기존 `project1_nav2_adapter.py` 실행을
+포함하고, 함께 제공되는 `run_project1.sh`는 source world 패치와 nav graph 생성을 수행하기
+때문이다. 대신 보호된 project artifact 중 필요한 world, building, bridge, robot spawn,
+robot Nav2 파일을 선택적으로 include하고 Trihouse가 소유한 Pinky stack과
+EasyFullControl adapter를 조합한다.
+
+명령 소유권은 하나로 고정한다.
+
+```text
+Open-RMF
+→ Trihouse EasyFullControl adapter
+→ ExecuteTransport
+→ Pinky FleetNode
+→ namespaced Nav2 NavigateToPose
+→ Safety Supervisor
+→ namespaced final cmd_vel
+→ ros_gz_bridge
+→ Gazebo
+```
+
+`project1_nav2_adapter.py`와 Trihouse EasyFullControl adapter를 동시에 실행하지 않는다.
+Nav2 controller의 원래 `/<namespace>/cmd_vel`은 `/<namespace>/cmd_vel_nav`으로 remap하고,
+Safety Supervisor만 최종 `/<namespace>/cmd_vel`을 발행한다.
+
+### 14.2 CLI argument 계약
+
+필수·경로 인자는 ML/DL 실행 CLI처럼 launch invocation에서 명시적으로 덮어쓸 수 있어야
+한다. 기본값은 현재 workspace에 맞추되 코드 로직에서 `/home/gyi`를 사용하지 않는다.
+
+| argument | 기본값 또는 의미 |
+| --- | --- |
+| `control_system_root` | `/home/syw/Trihouse/control_system` |
+| `project_name` | `project1` |
+| `map_dir` | `<control_system_root>/rmf_maps/<project_name>` |
+| `fleet_file` | `<map_dir>/fleet.yaml` |
+| `rmf_fleet_config` | `<map_dir>/<project_name>_pinky_config.yaml` |
+| `building_yaml` | `<map_dir>/<project_name>.building.yaml` |
+| `world` | `<map_dir>/<project_name>.world` |
+| `nav_graph` | `<map_dir>/nav_graphs/0.yaml` |
+| `nav2_map` | `<map_dir>/nav2_map/<project_name>.yaml` |
+| `gz_bridge_config` | `<map_dir>/<project_name>_gz_bridge.yaml` |
+| `robot_ids` | 첫 시험 `PK_01`; 쉼표로 `PK_01,PK_02` 선택 가능 |
+| `start_omx` | 기본 `false`; OMX 패키지가 설치된 뒤에만 `true` |
+| `start_gazebo`, `start_rmf_core`, `start_nav2` | 각 계층 독립 모듈 시험 스위치 |
+| `start_pinky_stack`, `start_rmf_adapter` | Pinky 제어와 RMF adapter 독립 스위치 |
+| `start_control_gateway` | 실제 TCP 8788 경계 실행 여부 |
+| `headless`, `use_sim_time` | 기본 `true` |
+| `map_revision` | 기본 `1` |
+| `control_host`, `control_port` | 기본 `127.0.0.1`, `8788` |
+| battery scenario 인자 | 초기 SOC, charging, 충·방전 가속률 |
+
+개별 artifact 경로를 넘기면 `map_dir` 파생값보다 우선한다. 존재하지 않는 경로, project
+이름과 맞지 않는 파일, fleet에 없는 robot ID는 launch 시작 전 preflight 실패로 처리한다.
+
+### 14.3 읽기 전용 artifact와 파생 산출물
+
+direct 모드에서도 control_system 원본을 수정하지 않는다. world 센서 plugin 추가,
+collision detector 변경 또는 nav graph 생성이 필요하면 아래 둘 중 하나만 허용한다.
+
+1. 최신 control_system export에 완성된 artifact가 있으면 그대로 읽는다.
+2. 없으면 명시적인 준비 명령으로 새 `control_system_test` 복사본을 만든 뒤 그 복사본에서
+   파생 artifact를 생성하고 launch의 `control_system_root` 또는 `map_dir`을 변경한다.
+
+현재 project1에는 `generated_models/project1_L1`과 `nav_graphs/0.yaml`이 없고 world는
+`model://project1_L1`을 참조한다. 따라서 이 두 artifact가 준비되기 전에는 preflight가
+실패해야 한다. `.log`, `.err.log`, `.pgid`, `.rmf_schedule_node.yaml`, `__pycache__`는
+복사 대상이 아니다.
+
+복사 도구는 source root, destination root, project name을 CLI 인자로 받고 다음을 지킨다.
+
+- `copy`만 사용하고 `move`를 사용하지 않는다.
+- source가 control_system project인지 검증한다.
+- destination project가 이미 있으면 덮어쓰거나 삭제하지 않고 실패한다.
+- 필요한 project 파일과 하위 `robots`, `nav2_map`, `generated_models`, `nav_graphs`만 복사한다.
+- 복사 완료 후 source와 destination의 필수 파일 SHA-256을 비교한다.
+
+### 14.4 시작 순서
+
+하나의 launch 안에서도 다음 event 순서를 보장한다.
+
+1. preflight가 파일·fleet·namespace·charger·패키지를 검증한다.
+2. Gazebo server와 clock bridge를 시작한다.
+3. `/clock`과 world가 준비된 뒤 선택한 robot을 spawn한다.
+4. RMF core와 building map server를 시작한다.
+5. Nav2 map server, 선택한 robot의 AMCL·Nav2를 시작한다.
+6. Pinky sensor/status/safety/fleet/gateway stack을 namespaced remap으로 시작한다.
+7. 신선한 map pose와 RobotStatus를 확인할 수 있는 상태에서 RMF adapter를 시작한다.
+
+고정 `sleep`만으로 준비를 추정하지 않는다. 프로세스 종료, `/clock`, action server, map pose,
+TCP connection readiness를 각각 관측하고 다음 계층을 시작하거나 명확한 timeout으로 실패한다.
+
 ## 15. 테스트 전략
 
 ### 15.1 정적·단위 테스트
@@ -589,6 +787,13 @@ tmpfs는 시험 종료 후 사라지므로 장기 실험 데이터는 영구 `co
 - session·sequence 순서 판정
 - RMF 상태 매핑과 알 수 없는 상태 거부
 - DB schema와 XLSX 구조 집합 일치
+- CLI 경로 파생과 개별 artifact override 우선순위
+- fleet.yaml과 RMF config의 robot·charger·fleet 교차 검증
+- project1 `workcell → arm` 외 암묵적 ID 변환 거부
+- 기존 control_system 원본을 변경하지 않는 copy·preflight 계약
+- 기존 destination 복사 거부와 runtime 파일 제외
+- 선택하지 않은 OMX 패키지를 요구하지 않는 조건부 의존성
+- robot namespace별 odom, scan, AMCL, Nav2 action, cmd_vel remap
 
 ### 15.2 MySQL 통합 테스트
 
@@ -601,6 +806,10 @@ tmpfs는 시험 종료 후 사라지므로 장기 실험 데이터는 영구 `co
 - RMF task acceptance와 task summary 반영
 - RMF 완료만으로 전체 job이 완료되지 않음
 - 장비 ID migration 후 모든 FK와 logical reference 정합성
+- project1 manifest dry-run이 기존 DB ID·fleet 불일치를 정확히 보고
+- 명시적 apply 뒤 `PK_01`, `PK_02`, `OMX_01`, `OMX_02`와 home location 정합성
+- 두 Pinky의 `capabilities.rmf_robot_name`과 `devices.fleet_name=project1_pinky` 정합성
+- 같은 manifest 재적용의 멱등성과 fleet 파일 변경 시 차이 보고
 
 ### 15.3 Gazebo·RMF E2E
 
@@ -614,6 +823,19 @@ tmpfs는 시험 종료 후 사라지므로 장기 실험 데이터는 영구 `co
 8. 도착 후 RMF status, Pinky terminal result, step과 attempt를 확인한다.
 9. cancel, navigation failure, stale telemetry, battery 제한과 safety stop을 각각 시험한다.
 10. `device_states`, `job_steps`, `job_step_attempts`, `operation_events`를 실시간 조회한다.
+
+통합 시험 전에 아래 모듈 시험을 순서대로 통과해야 한다.
+
+1. artifact preflight와 fleet manifest parsing
+2. Gazebo world·clock·PK_01 spawn
+3. PK_01 odom·scan·AMCL·Nav2 action
+4. Nav2 `cmd_vel_nav` → Safety Supervisor → 최종 `cmd_vel`
+5. 배터리 scenario → RobotStatus → RMF SOC
+6. RMF core·task API·단일 Pinky adapter 등록
+7. FMS Gateway TCP 8788 → MySQL latest state projection
+8. RMF 단일 waypoint task → Pinky terminal result → DB step/attempt
+9. `PK_02`를 추가한 traffic·namespace·개별 SOC 검증
+10. OpenManipulator 의존성이 준비된 뒤 OMX를 추가한 전체 stage 검증
 
 ### 15.4 성공 기준
 
@@ -629,16 +851,18 @@ tmpfs는 시험 종료 후 사라지므로 장기 실험 데이터는 영구 `co
 
 ## 16. 구현 순서
 
-1. 장비 ID와 DB 문서·migration 정합성
-2. TaskContext와 ROS 인터페이스 계약
-3. StatusNode와 TCP robot_status schema v2
-4. FMS Gateway TCP server와 device state projection
-5. TaskEvent ACK·재전송과 실행 이력 transaction
-6. RMF worker 내부 HTTP API 전환
-7. RMF task observer runtime
-8. 통합 Compose와 launch
-9. 자동 회귀·MySQL 통합 테스트
-10. Gazebo·RMF·MySQL 수동 검증 가이드와 run record
+1. project1 fleet/config/nav graph parser와 읽기 전용 preflight
+2. 장비 ID·fleet 이름과 DB 문서·migration·seed 정합성
+3. TaskContext와 ROS 인터페이스 계약
+4. StatusNode와 TCP robot_status schema v2
+5. FMS Gateway TCP server와 device state projection
+6. TaskEvent ACK·재전송과 실행 이력 transaction
+7. RMF worker 내부 HTTP API 전환과 task observer runtime
+8. 안전한 `control_system_test` 복사 도구
+9. `control_system_rmf.launch.py`와 namespace·Safety remap
+10. launch 모듈 시험과 MySQL 통합 시험
+11. PK_01 Gazebo·RMF·MySQL E2E와 수동 검증 명령
+12. PK_02 다중 운행, 이후 OMX 통합과 run record
 
 각 단계는 앞 단계의 계약 테스트를 통과한 뒤 진행한다. 보호 대상 경로는 어떤 단계에서도
 수정하지 않는다.

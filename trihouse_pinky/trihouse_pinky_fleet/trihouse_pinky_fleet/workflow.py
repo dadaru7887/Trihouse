@@ -71,6 +71,11 @@ class TransportWorkflow:
             return WorkflowResult(False, False, self.phase, "navigation failed")
         if not stationary:
             return WorkflowResult(True, False, self.phase, "waiting for stop")
+        if self.destination_kind == 'RMF_NAVIGATION':
+            self.command_id = ""
+            self.job_id = ""
+            self.phase = JobPhase.IDLE
+            return WorkflowResult(True, False, self.phase, "RMF navigation destination reached")
         if self.destination_kind.startswith('RETURN_'):
             self.command_id = ""
             self.job_id = ""
@@ -78,6 +83,19 @@ class TransportWorkflow:
             return WorkflowResult(True, False, self.phase, "return destination reached")
         self.phase = JobPhase.WAITING_HANDOVER
         return WorkflowResult(True, False, self.phase, "arrived and stationary")
+
+    def cancel_navigation(self, command_id: str = "") -> WorkflowResult:
+        """현재 이동만 해제하며 이후에 도착하는 과거 Nav2 결과를 무효화한다."""
+        if self.phase is not JobPhase.NAVIGATING:
+            return WorkflowResult(False, False, self.phase, "no active navigation")
+        if command_id and command_id != self.command_id:
+            return WorkflowResult(False, False, self.phase, "navigation command mismatch")
+        self.command_id = ""
+        self.job_id = ""
+        self.destination_kind = ""
+        self.recovery_return = False
+        self.phase = JobPhase.IDLE
+        return WorkflowResult(True, False, self.phase, "navigation canceled")
 
     def reassign(self, command_id: str, map_revision: str) -> WorkflowResult:
         """FMS can redirect a waiting delivery without replacing its cargo/job."""

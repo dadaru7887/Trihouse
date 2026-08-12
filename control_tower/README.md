@@ -79,6 +79,27 @@ Pinky 실주행 측정 후 설정값으로 확정해야 한다. SR_27용 `status
 API 호출 전에 단일 용량 resource의 겹치는 진입을 지연시키고, 지연된 Pinky에는 등록된 대기 노드를
 반환한다. 우선순위는 신규 배치 순서에만 적용하며 이미 예약된 이동을 선점하지 않는다.
 
+`rmf_adapter/task_api.py`는 Control Tower 이동 단계를 Open-RMF Jazzy 공식
+`dispatch_task_request`의 `compose/go_to_place` JSON으로 변환한다. 목적지는 DB에서 조회한
+`rmf_waypoint_name`만 사용하며 RMF task ID는 성공 응답의 `state.booking.id`에서만 수락한다.
+`rmf_adapter/task_outbox.py`는 같은 `integration_messages.message_id`를 ROS request ID로
+재사용하는 멱등 worker다. timeout은 같은 행을 재시도하고, 명시적 거절이나 기존 task ID와의
+충돌은 `dead_letter`로 격리한다.
+
+`database/repositories/rmf_task_repository.py`는 별도 스키마 없이 기존
+`integration_messages`, `job_steps`, `locations`, `devices`를 사용하는 MySQL DB-API adapter다.
+동시 worker는 `FOR UPDATE SKIP LOCKED`로 행을 claim하며, task summary는 task ID와 관측 시각이
+모두 일치할 때만 `job_steps.rmf_status/state/assigned_device_id`에 반영된다. 애플리케이션은
+사용 중인 MySQL 드라이버의 PEP 249 connection factory를 생성자에 전달한다. 요청 발행 직후
+프로세스가 종료된 경우에는 기본 30초가 지난 `sent` 행을 같은 message/request ID로 다시 claim해
+영구 고착을 막는다. 이 시간은 `sent_timeout_seconds`로 조정한다.
+
+`rmf_adapter/ros_task_client.py`는 `task_api_requests`에 reliable/transient-local QoS로
+`ApiRequest`를 발행하고 같은 request ID의 최종 `ApiResponse.TYPE_RESPONDING`만 기다린다.
+`RosTaskSummaryObserver.attach()`는 `task_summaries`를 구독해 알려진 task의 최신 상태만
+repository에 전달하며 알 수 없는 RMF 상태는 업무 상태를 바꾸지 않고 무시한다. 동기 submit client는 Control Tower HTTP/ROS 주 executor 안에서 다시
+spin하지 않도록 전용 ROS node와 worker thread에서 실행한다.
+
 `task_manager/omx_workflow.py`는 SR_11/13/15/16/37/46/47의 장비 독립 OMX 단계 정책이다.
 실제 OMX/MoveIt adapter는 `QR·ArUco 승인 → pick offset → 결과`를 보고하고, 이 정책은
 재인식·등록된 보정좌표 재시도·임시 슬롯 예약·사람 정지·인계 완료 여부를 결정한다. 이 경계를

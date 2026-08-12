@@ -4,6 +4,7 @@ from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDesc
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node, SetRemap
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -27,9 +28,37 @@ def generate_launch_description():
         DeclareLaunchArgument('vision_enabled', default_value='false'),
         DeclareLaunchArgument('docking_enabled', default_value='false'),
         DeclareLaunchArgument('omx_station_id', default_value='station-1'),
+        DeclareLaunchArgument('battery_percentage', default_value='1.0'),
+        DeclareLaunchArgument('charging', default_value='false'),
+        DeclareLaunchArgument(
+            'charge_percent_per_second', default_value='1.0'
+        ),
+        DeclareLaunchArgument(
+            'discharge_percent_per_second', default_value='0.0'
+        ),
         IncludeLaunchDescription(AnyLaunchDescriptionSource(sim)),
         GroupAction([SetRemap(src='/cmd_vel', dst='/cmd_vel_nav'), IncludeLaunchDescription(AnyLaunchDescriptionSource(navigation), launch_arguments={'map': map_path}.items())]),
-        Node(package='trihouse_pinky_bringup', executable='sim_hardware', parameters=[{'use_sim_time': True}]),
+        Node(
+            package='trihouse_pinky_bringup',
+            executable='sim_hardware',
+            parameters=[{
+                'use_sim_time': True,
+                'battery_percentage': ParameterValue(
+                    LaunchConfiguration('battery_percentage'), value_type=float
+                ),
+                'charging': ParameterValue(
+                    LaunchConfiguration('charging'), value_type=bool
+                ),
+                'charge_percent_per_second': ParameterValue(
+                    LaunchConfiguration('charge_percent_per_second'),
+                    value_type=float,
+                ),
+                'discharge_percent_per_second': ParameterValue(
+                    LaunchConfiguration('discharge_percent_per_second'),
+                    value_type=float,
+                ),
+            }],
+        ),
         Node(package='trihouse_pinky_safety', executable='safety_supervisor', parameters=[{'robot_id': robot_id, 'use_sim_time': True}]),
         Node(package='trihouse_pinky_bringup', executable='readiness_checker', parameters=[{'robot_id': robot_id, 'use_sim_time': True}]),
         Node(package='trihouse_pinky_fleet', executable='battery_condition', parameters=[{'robot_id': robot_id, 'use_sim_time': True}]),

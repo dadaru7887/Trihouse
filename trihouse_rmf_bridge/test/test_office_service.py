@@ -2,10 +2,10 @@ import os
 import subprocess
 import tempfile
 import time
+from pathlib import Path
 
 import pytest
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from rmf_fleet_msgs.msg import FleetState, RobotState
 from trihouse_interfaces.srv import EstimateTaskEnergy
 
@@ -15,10 +15,7 @@ def ros_context():
     os.environ["ROS_LOG_DIR"] = tempfile.mkdtemp(prefix="trihouse-rmf-test-")
     rclpy.init()
     node = rclpy.create_node("test_office_energy_service")
-    graph = (
-        get_package_share_directory("rmf_demos_maps")
-        + "/maps/office/nav_graphs/0.yaml"
-    )
+    graph = str(Path(__file__).parent / "fixtures" / "test_graph.yaml")
     process = subprocess.Popen(
         [
             "ros2",
@@ -52,8 +49,8 @@ def publish_state(node, publisher, *, battery_percent=80.0):
     robot.name = "tinyRobot1"
     robot.battery_percent = battery_percent
     robot.location.level_name = "L1"
-    robot.location.x = 16.846334
-    robot.location.y = -5.404067
+    robot.location.x = 0.0
+    robot.location.y = 0.0
     robot.location.yaw = 0.0
     fleet.robots = [robot]
     deadline = time.monotonic() + 1.0
@@ -77,10 +74,10 @@ def call_service(node, client, waypoints):
     return future.result()
 
 
-def test_office_service_estimates_pantry_to_hardware_2(ros_context):
+def test_service_estimates_pickup_to_dropoff(ros_context):
     node, publisher, client = ros_context
     publish_state(node, publisher)
-    response = call_service(node, client, ["pantry", "hardware_2"])
+    response = call_service(node, client, ["pickup", "dropoff"])
     assert response.success
     assert response.travel_duration_s > 0.0
     assert response.total_duration_s == pytest.approx(

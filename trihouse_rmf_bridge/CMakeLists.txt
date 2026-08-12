@@ -6,12 +6,15 @@ if(NOT CMAKE_CXX_STANDARD)
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rmf_fleet_msgs REQUIRED)
 find_package(rmf_battery REQUIRED)
 find_package(rmf_fleet_adapter REQUIRED)
 find_package(rmf_traffic REQUIRED)
 find_package(trihouse_interfaces REQUIRED)
+
+ament_python_install_package(${PROJECT_NAME})
 
 add_library(fleet_state_store src/fleet_state_store.cpp)
 target_include_directories(fleet_state_store PUBLIC
@@ -52,10 +55,23 @@ if(BUILD_TESTING)
 
   ament_add_pytest_test(test_office_service test/test_office_service.py
     TIMEOUT 30)
+  ament_add_pytest_test(test_pinky_state test/test_pinky_state.py TIMEOUT 30)
+  ament_add_pytest_test(test_pinky_execution test/test_pinky_execution.py TIMEOUT 30)
+  ament_add_pytest_test(
+    test_pinky_adapter_contract test/test_pinky_adapter_contract.py TIMEOUT 30)
+  ament_add_pytest_test(
+    test_pinky_fleet_config test/test_pinky_fleet_config.py TIMEOUT 30)
+  ament_add_pytest_test(
+    test_pinky_rmf_gazebo_launch test/test_pinky_rmf_gazebo_launch.py TIMEOUT 30)
 endif()
 
 install(DIRECTORY include/ DESTINATION include)
-install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME}
+  PATTERN "__pycache__" EXCLUDE
+  PATTERN "*.pyc" EXCLUDE)
+install(FILES README.md DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS scripts/pinky_easy_fleet_adapter
+  DESTINATION lib/${PROJECT_NAME})
 install(TARGETS fleet_state_store energy_estimator trihouse_rmf_bridge_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib

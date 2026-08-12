@@ -5,6 +5,7 @@ from math import atan2
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Odometry
 from rclpy.action import ActionClient, ActionServer
+from rclpy.action import CancelResponse
 from rclpy.node import Node
 from std_msgs.msg import String
 from trihouse_interfaces.action import ExecuteTransport
@@ -32,7 +33,14 @@ class FleetNode(Node):
         self.create_subscription(RobotHealth, '/trihouse/health', self._on_health, 10)
         self.create_subscription(Odometry, '/odom', self._on_odom, 10)
         self.nav_client = ActionClient(self, NavigateToPose, '/navigate_to_pose')
-        self.server = ActionServer(self, ExecuteTransport, '/trihouse/transport/execute', self._execute)
+        self.nav_goal_handles = {}
+        self.server = ActionServer(
+            self,
+            ExecuteTransport,
+            '/trihouse/transport/execute',
+            self._execute,
+            cancel_callback=self._cancel,
+        )
 
     def _on_readiness(self, message: Readiness) -> None:
         self.ready = message.state == Readiness.STATE_READY
@@ -63,11 +71,30 @@ class FleetNode(Node):
     async def _execute(self, goal_handle: object) -> ExecuteTransport.Result:
         goal = goal_handle.request
         return_mode = goal.mode in (ExecuteTransport.Goal.MODE_RETURN_TO_WAIT, ExecuteTransport.Goal.MODE_RETURN_TO_CHARGE)
-        destination_kind = 'RETURN_TO_CHARGE' if goal.mode == ExecuteTransport.Goal.MODE_RETURN_TO_CHARGE else ('RETURN_TO_WAIT' if return_mode else 'TRANSPORT')
+        rmf_navigation = goal.mode == ExecuteTransport.Goal.MODE_RMF_NAVIGATION
+        destination_kind = (
+            'RETURN_TO_CHARGE'
+            if goal.mode == ExecuteTransport.Goal.MODE_RETURN_TO_CHARGE
+            else 'RETURN_TO_WAIT'
+            if return_mode
+            else 'RMF_NAVIGATION'
+            if rmf_navigation
+            else 'TRANSPORT'
+        )
         if self.workflow.phase is JobPhase.WAITING_HANDOVER and not return_mode:
             accepted = self.workflow.reassign(goal.command_id, goal.map_revision)
         else:
-            accepted = self.workflow.accept(JobCommand(goal.command_id, goal.job_id, goal.map_revision, destination_kind, requires_cargo=not return_mode), ready=self.ready and not self.emergency, cargo_confirmed=self.cargo_confirmed)
+            accepted = self.workflow.accept(
+                JobCommand(
+                    goal.command_id,
+                    goal.job_id,
+                    goal.map_revision,
+                    destination_kind,
+                    requires_cargo=not (return_mode or rmf_navigation),
+                ),
+                ready=self.ready and not self.emergency,
+                cargo_confirmed=self.cargo_confirmed,
+            )
         result = ExecuteTransport.Result()
         if not accepted.accepted:
             goal_handle.abort(); result.success = False; result.code = ExecuteTransport.Result.CODE_REJECTED; result.message = accepted.detail
@@ -91,7 +118,28 @@ class FleetNode(Node):
             self._publish_event(goal, TaskEvent.EVENT_FAILED, 'NavigateToPose rejected the goal')
             goal_handle.abort(); result.success = False; result.code = ExecuteTransport.Result.CODE_NAVIGATION_FAILED; result.message = 'NavigateToPose rejected the goal'
             return result
+        self.nav_goal_handles[goal.command_id] = nav_handle
+        if goal_handle.is_cancel_requested:
+            nav_handle.cancel_goal_async()
         nav_result = await nav_handle.get_result_async()
+        self.nav_goal_handles.pop(goal.command_id, None)
+        if goal_handle.is_cancel_requested:
+            canceled = self.workflow.cancel_navigation(goal.command_id)
+            self.display_pub.publish(String(data=''))
+            self._publish_navigation(
+                goal,
+                canceled,
+                state_override=NavigationState.STATE_CANCELED,
+                detail_override='navigation canceled',
+            )
+            self._publish_event(
+                goal, TaskEvent.EVENT_CANCELED, 'navigation canceled')
+            goal_handle.canceled()
+            result.success = False
+            result.code = ExecuteTransport.Result.CODE_CANCELED
+            result.message = 'navigation canceled'
+            result.completed_at = self.get_clock().now().to_msg()
+            return result
         precise = not goal.requires_precise_stop or self._at_precise_goal(goal)
         arrived = self.workflow.nav_result(succeeded=nav_result.status == 4 and precise, stationary=self.stationary)
         if arrived.phase is JobPhase.HEALTH_CHECK:
@@ -101,7 +149,10 @@ class FleetNode(Node):
             self._publish_event(goal, TaskEvent.EVENT_ARRIVED, arrived.detail)
             if arrived.phase is JobPhase.WAITING_HANDOVER:
                 self._publish_handover(goal, HandoverState.STATE_READY, 'arrived and waiting for handover')
-            goal_handle.succeed(); result.success = True; result.code = ExecuteTransport.Result.CODE_OK; result.message = 'arrived; waiting for handover'
+            goal_handle.succeed()
+            result.success = True
+            result.code = ExecuteTransport.Result.CODE_OK
+            result.message = arrived.detail
         else:
             self.display_pub.publish(String(data=''))
             self._publish_event(goal, TaskEvent.EVENT_FAILED, arrived.detail)
@@ -109,11 +160,27 @@ class FleetNode(Node):
         result.completed_at = self.get_clock().now().to_msg()
         return result
 
-    def _publish_navigation(self, goal: ExecuteTransport.Goal, outcome: object) -> None:
+    def _cancel(self, goal_handle: object) -> CancelResponse:
+        """RMF stop을 현재 Nav2 goal 취소로 전달한다."""
+        command_id = goal_handle.request.command_id
+        self.workflow.cancel_navigation(command_id)
+        nav_goal_handle = self.nav_goal_handles.get(command_id)
+        if nav_goal_handle is not None:
+            nav_goal_handle.cancel_goal_async()
+        return CancelResponse.ACCEPT
+
+    def _publish_navigation(
+        self,
+        goal: ExecuteTransport.Goal,
+        outcome: object,
+        *,
+        state_override: int | None = None,
+        detail_override: str = '',
+    ) -> None:
         message = NavigationState(); message.stamp = self.get_clock().now().to_msg(); message.robot_id = self.robot_id
         message.goal_id = goal.command_id; message.job_id = goal.job_id; message.job_step_id = goal.job_step_id
-        message.state = (NavigationState.STATE_ACTIVE if outcome.phase is JobPhase.NAVIGATING else NavigationState.STATE_SUCCEEDED if outcome.phase in (JobPhase.WAITING_HANDOVER, JobPhase.IDLE) else NavigationState.STATE_FAILED)
-        message.target_pose = goal.dropoff_pose; message.detail = outcome.detail
+        message.state = state_override if state_override is not None else (NavigationState.STATE_ACTIVE if outcome.phase is JobPhase.NAVIGATING else NavigationState.STATE_SUCCEEDED if outcome.phase in (JobPhase.WAITING_HANDOVER, JobPhase.IDLE) else NavigationState.STATE_FAILED)
+        message.target_pose = goal.dropoff_pose; message.detail = detail_override or outcome.detail
         self.navigation_pub.publish(message)
 
     def _at_precise_goal(self, goal: ExecuteTransport.Goal) -> bool:

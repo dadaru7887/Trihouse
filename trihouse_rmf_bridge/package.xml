@@ -8,7 +8,9 @@
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
   <depend>rclcpp</depend>
+  <depend>rclpy</depend>
   <depend>rmf_fleet_msgs</depend>
   <depend>rmf_battery</depend>
   <depend>rmf_fleet_adapter</depend>
@@ -18,9 +20,13 @@
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rmf_task_ros2</exec_depend>
+  <exec_depend>rmf_traffic_ros2</exec_depend>
+  <exec_depend>trihouse_pinky_bringup</exec_depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-yaml</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

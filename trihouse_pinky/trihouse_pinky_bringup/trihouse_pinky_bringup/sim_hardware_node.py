@@ -31,14 +31,26 @@ def advance_battery(
     charging: bool,
     elapsed_s: float,
     charge_percent_per_second: float,
+    discharge_percent_per_second: float = 0.0,
 ) -> SimulatedBattery:
-    """경과 시간만큼 충전하고 BatteryState status를 결정한다."""
+    """경과 시간과 simulation-only 충·방전률로 상태를 결정한다."""
 
-    if elapsed_s < 0 or charge_percent_per_second < 0:
-        raise ValueError("elapsed time and charging rate must be non-negative")
+    if (
+        elapsed_s < 0
+        or charge_percent_per_second < 0
+        or discharge_percent_per_second < 0
+    ):
+        raise ValueError(
+            "elapsed time and charge/discharge rates must be non-negative"
+        )
     level = min(1.0, max(0.0, percentage))
     if charging:
         level = min(1.0, level + charge_percent_per_second / 100.0 * elapsed_s)
+    else:
+        level = max(
+            0.0,
+            level - discharge_percent_per_second / 100.0 * elapsed_s,
+        )
     if level >= 1.0:
         status = POWER_SUPPLY_STATUS_FULL
     elif charging:
@@ -55,6 +67,7 @@ class SimHardware(Node):
         self.declare_parameter('battery_percentage', 1.0)
         self.declare_parameter('charging', False)
         self.declare_parameter('charge_percent_per_second', 1.0)
+        self.declare_parameter('discharge_percent_per_second', 0.0)
         self._battery_percentage = float(self.get_parameter('battery_percentage').value)
         self._last_update_at = monotonic()
 
@@ -78,6 +91,9 @@ class SimHardware(Node):
             elapsed_s=elapsed_s,
             charge_percent_per_second=float(
                 self.get_parameter('charge_percent_per_second').value
+            ),
+            discharge_percent_per_second=float(
+                self.get_parameter('discharge_percent_per_second').value
             ),
         )
         self._battery_percentage = simulated.percentage

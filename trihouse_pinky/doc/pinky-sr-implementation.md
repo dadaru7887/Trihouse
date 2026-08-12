@@ -8,7 +8,7 @@
 
 | SR | 구현 경계 | 자동 테스트/확인 |
 | --- | --- | --- |
-| SR_03 상태 공유 | `status_node`가 1초마다 위치·배터리·적재·안전·오류를 포함한 `RobotStatus` 발행 | stale scan이면 `ready=false` |
+| SR_03 상태 공유 | `status_node`가 1초마다 map 위치·배터리·적재·안전·오류를 포함한 `RobotStatus` 발행 | stale scan이면 `ready=false`, stale AMCL pose는 RMF에서 거절 |
 | SR_23 사람 충돌 방지 | `safety_supervisor`의 final velocity gate | 초음파 우선 정지·timeout 정지 |
 | SR_24·48 운반 | `fleet_node`의 `ExecuteTransport → NavigateToPose` | readiness/적재 확인 거절, 도착+정지 |
 | SR_25 복귀 | action `mode=RETURN_TO_WAIT/CHARGE` | 빈 바구니 복귀 허용 |
@@ -54,7 +54,9 @@ waypoint follower는 이 launch에 포함하지 않는다. 최소 운반 명령 
 {"type":"execute_transport","message_id":"cmd-001","job_id":"job-001","job_step_id":"deliver","map_revision":"map-7","dropoff_location_id":"packing-1","destination_code":"PACKING","dropoff_pose":{"frame_id":"map","x":1.2,"y":-0.5,"yaw":0.0},"mode":"TRANSPORT"}
 ```
 
-`mode`은 `TRANSPORT`, `RETURN_TO_WAIT`, `RETURN_TO_CHARGE` 중 하나다. gateway는
+`mode`은 `TRANSPORT`, `RETURN_TO_WAIT`, `RETURN_TO_CHARGE` 중 하나다. RMF adapter만
+내부 mode `RMF_NAVIGATION`을 사용하며 Control Tower가 이 mode로 Pinky를 직접
+우회 호출하지 않는다. gateway는
 필수 필드·`map` frame·중복 `message_id`를 검사하고, 통과한 메시지만
 `/trihouse/transport/execute` action으로 보낸다. 상태와 task event는 역방향 NDJSON으로
 관제에 전달된다.
@@ -93,6 +95,10 @@ ros2 topic echo --once /trihouse/status
 
 첫 명령은 `/cmd_vel` 운영 발행자가 `safety_supervisor` 하나인지 확인한다. readiness가
 `READY`가 아니면 fleet은 운반 action을 거절해야 한다.
+
+Open-RMF를 함께 실행할 때는 `/amcl_pose`가 신선해야 `RobotStatus.frame_id=map`이 된다.
+AMCL pose가 없거나 오래되면 status는 odom frame을 명시하고 RMF adapter는 등록 또는
+상태 갱신을 거절한다. 실행 순서와 확인 명령은 `trihouse_rmf_bridge/README.md`를 따른다.
 
 ## Gazebo 범위
 
