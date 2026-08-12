@@ -1,7 +1,7 @@
 schema_version: 1
 experiment:
   name: lego_yoloe_multiseed
-  seeds: [42, 2026]
+  seeds: [17, 42, 101, 2026, 3407]
   continue_on_failure: true
 dataset:
   data_yaml: dataset/raw_examples/data.yaml
