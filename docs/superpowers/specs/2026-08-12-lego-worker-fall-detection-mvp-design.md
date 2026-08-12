@@ -2,46 +2,50 @@
 
 ## 목적과 범위
 
-오늘 웹캠 또는 MP4 영상으로 LEGO 작업자의 비정상 수평 자세와 무움직임을 확인할 수 있는 로컬 MVP를 만든다. 시스템은 사고를 확정하지 않고 `EMERGENCY_CANDIDATE` 후보 이벤트만 생성한다. 관리자의 확인, 로봇 정지, 관제 UI, ROS2 토픽 발행은 이 MVP의 후속 통합 범위다.
+최종 목표는 카메라 영상을 실시간으로 받아 LEGO 작업자의 비정상 수평 자세와 무움직임을 감지하는 것이다. LEGO 작업자는 기존 YOLOE-Seg 모델에서 `person`으로 인식하도록 이미 학습됐으며, 학습에는 저조도, motion blur, 색 변화, 결로, glare, 성에와 그 복합 환경을 생성하는 augmentation이 적용됐다.
 
-당일 성공 조건은 다음과 같다.
+이번 단계에서는 실시간 기능을 바로 붙이기 전에 **기존 데이터셋의 고정된 test split으로 해당 학습 모델의 성능을 재현 가능하게 평가**한다. 이 결과로 다음 실시간 구현 단계에서 사용할 confidence 기준, 자세 feature 분포와 초기 threshold를 정한다. 시스템은 모든 단계에서 사고를 확정하지 않고 향후 `EMERGENCY_CANDIDATE` 후보 이벤트만 생성한다.
 
-- 동일한 CLI가 `--source 0` 웹캠과 `--source sample.mp4` 영상 파일을 모두 연다.
-- segmentation mask로 자세와 움직임 feature를 계산한다.
-- 정상 LEGO는 `NORMAL`, 누운 자세가 유지되면 단계적으로 상태가 전이된다.
-- 누운 채 설정 시간 동안 움직이지 않으면 `EMERGENCY_CANDIDATE`가 화면과 JSONL 이벤트에 한 번 기록된다.
-- 자세가 정상화되거나 의미 있는 움직임이 재개되면 후보 누적이 해제된다.
-- 실제 모델 없이도 합성 mask 기반 자동 테스트로 feature와 시간 전이를 검증한다.
+이번 단계의 성공 조건은 다음과 같다.
+
+- `--model`, `--data`, `--split test`를 받는 평가 CLI로 기존 YOLOE 체크포인트를 평가한다.
+- Ultralytics의 detection/segmentation 지표인 box·mask Precision, Recall, mAP50, mAP50-95를 JSON과 CSV로 저장한다.
+- test split 전체 결과뿐 아니라 데이터셋에 정의된 환경 그룹별 결과를 분리해 저장한다.
+- 정답 mask와 예측 mask를 비교하는 표본 overlay를 저장해 수치와 실제 품질을 함께 검토할 수 있다.
+- 자세 메타데이터가 제공된 경우 standing/fallen 그룹별 aspect ratio, PCA orientation, centroid feature 분포와 후보 threshold를 계산한다.
+- 잘못 검출된 사례와 미검출 사례를 confidence 순으로 저장하여 다음 개선 대상을 확인할 수 있다.
+- 평가 명령, 모델·데이터 경로, 실행 시각, Ultralytics 버전과 결과 경로가 실행 기록에 남는다.
+
+웹캠, MP4, ByteTrack, 무움직임 상태 머신과 JSONL 후보 이벤트는 **다음 실시간 구현 단계**의 범위다. 정지 이미지 test split만으로 tracking과 시간 기반 무움직임 성능을 입증했다고 주장하지 않는다.
 
 ## 선택한 접근
 
-기존 `vision_perception/segmentation/inference_stream.py`의 Ultralytics YOLOE 입력 경로를 재사용하되, 낙상 판정 코어를 모델과 OpenCV UI에서 분리한다. 모델 결과를 직접 처리하는 얇은 실행기가 mask와 tracking ID를 판정 코어에 전달한다. 이 구조는 오늘 실제 영상을 시험하면서도 검출 모델의 품질과 낙상 규칙의 정확성을 독립적으로 진단할 수 있게 한다.
+평가는 기존 학습 코드와 동일한 Ultralytics YOLOE 런타임에서 `model.val(data=..., split="test")`을 호출한다. Ultralytics가 계산한 표준 box·mask 지표를 원본 결과로 보존하고, 별도 evaluator가 이미지별 예측 결과와 데이터셋 메타데이터를 결합해 환경 그룹 및 자세 그룹 지표를 만든다.
 
-OpenCV 색상/윤곽 검출기를 별도로 만들지 않는다. 모델 없는 현장 데모를 위한 중복 구현보다 합성 mask 자동 테스트와 기존 YOLOE 체크포인트 활용에 집중한다.
+평가 코드는 이후 실시간 판정에서도 재사용할 `person` mask feature 추출기를 함께 만든다. 이 단계에서는 정답/예측 mask에서 정적인 자세 feature만 계산하고, tracking 또는 immobility를 흉내 내지 않는다. OpenCV 색상/윤곽 검출기나 새 학습 파이프라인도 추가하지 않는다.
 
 ## 구성 요소와 책임
 
-### 설정
+### 평가 입력 계약
 
-YAML 파일은 fall score 가중치와 임계값, 움직임 임계값, 상태 유지 시간을 보관한다. 코드에는 데모 기본값을 넣지 않고 설정 로더가 누락 필드와 잘못된 범위를 시작 시 검증한다.
+필수 입력은 학습된 `best.pt`와 기존 데이터셋의 `data.yaml`이다. `data.yaml`에는 평가에 사용할 `test` split과 LEGO 작업자에 대응하는 `person` class가 있어야 한다. test split이 없으면 validation split으로 묵시적으로 대체하지 않고 명확히 실패한다. 학습에 사용한 train/val 이미지를 test 결과에 섞지 않는다.
 
-초기 데모값은 다음과 같다.
+환경별 평가를 위해 선택적인 manifest CSV를 받는다.
 
-- `aspect_ratio_threshold`: 1.2
-- `horizontal_angle_max_deg`: 30.0
-- `centroid_floor_threshold`: 0.35
-- `fall_score_threshold`: 0.65
-- `aspect_ratio_weight`: 0.3
-- `orientation_weight`: 0.5
-- `centroid_height_weight`: 0.2
-- `centroid_motion_threshold`: 0.02 (영상 대각선 기준 정규화 값)
-- `mask_iou_threshold`: 0.95
-- `fall_suspected_duration_sec`: 1.0
-- `fallen_duration_sec`: 2.0
-- `immobile_duration_sec`: 5.0
-- `track_lost_timeout_sec`: 2.0
+```csv
+image,environment,posture
+images/test/ambient_001.jpg,normal_light,standing
+images/test/dark_001.jpg,low_light,standing
+images/test/frost_001.jpg,frost,fallen
+```
 
-### Feature 추출
+- `image`: data.yaml 기준 이미지 상대 경로
+- `environment`: `normal_light`, `low_light`, `motion_blur`, `color_shift`, `condensation`, `glare`, `frost`, `combined` 중 하나
+- `posture`: `standing`, `fallen`, `unknown` 중 하나
+
+manifest가 없으면 표준 YOLO 지표만 산출한다. 파일명에서 환경이나 자세를 추측하지 않는다. manifest에 test split 밖의 이미지, 중복 이미지, 알 수 없는 그룹값이 있으면 평가 전에 실패한다.
+
+### 정적 자세 Feature 추출
 
 한 worker mask에서 다음 값을 계산한다.
 
@@ -49,64 +53,78 @@ YAML 파일은 fall score 가중치와 임계값, 움직임 임계값, 상태 �
 - mask pixel PCA 주축의 수평 기준 각도(0~90도)
 - mask 중심점의 정규화 좌표
 - 영상 하단에서 중심점까지의 정규화 거리
-- 이전 mask 중심점과의 영상 대각선 기준 변위
-- 이전 mask와 현재 mask의 IoU
+- mask area와 이미지 대비 면적 비율
 
-mask가 비어 있거나 면적이 너무 작으면 해당 관측을 유효하지 않은 것으로 처리하고 상태 전이에 사용하지 않는다. 첫 관측은 이전 mask가 없으므로 motion과 IoU를 `None`으로 두며, 무움직임 시간을 누적하지 않는다.
+mask가 비어 있거나 최소 면적보다 작으면 feature 계산 대상에서 제외하고 그 사유를 기록한다. 바닥선 calibration이 없는 정적 데이터셋 평가에서는 centroid-height를 낙상 판정 점수에 바로 사용하지 않고 분포만 기록한다.
 
-Fall score의 세 부분은 0~1 범위다. aspect ratio는 임계값 이상, orientation은 수평에 가까울수록, centroid는 설정된 바닥 영역에 가까울수록 점수가 높다. 총점은 설정 가중합이며 0~1로 제한한다.
+posture manifest가 있는 경우 standing과 fallen의 feature 분포를 비교한다. 단일 고정 threshold는 test split을 보고 최적화하지 않는다. 가능하면 별도 calibration/validation split에서 후보 threshold를 구하고 test split에는 고정 적용한다. 별도 split이 없다면 test에서 계산한 값은 `exploratory_threshold`로 명시하며 최종 성능으로 보고하지 않는다.
 
-### Worker 추적과 상태 머신
+### 평가 지표와 결과물
 
-Ultralytics `track(..., persist=True, tracker="bytetrack.yaml")`의 track ID를 `worker_<id>`로 사용한다. 단일 LEGO 데모에서 모델이 ID를 제공하지 않으면 그 프레임의 가장 큰 mask만 `worker_01`로 처리한다. 다중 mask인데 ID가 없다면 잘못된 worker 결합을 피하기 위해 fallback하지 않고 경고한다.
+표준 결과는 다음을 포함한다.
 
-worker별 독립 상태는 다음 순서로 전이한다.
+- box: Precision, Recall, mAP50, mAP50-95
+- mask: Precision, Recall, mAP50, mAP50-95
+- 이미지 수, 정답 instance 수, 예측 instance 수
+- confidence threshold와 IoU threshold
+- 전체 및 환경 그룹별 지표
+- posture metadata가 있을 때 standing/fallen feature 요약 통계와 exploratory threshold
 
-1. `NORMAL`: fall score가 임계값을 넘으면 `FALL_SUSPECTED`로 이동하고 비정상 자세 시작 시간을 기록한다.
-2. `FALL_SUSPECTED`: 자세가 계속 비정상이고 1초가 지나면 `FALLEN`으로 이동한다. 정상 자세가 되면 즉시 `NORMAL`로 복귀한다.
-3. `FALLEN`: 비정상 자세와 low-motion이 유지되면 무움직임 시작 시간을 기록한다. 비정상 자세가 풀리면 `NORMAL`로, 움직임이 있으면 `FALLEN`에 머물며 무움직임 타이머만 초기화한다. `fallen_duration_sec` 이상 비정상 자세가 유지되고 low-motion이 확인되면 `IMMOBILE`로 이동한다.
-4. `IMMOBILE`: low-motion 누적이 `immobile_duration_sec`에 도달하면 `EMERGENCY_CANDIDATE`로 이동한다. 움직임이 재개되면 `FALLEN`, 자세가 정상화되면 `NORMAL`로 복귀한다.
-5. `EMERGENCY_CANDIDATE`: 동일 episode에서는 이벤트를 다시 만들지 않는다. 움직임 재개 시 `FALLEN`, 정상화 시 `NORMAL`로 복귀하며 이후 새 episode에서 새 이벤트를 만들 수 있다.
+출력 디렉터리 구조는 다음과 같다.
 
-`low_motion`은 이전 관측이 있고, centroid 변위가 임계값 미만이며 mask IoU가 임계값을 초과할 때 참이다. 프레임이 잠시 사라져도 `track_lost_timeout_sec` 전에는 상태를 보존하고, 그 시간을 넘으면 worker 상태를 제거한다. 영상의 presentation timestamp가 유효하면 이를 상태 시간으로 사용하여 MP4 처리 속도에 관계없이 결과가 같게 하고, 웹캠은 monotonic 시간을 사용한다.
+```text
+artifacts/fall_detection_eval/<run_id>/
+├── run.json
+├── metrics.json
+├── metrics_by_environment.csv
+├── posture_features.csv
+├── errors.csv
+└── overlays/
+```
 
-### 실행기와 출력
+`run.json`에는 모델 경로와 SHA-256, data.yaml 경로, split, device, imgsz, batch, confidence/IoU 설정, 패키지 버전과 시작·종료 시각을 기록한다. `errors.csv`는 false negative, false positive, 낮은 mask IoU 사례를 이미지 단위로 정렬한다. overlay는 전체를 무제한 저장하지 않고 그룹별 최악 사례와 고정 seed 표본을 저장한다.
 
-CLI는 model, source, config, output-event path, target FPS, display 여부를 받는다. 숫자로만 된 source는 카메라 인덱스로 변환하고 그 외는 파일 또는 URL로 OpenCV에 전달한다.
+### 평가 CLI
 
-매 프레임에서 YOLOE tracking 결과를 adapter가 mask 관측으로 변환하고 worker별 판정 결과를 얻는다. 화면에는 mask/bbox, worker ID, 상태, fall score, motion/IoU를 표시한다. `q` 또는 ESC로 정상 종료한다. MP4가 끝나면 재접속하지 않고 종료하며, 웹캠/네트워크 입력 단절은 기존 스트림 정책에 맞춰 안전하게 중단한다.
+```bash
+python -m vision_perception.fall_detection.evaluate \
+  --model /path/to/best.pt \
+  --data /path/to/data.yaml \
+  --split test \
+  --manifest /path/to/test_manifest.csv \
+  --device 0 \
+  --output artifacts/fall_detection_eval
+```
 
-후보 이벤트는 append-only JSONL로 기록한다. 필드는 `event_id`, `worker_id`, `event_type`, `state`, `fall_score`, `immobile_duration_sec`, `source`, `detected_at`이다. `event_type`은 `fall_candidate`이고 문구는 확정 표현을 사용하지 않는다. 파일 쓰기 실패는 화면/콘솔에 오류를 알리되 추론 루프 전체를 비정상 종료하지 않는다.
+`--manifest`는 선택 사항이다. 실행기는 입력 존재 여부와 dataset 계약을 먼저 검사하고, 평가 중간 실패 시 완료된 결과처럼 보이는 `metrics.json`을 만들지 않는다. 성공 시 생성된 run 디렉터리와 핵심 전체 지표를 콘솔에 출력한다.
 
 ## 테스트 전략
 
-단위 테스트는 실제 YOLOE 모델이나 카메라를 요구하지 않는다.
+단위 테스트는 실제 GPU 모델을 요구하지 않는다.
 
-- 세로/가로 합성 직사각형 mask로 aspect ratio와 PCA 방향을 검증한다.
-- 이동한 mask와 동일 mask로 centroid motion과 IoU를 검증한다.
-- 명시적 timestamp를 주입해 전체 상태 전이와 정상 복귀를 검증한다.
-- 움직임 재개가 무움직임 타이머를 초기화하는지 검증한다.
-- 같은 episode에서 후보 이벤트가 한 번만 생성되고 정상 복귀 뒤에는 다시 생성되는지 검증한다.
-- 잘못된 YAML 값과 빈 mask를 명확한 오류/무효 관측으로 처리하는지 검증한다.
-- source 문자열 변환과 MP4 timestamp 선택을 검증한다.
+- 세로/가로 합성 직사각형 mask로 aspect ratio와 PCA orientation을 검증한다.
+- 빈 mask와 너무 작은 mask가 제외 사유와 함께 처리되는지 검증한다.
+- data.yaml의 test split 및 `person` class 계약을 검증한다.
+- manifest의 경로, 중복, 허용 환경·자세 값을 검증한다.
+- 환경 그룹 집계가 전체 집계와 일관되는지 검증한다.
+- 실행 metadata와 metrics JSON/CSV 스키마를 검증한다.
+- 고정 seed overlay 표본과 최악 오류 선택이 재현되는지 검증한다.
 
-수동 smoke test는 두 경로를 제공한다.
+GPU 통합 smoke test는 실제 기존 체크포인트와 데이터셋으로 최소 이미지 수 제한을 걸어 CLI 전체 경로를 확인한 다음 전체 test split 평가를 실행한다. 최종 검증 증거는 명령, 종료 코드, run ID와 생성된 결과 파일이다.
 
-```bash
-python -m vision_perception.fall_detection.cli --source 0 --model <weights.pt>
-python -m vision_perception.fall_detection.cli --source demo.mp4 --model <weights.pt>
-```
-
-테스트자는 LEGO를 세운 상태, 쓰러뜨리는 동작, 쓰러진 채 5초 정지, 다시 세우는 동작을 차례로 보여준다. 화면 상태와 JSONL 이벤트가 성공 조건과 일치하는지 확인하고, 필요하면 YAML만 수정해 임계값을 보정한다.
+초기 POC 통과 기준은 `person` mask Recall 0.90 이상, mask mAP50 0.80 이상, manifest에 20개 이상의 정답 instance가 있는 각 환경 그룹의 mask Recall 0.80 이상이다. 표본 수가 20개 미만인 그룹은 `INSUFFICIENT_SAMPLE`로 표시하며 통과로 계산하지 않는다. 이 값은 실시간 안전 성능의 인증 기준이 아니라, 다음 단계의 영상 수집·tracking 실험으로 넘어가기 위한 개발 gate다.
 
 ## 실패 처리와 안전 경계
 
-- 모델 또는 source를 열 수 없으면 실행 전에 구체적인 경로와 함께 실패한다.
-- mask 또는 tracking ID가 불충분하면 사고를 추정하지 않고 해당 관측을 건너뛴다.
-- 입력 단절 동안 마지막 frame을 반복 사용하거나 무움직임 시간을 누적하지 않는다.
-- 후보 이벤트는 로봇 제어를 직접 호출하지 않는다.
-- 화면과 이벤트 문구는 항상 “이상 자세 및 무움직임 후보”로 표현한다.
+- 모델, data.yaml 또는 test split을 열 수 없으면 구체적인 경로와 함께 평가 전에 실패한다.
+- test split 누락을 validation split으로 자동 대체하지 않는다.
+- 정답 mask가 없는 데이터로 segmentation 성능을 평가했다고 보고하지 않는다.
+- posture manifest가 없으면 낙상 자세 정확도를 계산했다고 보고하지 않는다.
+- 정지 이미지 평가로 tracking·무움직임·실시간 FPS가 검증됐다고 보고하지 않는다.
+- test split으로 선택한 threshold는 탐색값으로 표시하고 독립 test 성능처럼 표현하지 않는다.
 
 ## 후속 통합
 
-MVP 검증 후 `WorkerState.msg`, `FallEvent.msg`를 `trihouse_interfaces`에 추가하고 JSONL writer와 동일한 event interface를 ROS2 publisher로 구현한다. 이어 관제 UI의 관리자 확인 service와 Emergency Manager를 연결한다. Optical flow, 다중 카메라 re-identification, LEGO 전용 fine-tuning, custom keypoint 모델은 측정 결과가 필요성을 입증한 경우에만 추가한다.
+데이터셋 평가가 기준을 충족하면 다음 단계에서 기존 `inference_stream.py`의 capture·stream health 정책을 재사용하고 YOLOE `track(..., persist=True, tracker="bytetrack.yaml")`를 연결한다. 이때 웹캠과 MP4 입력, worker별 상태 머신, centroid displacement와 시간-window mask IoU, 화면 overlay와 JSONL 후보 이벤트를 구현한다.
+
+그 다음 `WorkerState.msg`, `FallEvent.msg`를 `trihouse_interfaces`에 추가하고 같은 event interface를 ROS2 publisher로 구현한다. 관제 UI의 관리자 확인 service와 Emergency Manager 연결은 후보 이벤트 검증 후 진행한다. Optical flow, 다중 카메라 re-identification과 custom keypoint 모델은 측정 결과가 필요성을 입증한 경우에만 추가한다.
