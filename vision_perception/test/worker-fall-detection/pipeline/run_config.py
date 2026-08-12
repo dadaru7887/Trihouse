@@ -14,7 +14,7 @@ class TrainingConfig:
     imgsz: int = 640
     patience: int = 20
     batch: int = -1
-    device: str = "0"
+    device: str = "auto"
     workers: int = 8
     seed: int = 42
     deterministic: bool = True

@@ -77,6 +77,13 @@ vision_perception/test/worker-fall-detection/run_stage.sh evaluate \
 
 학습 파라미터와 seed는 `configs/config.yaml` 한 곳에서 관리한다. 각 seed는 별도 subprocess와 `PYTHONHASHSEED`로 격리된다.
 
+`training.device`는 다음 정책을 지원한다.
+
+- `auto`: CUDA GPU가 있으면 GPU 0, 없으면 CPU
+- `cpu`: GPU가 있어도 CPU 강제
+- `gpu` 또는 `cuda`: GPU 0 필수, CUDA가 없으면 즉시 실패
+- `"0"`, `"1"`, `"cuda:1"`: 해당 GPU 필수, index가 없으면 즉시 실패
+
 ```bash
 cd /home/syw/Trihouse
 vision_perception/test/worker-fall-detection/train_multi_seed.sh \
@@ -131,6 +138,10 @@ venv/yolo_segmentation/bin/python \
 ```
 
 현재 POC는 가장 confidence가 높은 `person=1` segmentation mask의 가로/세로 비율과 centroid 이동량을 사용한다. 낙상 지속 후 무움직임이 임계시간을 넘으면 stdout에 `WORKER_FALL_CONFIRMATION_REQUEST` JSON 후보 이벤트를 한 번 출력한다. 관제 API 전송은 다음 통합 단계에서 이 이벤트에 연결하면 된다.
+
+`configs/realtime.yaml`의 `inference.device`도 동일한 `auto/cpu/gpu/index` 규칙을 사용한다.
+
+CPU에서 orchestration 코드 경로만 점검하려면 config 사본에서 `device: cpu`, `epochs: 1`, `batch: 2`, `workers: 1`, seed 하나만 사용한다. CPU smoke 결과는 성능 비교나 대표 모델 선정 자료로 사용하지 않는다.
 
 ## 7. 결과와 판정
 

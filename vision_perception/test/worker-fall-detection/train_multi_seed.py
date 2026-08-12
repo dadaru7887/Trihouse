@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pipeline.config_loader import load_experiment_config
 from pipeline.dataset_audit import audit_dataset
+from pipeline.device import resolve_device
 from pipeline.environment import capture_environment, validate_training_environment, write_environment
 from pipeline.multi_seed import aggregate_seed_runs, build_seed_command, select_deployment_model, write_experiment_reports
 
@@ -29,8 +30,10 @@ def main() -> None:
         min_fallen_per_eval_split=experiment.training.min_fallen_per_eval_split,
     )
     environment_snapshot = capture_environment(report.fingerprint)
+    device_selection = resolve_device(experiment.training.device)
+    environment_snapshot["device"] = device_selection.to_dict()
     write_environment(root / "environment.json", environment_snapshot)
-    validate_training_environment(environment_snapshot, require_cuda=True)
+    validate_training_environment(environment_snapshot, require_cuda=device_selection.requires_cuda)
     runner = Path(__file__).parent / "train_seed.py"
     failures = []
     for seed in experiment.seeds:

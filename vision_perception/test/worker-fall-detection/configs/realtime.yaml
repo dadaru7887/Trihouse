@@ -1,7 +1,7 @@
 inference:
   confidence: 0.25
   image_size: 640
-  device: "0"
+  device: auto
   person_class_id: 1
 monitor:
   fall_aspect_ratio: 1.2

@@ -17,7 +17,7 @@ training:
   patience: 20
   batch: -1
   workers: 8
-  device: "0"
+  device: auto
   augmentation: true
   deterministic: true
 evaluation:

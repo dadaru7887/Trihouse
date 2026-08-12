@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import platform
 import subprocess
@@ -7,6 +8,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .dataset_audit import audit_dataset
+from .device import resolve_device
 from .environment import capture_environment, validate_training_environment, write_environment
 from .run_config import TrainingConfig
 
@@ -62,10 +64,13 @@ def run_pipeline(config: TrainingConfig, backend: TrainingBackend) -> Path:
             allow_posture_gap=config.allow_posture_gap,
             min_fallen_per_eval_split=config.min_fallen_per_eval_split,
         )
+        device_selection = resolve_device(config.device)
+        config = dataclasses.replace(config, device=device_selection.resolved)
         environment = capture_environment(report.fingerprint)
+        environment["device"] = device_selection.to_dict()
         write_environment(run_dir / "environment.json", environment)
-        if getattr(backend, "requires_cuda", False) and not config.preflight_only:
-            validate_training_environment(environment, require_cuda=True)
+        if not config.preflight_only:
+            validate_training_environment(environment, require_cuda=device_selection.requires_cuda)
         run_metadata = {
             "config": config.to_dict(),
             "dataset_fingerprint": report.fingerprint,

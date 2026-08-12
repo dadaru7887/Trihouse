@@ -139,3 +139,23 @@
 - [ ] Load selected/artifact/direct weights and track `person` masks.
 - [ ] Compute posture/motion features and explicit state transitions.
 - [ ] Emit one JSONL candidate per episode and support webcam/MP4 source semantics.
+
+### Task 10: Automatic CUDA/CPU device resolution
+
+**Files:**
+- Create: `vision_perception/test/worker-fall-detection/pipeline/device.py`
+- Modify: `pipeline/config_loader.py`, `pipeline/orchestrator.py`, `pipeline/yoloe_backend.py`
+- Modify: `configs/config.yaml`, `configs/realtime.yaml`, `realtime.py`, `README.md`
+- Test: `tests/test_device.py`, `tests/test_config_environment.py`, `tests/test_yoloe_backend.py`
+
+**Interfaces:**
+- Produces: `resolve_device(requested: str, torch_module=None) -> DeviceSelection`.
+- `DeviceSelection.resolved` is `"0"` for auto-selected CUDA and `"cpu"` otherwise. `gpu`/`cuda` require GPU 0; numeric and `cuda:N` values require that exact GPU and never fall back.
+- Environment validation consumes the resolved selection and gates CUDA 12.8/`sm_120` only when the selected GPU is RTX 5080.
+
+- [ ] Write failing tests for auto CUDA, auto CPU, explicit device preservation and CPU environment acceptance.
+- [ ] Run focused tests and confirm failure due to the missing resolver/old CUDA requirement.
+- [ ] Implement the resolver and pass its resolved value to training/evaluation/realtime inference.
+- [ ] Record requested/resolved device and reason in `environment.json` and run metadata.
+- [ ] Change both YAML defaults to `auto` and document CPU smoke commands.
+- [ ] Run the complete suite in `venv/yolo_segmentation`, shell syntax checks and CPU preflight/config smoke checks.

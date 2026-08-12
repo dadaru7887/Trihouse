@@ -221,3 +221,9 @@ AI는 비상을 확정하지 않는다. 관제 요청 payload는 worker ID, zone
 ## 11. 기존 Weight 실시간 검증
 
 실시간 runner는 `selected_model.json`, 단일 run의 `artifact_manifest.json` 또는 직접 지정한 `best.pt`를 읽는다. 웹캠과 MP4를 동일한 source interface로 처리하고 YOLOE `track(..., persist=True, tracker="bytetrack.yaml")` 결과에서 person mask만 취한다. mask 자세 feature와 시간-window 움직임으로 상태를 관리하고 `EMERGENCY_CANDIDATE`를 JSONL로 남긴다. 이 이벤트는 관제 확인 요청 후보이며 로봇 제어를 직접 실행하지 않는다.
+
+## 12. 자동 Device 선택과 CPU 검증
+
+학습과 실시간 추론의 기본 device는 `auto`다. 공통 resolver는 `torch.cuda.is_available()`가 참이면 CUDA GPU `0`, 거짓이면 `cpu`를 선택한다. `cpu`는 CPU를 강제하고, `gpu` 또는 `cuda`는 GPU 0을 강제한다. `0`, `1`, `cuda:0` 같은 명시는 해당 GPU를 강제한다. GPU 강제 정책에서 CUDA가 없거나 index가 범위를 벗어나면 CPU로 fallback하지 않고 실행 전에 실패한다. resolved device와 선택 근거는 실행 환경 기록에 남긴다.
+
+CPU에서는 dataset preflight, 단위 테스트, 기존 weight 추론과 축소된 1-epoch smoke 학습/평가를 허용한다. CUDA 부재 자체는 실행 실패 조건이 아니다. RTX 5080이 실제 선택된 경우에만 CUDA runtime 12.8 이상과 `sm_120` 지원을 필수 gate로 적용한다. CPU smoke 결과는 코드 경로 검증이며 최종 학습 성능 자료로 사용하지 않는다.

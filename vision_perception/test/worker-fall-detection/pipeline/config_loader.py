@@ -84,7 +84,7 @@ def load_experiment_config(path: Path | str, project_root: Path | str | None = N
         model=str(model.get("weights", "26s")), data=data, run_root=run_base / name,
         augmentation=bool(training.get("augmentation", True)), epochs=int(training.get("epochs", 200)),
         imgsz=int(model.get("image_size", 640)), patience=int(training.get("patience", 20)),
-        batch=int(training.get("batch", -1)), device=str(training.get("device", "0")),
+        batch=int(training.get("batch", -1)), device=str(training.get("device", "auto")),
         workers=int(training.get("workers", 8)), seed=seeds[0],
         deterministic=bool(training.get("deterministic", True)),
         posture_manifest=_resolve(root, dataset.get("posture_manifest")),

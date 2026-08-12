@@ -8,6 +8,7 @@ import cv2
 import yaml
 
 from pipeline.fall_monitor import FallMonitor, MonitorConfig, mask_geometry
+from pipeline.device import resolve_device
 
 
 def resolve_weights(value: Path) -> Path:
@@ -36,6 +37,8 @@ def main() -> None:
     model = YOLOE(str(resolve_weights(args.weights)))
     monitor = FallMonitor(MonitorConfig(**settings["monitor"]))
     inference = settings["inference"]
+    device = resolve_device(str(inference.get("device", "auto")))
+    print(json.dumps({"device": device.to_dict()}, ensure_ascii=False), flush=True)
     capture = cv2.VideoCapture(parse_source(args.source))
     if not capture.isOpened():
         raise RuntimeError(f"영상 source를 열 수 없습니다: {args.source}")
@@ -45,7 +48,7 @@ def main() -> None:
             ok, frame = capture.read()
             if not ok:
                 break
-            result = model.predict(frame, conf=inference["confidence"], imgsz=inference["image_size"], device=inference["device"], verbose=False)[0]
+            result = model.predict(frame, conf=inference["confidence"], imgsz=inference["image_size"], device=device.resolved, verbose=False)[0]
             state = "NO_DETECTION"
             if result.masks is not None and len(result.masks.data):
                 classes = result.boxes.cls.detach().cpu().numpy().astype(int)
