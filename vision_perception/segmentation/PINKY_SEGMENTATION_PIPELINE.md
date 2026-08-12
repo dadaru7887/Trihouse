@@ -88,6 +88,9 @@ conda activate unified_env_ver2
 
 ## 4. 학습 (`train.py` / `train.sh`)
 
+LEGO `person` 데이터셋의 무결성 검사, validation gate, test 평가와 재현 가능한 artifact까지 한 번에 관리하려면
+[`worker-fall-detection/README.md`](../test/worker-fall-detection/README.md)의 파이프라인을 사용한다. 기존 `train.py`와 `train.sh`는 단독 학습 진입점으로 유지되며 새 파이프라인도 같은 S1~S5 augmentation과 YOLOE trainer를 재사용한다.
+
 호스트에서 바로 실행하면 자동으로 컨테이너 안으로 들어가서 실행됩니다(`/.dockerenv`
 존재 여부로 호스트/컨테이너를 자동 판별함). `docker exec` 따로 안 해도 됩니다.
 
@@ -140,4 +143,3 @@ cd /home/user/Trihouse_segmentation/Trihouse
   `AttributeError`가 남 (학습 때 저장된 augmentation 설정이 pickle로 같이 저장돼서) —
   `inference_stream.py` 상단에 더미 함수로 이미 처리해뒀음. 이 체크포인트를 다른
   스크립트에서 불러올 땐 동일하게 처리 필요.
-
