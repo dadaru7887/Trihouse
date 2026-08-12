@@ -55,7 +55,7 @@ def test_backend_passes_resolved_training_arguments_and_returns_best(tmp_path: P
     assert args == {
         "data": str((tmp_path / "data.yaml").resolve()),
         "epochs": 3, "imgsz": 320, "patience": 2, "batch": 4,
-        "device": "0", "workers": 1, "seed": 7,
+        "device": "0", "workers": 1, "seed": 7, "deterministic": True,
         "project": str(run_dir), "name": "train", "exist_ok": True,
         "trainer": "trainer-sentinel",
     }

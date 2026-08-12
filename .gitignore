@@ -9,6 +9,7 @@ tools/
 # folders
 references/
 docs/superpowers/
+dataset/
 
 # Local documentation archive
 docs/archive/
@@ -35,6 +36,7 @@ docs/agent_plans/
 *.db-wal
 *.log
 .venv/
+venv/
 .pytest_cache/
 .coverage
 htmlcov/

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .dataset_audit import audit_dataset
+from .environment import capture_environment, validate_training_environment, write_environment
 from .run_config import TrainingConfig
 
 
@@ -61,11 +62,16 @@ def run_pipeline(config: TrainingConfig, backend: TrainingBackend) -> Path:
             allow_posture_gap=config.allow_posture_gap,
             min_fallen_per_eval_split=config.min_fallen_per_eval_split,
         )
+        environment = capture_environment(report.fingerprint)
+        write_environment(run_dir / "environment.json", environment)
+        if getattr(backend, "requires_cuda", False) and not config.preflight_only:
+            validate_training_environment(environment, require_cuda=True)
         run_metadata = {
             "config": config.to_dict(),
             "dataset_fingerprint": report.fingerprint,
             "git": _git_metadata(),
             "runtime": {"python": sys.version.split()[0], "platform": platform.platform()},
+            "environment": "environment.json",
             "started_at": started,
         }
         _write_json(run_dir / "config/run.json", run_metadata)
@@ -87,7 +93,11 @@ def run_pipeline(config: TrainingConfig, backend: TrainingBackend) -> Path:
         validation = backend.evaluate(weights, "val", config, run_dir)
         _write_json(run_dir / "evaluation/validation_metrics.json", validation)
         stage = "VALIDATION_GATE"
-        if validation.get("mask_recall", -1.0) < config.min_mask_recall or validation.get("mask_map50", -1.0) < config.min_mask_map50:
+        validation_gate_passed = not (
+            validation.get("mask_recall", -1.0) < config.min_mask_recall
+            or validation.get("mask_map50", -1.0) < config.min_mask_map50
+        )
+        if not validation_gate_passed and not config.test_on_validation_gate_failure:
             raise PipelineError(
                 "validation gate 실패: "
                 f"mask_recall={validation.get('mask_recall')}, mask_map50={validation.get('mask_map50')}"
@@ -105,10 +115,12 @@ def run_pipeline(config: TrainingConfig, backend: TrainingBackend) -> Path:
                 "validation": "evaluation/validation_metrics.json",
                 "test": "evaluation/test_metrics.json",
             },
+            "validation_gate_passed": validation_gate_passed,
         }
         _write_json(run_dir / "artifact_manifest.json", manifest)
         _write_json(run_dir / "status.json", {
             "state": "COMPLETED", "stage": "COMPLETE", "started_at": started,
+            "validation_gate_passed": validation_gate_passed,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         })
         return run_dir

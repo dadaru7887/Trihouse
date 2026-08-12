@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python 3.10+, PyYAML, OpenCV, NumPy, pytest, Ultralytics YOLOE, Bash, Docker/conda wrapper already used by `vision_perception/segmentation/train.sh`.
 
+> Extension approved 2026-08-12: use Python 3.12 and PyTorch cu128 in `venv/yolo_segmentation`; add strict YAML config, environment snapshot, subprocess-isolated multi-seed aggregation/selection, and selected-weight realtime webcam/MP4 monitoring. Do not create Docker/Compose in this cycle.
+
 ## Global Constraints
 
 - POC detects LEGO only; dataset class `person` is class ID 1.
@@ -107,3 +109,33 @@
 - [ ] Run `bash -n` on all shell files and `python3 -m compileall` on new Python code.
 - [ ] Run real-dataset preflight and inspect its JSON/CSV outputs.
 - [ ] Review all diffs for unrelated changes and verify the original dataset is unchanged.
+
+### Task 6: Strict YAML configuration and environment snapshot
+
+**Files:** `configs/config.yaml`, `pipeline/config_loader.py`, `pipeline/environment.py`, corresponding tests.
+
+- [ ] Test unknown-key/type rejection, path resolution and resolved config.
+- [ ] Implement Python/GPU/driver/CUDA/package/dataset/Git capture and RTX 5080 `sm_120` gate.
+
+### Task 7: Python 3.12 cu128 venv workflow
+
+**Files:** `requirements/*.txt`, `setup_venv.sh`, updated shell runners.
+
+- [ ] Make `venv/yolo_segmentation/bin/python` the only shell-runner interpreter.
+- [ ] Install PyTorch from the cu128 index before origin/env-compatible YOLO dependencies.
+
+### Task 8: Multi-seed aggregation and deployment selection
+
+**Files:** `train_seed.py`, `train_multi_seed.py`, `pipeline/multi_seed.py`, tests.
+
+- [ ] Spawn each seed with `PYTHONHASHSEED`.
+- [ ] Report every successful seed test metric as mean±sample-std/min/max.
+- [ ] Select deployment weights using validation only and write `selected_model.json`.
+
+### Task 9: Existing-weight realtime webcam/MP4 monitor
+
+**Files:** `realtime.py`, `runtime/*.py`, `configs/realtime.yaml`, tests.
+
+- [ ] Load selected/artifact/direct weights and track `person` masks.
+- [ ] Compute posture/motion features and explicit state transitions.
+- [ ] Emit one JSONL candidate per episode and support webcam/MP4 source semantics.

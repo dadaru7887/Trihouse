@@ -4,7 +4,18 @@ LEGO를 `person`으로 segmentation하는 YOLOE 모델을 학습·평가하는 P
 
 현재 데이터셋은 `/home/syw/Trihouse/dataset/raw_examples/data.yaml`이며 `obstacle=0`, `person=1`이다. 감사 결과 train에는 수평 mask 후보가 있지만 valid/test에는 명백한 fallen 후보가 없다. 따라서 지금 실행은 `--allow-posture-gap`을 붙인 **LEGO 검출·segmentation 학습**이고, 낙상 성능 검증 완료를 의미하지 않는다.
 
-## 1. 로컬에서 preflight만 실행
+## 1. Python 3.12 / CUDA 12.8 환경
+
+Docker는 아직 만들지 않는다. 아래 스크립트가 저장소의 `venv/yolo_segmentation`에 Python 3.12 venv와 PyTorch cu128, Ultralytics를 설치한다.
+
+```bash
+cd /home/syw/Trihouse/vision_perception/test/worker-fall-detection
+./setup_venv.sh
+```
+
+현재 검증된 설치값은 Python 3.12.3, PyTorch 2.11.0+cu128, CUDA runtime 12.8이다. 실제 학습 시작 시 `environment.json`에 GPU 모델, driver, CUDA runtime, PyTorch/Ultralytics, dataset fingerprint, Git SHA/dirty 여부가 기록된다. RTX 5080에서는 `sm_120` 미지원 또는 CUDA runtime 12.8 미만이면 학습 전에 실패한다.
+
+## 2. 로컬에서 preflight만 실행
 
 Ultralytics나 GPU 없이 실행할 수 있다.
 
@@ -33,9 +44,9 @@ valid/images/example.jpg,fallen,low_light
 test/images/example.jpg,fallen,normal_light
 ```
 
-## 2. 단계별 수동 실행
+## 3. 단계별 수동 실행
 
-호스트에서 `trihouse_train` 컨테이너를 실행한 뒤 사용한다. 컨테이너의 저장소 위치가 기본값과 다르면 `TRIHOUSE_CONTAINER_ROOT`를 지정한다.
+모든 shell wrapper는 `venv/yolo_segmentation`을 사용한다.
 
 ```bash
 cd /home/syw/Trihouse
@@ -62,11 +73,23 @@ vision_perception/test/worker-fall-detection/run_stage.sh evaluate \
 
 수동 단계는 디버깅용이다. validation gate와 최종 artifact manifest까지 자동 적용하려면 일괄 실행을 사용한다.
 
-## 3. 한 번에 전체 실행
+## 4. config 기반 multi-seed 전체 실행 (권장)
+
+학습 파라미터와 seed는 `configs/config.yaml` 한 곳에서 관리한다. 각 seed는 별도 subprocess와 `PYTHONHASHSEED`로 격리된다.
+
+```bash
+cd /home/syw/Trihouse
+vision_perception/test/worker-fall-detection/train_multi_seed.sh \
+  --config vision_perception/test/worker-fall-detection/configs/config.yaml
+```
+
+모든 성공 seed의 test 결과는 `test_summary.md/csv`에 평균 ± 표본표준편차와 min/max로 기록한다. 대표 모델은 validation `mask_map50_95`, validation `mask_recall`, 낮은 seed 순으로만 고르며 validation gate 실패 모델은 제외한다. test 지표는 선택에 쓰지 않고 근거와 weight 경로를 `selected_model.json`에 남긴다.
+
+## 5. 단일 seed 전체 실행
 
 ### Python 직접 실행
 
-컨테이너의 `unified_env_ver2` 환경에서:
+venv에서:
 
 ```bash
 python3 vision_perception/test/worker-fall-detection/run_pipeline.py \
@@ -95,7 +118,21 @@ vision_perception/test/worker-fall-detection/run_pipeline.sh \
 
 1 epoch orchestration smoke test는 `--epochs 1 --patience 0 --batch 2 --workers 1`로 실행한다. 성능 gate 때문에 중단될 수 있으며, 이는 smoke run이 성능을 만족하지 못했다는 정상적인 gate 동작이다.
 
-## 4. 결과와 판정
+## 6. 기존 weight 실시간 영상 테스트
+
+카메라 `0`, MP4 경로, RTSP URL을 `--source`로 받을 수 있다. `--weights`에는 `best.pt` 또는 multi-seed 결과의 `selected_model.json`을 준다.
+
+```bash
+cd /home/syw/Trihouse
+venv/yolo_segmentation/bin/python \
+  vision_perception/test/worker-fall-detection/realtime.py \
+  --weights runs/lego_worker/lego_yoloe_multiseed/<실험시각>/selected_model.json \
+  --source 0
+```
+
+현재 POC는 가장 confidence가 높은 `person=1` segmentation mask의 가로/세로 비율과 centroid 이동량을 사용한다. 낙상 지속 후 무움직임이 임계시간을 넘으면 stdout에 `WORKER_FALL_CONFIRMATION_REQUEST` JSON 후보 이벤트를 한 번 출력한다. 관제 API 전송은 다음 통합 단계에서 이 이벤트에 연결하면 된다.
+
+## 7. 결과와 판정
 
 일괄 run에는 다음 핵심 파일이 생긴다.
 
@@ -105,9 +142,9 @@ vision_perception/test/worker-fall-detection/run_pipeline.sh \
 - `evaluation/test_metrics.json`
 - `artifact_manifest.json`: 모델, class, dataset fingerprint, 지표 연결 계약
 
-Validation gate 기본값은 person mask Recall 0.90, mask mAP50 0.80이다. gate를 통과해야 test 평가와 `artifact_manifest.json`이 생성된다.
+Validation gate 기본값은 person mask Recall 0.90, mask mAP50 0.80이다. multi-seed 설정은 통계 보고를 위해 gate 실패 seed도 test하지만 대표 모델 후보에서는 제외한다.
 
-## 5. 자동 테스트
+## 8. 자동 테스트
 
 ```bash
 cd /home/syw/Trihouse
@@ -115,4 +152,4 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q \
   vision_perception/test/worker-fall-detection/tests
 ```
 
-다음 단계에서는 `artifact_manifest.json`의 `best.pt`를 기존 실시간 입력에 연결하고 ByteTrack, mask 자세 feature, 시간-window 무움직임과 `EMERGENCY_CANDIDATE` 관제 확인 요청을 구현한다.
+현재 실시간 코드는 LEGO 한 개 POC이다. 다중 LEGO tracking, 카메라별 calibration, 관제 API의 인증·재시도·중복 제거는 후속 범위다.

@@ -1,0 +1,7 @@
+numpy==1.26.0
+opencv-python>=4.8,<5
+PyYAML>=6,<7
+pillow>=10,<12
+psutil>=5.9,<7
+polars>=0.20
+nvidia-ml-py>=12

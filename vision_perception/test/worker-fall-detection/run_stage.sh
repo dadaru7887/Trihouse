@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 단계별 수동 실행용 컨테이너/conda wrapper.
+# 단계별 수동 실행용 Python 3.12 venv wrapper.
 set -euo pipefail
 
 if [ "$#" -lt 1 ]; then
@@ -17,19 +17,7 @@ case "$STAGE" in
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ ! -f /.dockerenv ]; then
-  CONTAINER="${TRIHOUSE_TRAIN_CONTAINER:-trihouse_train}"
-  CONTAINER_ROOT="${TRIHOUSE_CONTAINER_ROOT:-/workspace/Trihouse_segmentation/Trihouse}"
-  if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
-    echo "[에러] '$CONTAINER' 컨테이너가 실행 중이 아닙니다." >&2
-    exit 1
-  fi
-  exec docker exec -i -w "$CONTAINER_ROOT" "$CONTAINER" \
-    ./vision_perception/test/worker-fall-detection/run_stage.sh "$STAGE" "$@"
-fi
-
-source /opt/conda/etc/profile.d/conda.sh
-set +u
-conda activate unified_env_ver2
-set -u
-exec python3 "$SCRIPT_DIR/$SCRIPT" "$@"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+PYTHON="$REPO_ROOT/venv/yolo_segmentation/bin/python"
+[ -x "$PYTHON" ] || { echo "[오류] 먼저 $SCRIPT_DIR/setup_venv.sh 를 실행하세요." >&2; exit 1; }
+exec "$PYTHON" "$SCRIPT_DIR/$SCRIPT" "$@"

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .run_config import TrainingConfig
+from .reproducibility import seed_everything
 
 
 _MODEL_SHORTHAND = re.compile(r"^(11|26)([nsmlx])$")
@@ -60,6 +61,7 @@ def _default_components() -> tuple[Callable[[str], Any], Any, Callable[[bool], l
 
 
 class YOLOEBackend:
+    requires_cuda = True
     def __init__(
         self,
         model_factory: Callable[[str], Any] | None = None,
@@ -79,6 +81,7 @@ class YOLOEBackend:
         self.augmentation_factory = self.augmentation_factory or default_augmentations
 
     def train(self, config: TrainingConfig, run_dir: Path) -> Path:
+        seed_everything(config.seed, config.deterministic)
         self._ensure_components()
         assert self.model_factory is not None and self.augmentation_factory is not None
         model = self.model_factory(resolve_model(config.model))
@@ -91,7 +94,8 @@ class YOLOEBackend:
         kwargs = {
             "data": str(config.data), "epochs": config.epochs, "imgsz": config.imgsz,
             "patience": config.patience, "batch": config.batch, "device": config.device,
-            "workers": config.workers, "seed": config.seed, "project": str(run_dir),
+            "workers": config.workers, "seed": config.seed, "deterministic": config.deterministic,
+            "project": str(run_dir),
             "name": "train", "exist_ok": True, "trainer": self.trainer_class,
         }
         result = model.train(**kwargs)

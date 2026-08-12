@@ -17,12 +17,14 @@ class TrainingConfig:
     device: str = "0"
     workers: int = 8
     seed: int = 42
+    deterministic: bool = True
     posture_manifest: Path | None = None
     allow_posture_gap: bool = False
     preflight_only: bool = False
     min_fallen_per_eval_split: int = 10
     min_mask_recall: float = 0.90
     min_mask_map50: float = 0.80
+    test_on_validation_gate_failure: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "data", Path(self.data).expanduser().resolve())

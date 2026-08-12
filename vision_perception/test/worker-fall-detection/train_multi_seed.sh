@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# LEGO worker YOLOE preflight -> train -> val gate -> test 전체 실행.
 set -euo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 PYTHON="$REPO_ROOT/venv/yolo_segmentation/bin/python"
 [ -x "$PYTHON" ] || { echo "[오류] 먼저 $SCRIPT_DIR/setup_venv.sh 를 실행하세요." >&2; exit 1; }
-exec "$PYTHON" "$SCRIPT_DIR/run_pipeline.py" "$@"
+exec "$PYTHON" "$SCRIPT_DIR/train_multi_seed.py" "$@"

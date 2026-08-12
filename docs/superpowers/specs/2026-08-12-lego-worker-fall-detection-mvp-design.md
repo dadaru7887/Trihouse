@@ -203,3 +203,21 @@ AI는 비상을 확정하지 않는다. 관제 요청 payload는 worker ID, zone
 - 누운 LEGO가 없는 test 결과로 낙상 성능이 검증됐다고 보고하지 않는다.
 - 이번 사이클에서는 ROS2 메시지, 관제 UI와 로봇 정지 동작을 구현하지 않는다.
 - pose estimation, optical flow와 별도 시계열 신경망은 초기 POC 범위에서 제외한다.
+
+## 9. Python 3.12 / RTX 5080 실행 환경
+
+`origin/env:backend/Dockerfile`의 최종 유효 상태를 기준으로 한다. 해당 Dockerfile은 처음에 CUDA 12.4/PyTorch 2.5를 설치하지만 RTX 5080 `sm_120` 미지원 때문에 마지막에 cu128 PyTorch로 교체한다. 따라서 로컬 전용 환경은 `/home/syw/Trihouse/venv/yolo_segmentation`, Python 3.12, PyTorch cu128로 구성한다. Docker/Compose는 이번 단계에서 만들지 않는다.
+
+학습 시작 전 `torch.cuda.is_available()`, GPU 이름, compute capability, `torch.version.cuda`, `torch.cuda.get_arch_list()`를 확인한다. RTX 5080인데 `sm_120`이 없거나 PyTorch CUDA runtime이 12.8 미만이면 학습을 시작하지 않는다.
+
+## 10. Config와 Multi-seed
+
+`configs/config.yaml`을 단일 사용자 진입점으로 사용한다. strict loader는 알 수 없는 key와 잘못된 타입을 거부하고 최종 설정을 각 run에 저장한다. CLI는 config 경로와 제한된 `--set key=value` override만 받는다.
+
+각 seed는 `PYTHONHASHSEED`가 적용된 별도 subprocess로 실행한다. 모든 학습 성공 seed의 test 지표를 mean, sample standard deviation, min, max로 보고한다. 대표 배포 모델은 validation `mask_map50_95`, validation `mask_recall`, 낮은 seed 순으로만 선택한다. test 지표는 선택에 사용하지 않으며 `selected_model.json`에 이 사실과 선택 근거를 기록한다.
+
+실험 시작 시 `environment.json`에 GPU 모델, driver, driver CUDA capability, PyTorch CUDA runtime, PyTorch/Ultralytics 버전, dataset fingerprint와 Git SHA/dirty 상태를 기록한다.
+
+## 11. 기존 Weight 실시간 검증
+
+실시간 runner는 `selected_model.json`, 단일 run의 `artifact_manifest.json` 또는 직접 지정한 `best.pt`를 읽는다. 웹캠과 MP4를 동일한 source interface로 처리하고 YOLOE `track(..., persist=True, tracker="bytetrack.yaml")` 결과에서 person mask만 취한다. mask 자세 feature와 시간-window 움직임으로 상태를 관리하고 `EMERGENCY_CANDIDATE`를 JSONL로 남긴다. 이 이벤트는 관제 확인 요청 후보이며 로봇 제어를 직접 실행하지 않는다.
