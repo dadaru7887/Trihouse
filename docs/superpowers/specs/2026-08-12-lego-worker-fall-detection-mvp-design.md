@@ -1,130 +1,205 @@
-# LEGO Worker Fall Detection MVP Design
+# LEGO Worker Fall Detection Pipeline Design
 
-## 목적과 범위
+## 1. 목표와 단계
 
-최종 목표는 카메라 영상을 실시간으로 받아 LEGO 작업자의 비정상 수평 자세와 무움직임을 감지하는 것이다. LEGO 작업자는 기존 YOLOE-Seg 모델에서 `person`으로 인식하도록 이미 학습됐으며, 학습에는 저조도, motion blur, 색 변화, 결로, glare, 성에와 그 복합 환경을 생성하는 augmentation이 적용됐다.
+POC의 대상은 LEGO 작업자다. 기존 YOLO segmentation 데이터셋에서 LEGO는 `person` 클래스로 polygon 라벨링되어 있다. 최종 시스템은 실시간 카메라 영상에서 LEGO를 segmentation·추적하고, 비정상 수평 자세와 장시간 무움직임이 함께 확인되면 관제 시스템에 관리자 확인 요청 후보를 보낸다.
 
-이번 단계에서는 실시간 기능을 바로 붙이기 전에 **기존 데이터셋의 고정된 test split으로 해당 학습 모델의 성능을 재현 가능하게 평가**한다. 이 결과로 다음 실시간 구현 단계에서 사용할 confidence 기준, 자세 feature 분포와 초기 threshold를 정한다. 시스템은 모든 단계에서 사고를 확정하지 않고 향후 `EMERGENCY_CANDIDATE` 후보 이벤트만 생성한다.
-
-이번 단계의 성공 조건은 다음과 같다.
-
-- `--model`, `--data`, `--split test`를 받는 평가 CLI로 기존 YOLOE 체크포인트를 평가한다.
-- Ultralytics의 detection/segmentation 지표인 box·mask Precision, Recall, mAP50, mAP50-95를 JSON과 CSV로 저장한다.
-- test split 전체 결과뿐 아니라 데이터셋에 정의된 환경 그룹별 결과를 분리해 저장한다.
-- 정답 mask와 예측 mask를 비교하는 표본 overlay를 저장해 수치와 실제 품질을 함께 검토할 수 있다.
-- 자세 메타데이터가 제공된 경우 standing/fallen 그룹별 aspect ratio, PCA orientation, centroid feature 분포와 후보 threshold를 계산한다.
-- 잘못 검출된 사례와 미검출 사례를 confidence 순으로 저장하여 다음 개선 대상을 확인할 수 있다.
-- 평가 명령, 모델·데이터 경로, 실행 시각, Ultralytics 버전과 결과 경로가 실행 기록에 남는다.
-
-웹캠, MP4, ByteTrack, 무움직임 상태 머신과 JSONL 후보 이벤트는 **다음 실시간 구현 단계**의 범위다. 정지 이미지 test split만으로 tracking과 시간 기반 무움직임 성능을 입증했다고 주장하지 않는다.
-
-## 선택한 접근
-
-평가는 기존 학습 코드와 동일한 Ultralytics YOLOE 런타임에서 `model.val(data=..., split="test")`을 호출한다. Ultralytics가 계산한 표준 box·mask 지표를 원본 결과로 보존하고, 별도 evaluator가 이미지별 예측 결과와 데이터셋 메타데이터를 결합해 환경 그룹 및 자세 그룹 지표를 만든다.
-
-평가 코드는 이후 실시간 판정에서도 재사용할 `person` mask feature 추출기를 함께 만든다. 이 단계에서는 정답/예측 mask에서 정적인 자세 feature만 계산하고, tracking 또는 immobility를 흉내 내지 않는다. OpenCV 색상/윤곽 검출기나 새 학습 파이프라인도 추가하지 않는다.
-
-## 구성 요소와 책임
-
-### 평가 입력 계약
-
-필수 입력은 학습된 `best.pt`와 기존 데이터셋의 `data.yaml`이다. `data.yaml`에는 평가에 사용할 `test` split과 LEGO 작업자에 대응하는 `person` class가 있어야 한다. test split이 없으면 validation split으로 묵시적으로 대체하지 않고 명확히 실패한다. 학습에 사용한 train/val 이미지를 test 결과에 섞지 않는다.
-
-환경별 평가를 위해 선택적인 manifest CSV를 받는다.
-
-```csv
-image,environment,posture
-images/test/ambient_001.jpg,normal_light,standing
-images/test/dark_001.jpg,low_light,standing
-images/test/frost_001.jpg,frost,fallen
-```
-
-- `image`: data.yaml 기준 이미지 상대 경로
-- `environment`: `normal_light`, `low_light`, `motion_blur`, `color_shift`, `condensation`, `glare`, `frost`, `combined` 중 하나
-- `posture`: `standing`, `fallen`, `unknown` 중 하나
-
-manifest가 없으면 표준 YOLO 지표만 산출한다. 파일명에서 환경이나 자세를 추측하지 않는다. manifest에 test split 밖의 이미지, 중복 이미지, 알 수 없는 그룹값이 있으면 평가 전에 실패한다.
-
-### 정적 자세 Feature 추출
-
-한 worker mask에서 다음 값을 계산한다.
-
-- bbox 폭/높이 비율
-- mask pixel PCA 주축의 수평 기준 각도(0~90도)
-- mask 중심점의 정규화 좌표
-- 영상 하단에서 중심점까지의 정규화 거리
-- mask area와 이미지 대비 면적 비율
-
-mask가 비어 있거나 최소 면적보다 작으면 feature 계산 대상에서 제외하고 그 사유를 기록한다. 바닥선 calibration이 없는 정적 데이터셋 평가에서는 centroid-height를 낙상 판정 점수에 바로 사용하지 않고 분포만 기록한다.
-
-posture manifest가 있는 경우 standing과 fallen의 feature 분포를 비교한다. 단일 고정 threshold는 test split을 보고 최적화하지 않는다. 가능하면 별도 calibration/validation split에서 후보 threshold를 구하고 test split에는 고정 적용한다. 별도 split이 없다면 test에서 계산한 값은 `exploratory_threshold`로 명시하며 최종 성능으로 보고하지 않는다.
-
-### 평가 지표와 결과물
-
-표준 결과는 다음을 포함한다.
-
-- box: Precision, Recall, mAP50, mAP50-95
-- mask: Precision, Recall, mAP50, mAP50-95
-- 이미지 수, 정답 instance 수, 예측 instance 수
-- confidence threshold와 IoU threshold
-- 전체 및 환경 그룹별 지표
-- posture metadata가 있을 때 standing/fallen feature 요약 통계와 exploratory threshold
-
-출력 디렉터리 구조는 다음과 같다.
+전체 파이프라인은 다음 네 단계로 나눈다.
 
 ```text
-artifacts/fall_detection_eval/<run_id>/
-├── run.json
-├── metrics.json
-├── metrics_by_environment.csv
-├── posture_features.csv
-├── errors.csv
-└── overlays/
+1. YOLOE LEGO person segmentation 학습·평가
+2. mask 기반 standing/fallen 자세 판정
+3. ByteTrack + 시간-window 무움직임 판정
+4. EMERGENCY_CANDIDATE 관제 확인 요청
 ```
 
-`run.json`에는 모델 경로와 SHA-256, data.yaml 경로, split, device, imgsz, batch, confidence/IoU 설정, 패키지 버전과 시작·종료 시각을 기록한다. `errors.csv`는 false negative, false positive, 낮은 mask IoU 사례를 이미지 단위로 정렬한다. overlay는 전체를 무제한 저장하지 않고 그룹별 최악 사례와 고정 seed 표본을 저장한다.
+이번 구현 사이클의 필수 범위는 **1단계 학습·평가 파이프라인**이다. 2~4단계는 학습 산출물과 인터페이스를 소비하는 후속 구현으로 설계 계약을 남긴다.
 
-### 평가 CLI
+## 2. 선택한 접근
+
+YOLOE는 LEGO의 자세 상태를 직접 분류하지 않고 `person` segmentation mask를 생성한다. standing/fallen은 mask의 aspect ratio, PCA orientation과 바닥 기준 centroid를 조합해 별도 규칙 모듈이 판단한다. 무움직임은 동일 track의 centroid displacement와 mask IoU를 시간 window로 평가한다.
+
+이 경계는 다음 장점이 있다.
+
+- 기존 `person` polygon 라벨과 `train.py`를 재사용한다.
+- 자세 클래스로 전체 데이터셋을 다시 라벨링하지 않는다.
+- 한 worker가 넘어져도 class가 바뀌지 않아 tracking ID 유지에 유리하다.
+- 자세·시간 threshold를 모델 재학습 없이 현장 영상으로 보정할 수 있다.
+
+## 3. 현재 데이터셋과 발견된 제약
+
+데이터셋 루트는 `/home/syw/Trihouse/dataset/raw_examples`이며 구조는 다음과 같다.
+
+```text
+dataset/raw_examples/
+├── data.yaml
+├── train/{images,labels}
+├── valid/{images,labels}
+└── test/{images,labels}
+```
+
+`data.yaml`은 `obstacle=0`, `person=1`의 두 클래스를 정의한다. 현재 감사 결과는 다음과 같다.
+
+| Split | 이미지 | person instance | bbox aspect ratio ≥ 1.2 |
+|---|---:|---:|---:|
+| train | 233 | 129 | 17 |
+| valid | 51 | 28 | 0 |
+| test | 50 | 26 | 0 |
+
+aspect ratio만으로 자세를 확정할 수는 없지만, valid/test에 명백히 수평인 mask가 없다는 것은 누운 LEGO segmentation 성능을 독립적으로 검증할 표본이 부족하다는 강한 신호다. 학습 파이프라인은 이 문제를 숨기지 않고 보고해야 한다.
+
+원본 split과 파일은 자동으로 이동하거나 덮어쓰지 않는다. 자세 메타데이터가 없으므로 파일명이나 aspect ratio만 사용해 정답 posture를 자동 확정하지도 않는다. 대신 dataset audit에서 자세 후보를 추출한 contact sheet와 CSV를 만들고, 사용자가 `standing`, `fallen`, `unknown`을 확인한 manifest를 입력으로 받는다.
+
+## 4. 학습 파이프라인 구성
+
+### 4.1 Dataset Preflight
+
+학습 전에 다음을 검사한다.
+
+- `data.yaml`에 train, val, test 경로와 `person` class가 존재한다.
+- 각 split 이미지가 읽히며 대응 label 파일이 존재한다.
+- polygon 행은 class ID 뒤에 최소 3개 좌표쌍이 있고 모든 좌표가 0~1 범위다.
+- label class ID가 `names` 범위를 벗어나지 않는다.
+- 동일 파일 또는 동일 이미지 content hash가 split 사이에 중복되지 않는다.
+- 빈 label 이미지는 허용하되 개수와 비율을 보고한다.
+- split별 이미지, instance, class, mask bbox aspect ratio 분포를 계산한다.
+- posture manifest가 있으면 경로·중복·허용값과 split별 standing/fallen 분포를 검사한다.
+
+preflight는 `dataset_report.json`, `instances.csv`, `posture_candidates.csv`, contact sheet를 결과 디렉터리에 저장한다. 구조나 polygon이 잘못된 경우 학습을 중단한다. posture 표본 부족은 기본적으로 명확한 `NOT_EVALUABLE` gate가 되며 `--allow-posture-gap`을 명시한 detection-only 실험에서만 학습을 허용한다.
+
+낙상 파이프라인 진입을 위한 권장 최소 조건은 valid와 test 각각 확인된 `fallen` person instance 10개 이상이다. 이 수치는 안전 인증 기준이 아니라 POC 평가가 완전히 비어 있지 않게 하는 개발 gate다.
+
+### 4.2 Augmentation
+
+기존 `train.py`의 S1~S5 augmentation을 유지한다.
+
+- S1: 저조도 gamma, motion blur, color jitter
+- S2: 결로
+- S3: glare
+- S4: 성에 및 야간 성에
+- S5: 저조도·결로·glare·성에·motion blur 복합 조건
+
+단, augmentation 선택 로직과 학습 orchestration을 분리한다. `augmentations.py`는 순수 이미지 변환과 registry만 담당하고, `train.py`는 CLI·검증·YOLOE 호출을 담당한다. seed를 한 곳에서 설정하고 실행 기록에 남긴다.
+
+validation과 test에는 온라인 augmentation을 적용하지 않는다. 원본 test split은 최종 평가에만 사용하고 threshold 선택에 사용하지 않는다.
+
+### 4.3 학습 실행
+
+기존 호출 방식은 유지한다.
 
 ```bash
-python -m vision_perception.fall_detection.evaluate \
-  --model /path/to/best.pt \
-  --data /path/to/data.yaml \
-  --split test \
-  --manifest /path/to/test_manifest.csv \
-  --device 0 \
-  --output artifacts/fall_detection_eval
+vision_perception/segmentation/train.sh \
+  --model 26s \
+  --data /home/syw/Trihouse/dataset/raw_examples/data.yaml \
+  --augmentation yes \
+  --epochs 200 \
+  --patience 20 \
+  --device 0
 ```
 
-`--manifest`는 선택 사항이다. 실행기는 입력 존재 여부와 dataset 계약을 먼저 검사하고, 평가 중간 실패 시 완료된 결과처럼 보이는 `metrics.json`을 만들지 않는다. 성공 시 생성된 run 디렉터리와 핵심 전체 지표를 콘솔에 출력한다.
+`train.sh`는 호스트에서 `trihouse_train` 컨테이너로 위임하고 컨테이너 안에서는 `unified_env_ver2`를 활성화한다. 기존 GPU 환경과 호환성을 유지하면서 `--preflight-only`, `--allow-posture-gap`, `--posture-manifest`, `--run-root`, `--resume`을 지원한다.
 
-## 테스트 전략
+학습 실행 순서는 고정한다.
 
-단위 테스트는 실제 GPU 모델을 요구하지 않는다.
+1. 입력 경로와 실행 환경 검증
+2. dataset preflight 및 fingerprint 생성
+3. run 디렉터리 생성과 resolved config 저장
+4. YOLOE fine-tuning
+5. `best.pt`로 validation 평가
+6. 모든 gate가 통과한 경우 test 평가
+7. 산출물 manifest 및 최종 상태 기록
 
-- 세로/가로 합성 직사각형 mask로 aspect ratio와 PCA orientation을 검증한다.
-- 빈 mask와 너무 작은 mask가 제외 사유와 함께 처리되는지 검증한다.
-- data.yaml의 test split 및 `person` class 계약을 검증한다.
-- manifest의 경로, 중복, 허용 환경·자세 값을 검증한다.
-- 환경 그룹 집계가 전체 집계와 일관되는지 검증한다.
-- 실행 metadata와 metrics JSON/CSV 스키마를 검증한다.
-- 고정 seed overlay 표본과 최악 오류 선택이 재현되는지 검증한다.
+중간 실패 시 `status.json`은 `FAILED`와 실패 단계를 기록한다. 성공한 것처럼 보이는 완료 marker는 만들지 않는다.
 
-GPU 통합 smoke test는 실제 기존 체크포인트와 데이터셋으로 최소 이미지 수 제한을 걸어 CLI 전체 경로를 확인한 다음 전체 test split 평가를 실행한다. 최종 검증 증거는 명령, 종료 코드, run ID와 생성된 결과 파일이다.
+### 4.4 재현성과 Resume
 
-초기 POC 통과 기준은 `person` mask Recall 0.90 이상, mask mAP50 0.80 이상, manifest에 20개 이상의 정답 instance가 있는 각 환경 그룹의 mask Recall 0.80 이상이다. 표본 수가 20개 미만인 그룹은 `INSUFFICIENT_SAMPLE`로 표시하며 통과로 계산하지 않는다. 이 값은 실시간 안전 성능의 인증 기준이 아니라, 다음 단계의 영상 수집·tracking 실험으로 넘어가기 위한 개발 gate다.
+run ID는 KST timestamp, 모델, augmentation 상태를 포함한다. 각 run은 다음을 기록한다.
 
-## 실패 처리와 안전 경계
+- 원본 CLI와 resolved 설정
+- Git commit 및 dirty 여부
+- Python, PyTorch, CUDA, Ultralytics, Albumentations 버전
+- GPU 이름
+- dataset `data.yaml`과 image/label 목록 fingerprint
+- seed, model, imgsz, batch, epochs, patience, workers
+- 시작·종료 시각과 최종 상태
 
-- 모델, data.yaml 또는 test split을 열 수 없으면 구체적인 경로와 함께 평가 전에 실패한다.
-- test split 누락을 validation split으로 자동 대체하지 않는다.
-- 정답 mask가 없는 데이터로 segmentation 성능을 평가했다고 보고하지 않는다.
-- posture manifest가 없으면 낙상 자세 정확도를 계산했다고 보고하지 않는다.
-- 정지 이미지 평가로 tracking·무움직임·실시간 FPS가 검증됐다고 보고하지 않는다.
-- test split으로 선택한 threshold는 탐색값으로 표시하고 독립 test 성능처럼 표현하지 않는다.
+`--resume <last.pt>`는 같은 dataset fingerprint와 호환 설정일 때만 허용한다. 다른 dataset 또는 class mapping으로 조용히 재개하지 않는다.
 
-## 후속 통합
+## 5. 평가와 학습 산출물
 
-데이터셋 평가가 기준을 충족하면 다음 단계에서 기존 `inference_stream.py`의 capture·stream health 정책을 재사용하고 YOLOE `track(..., persist=True, tracker="bytetrack.yaml")`를 연결한다. 이때 웹캠과 MP4 입력, worker별 상태 머신, centroid displacement와 시간-window mask IoU, 화면 overlay와 JSONL 후보 이벤트를 구현한다.
+Ultralytics 표준 지표를 보존한다.
 
-그 다음 `WorkerState.msg`, `FallEvent.msg`를 `trihouse_interfaces`에 추가하고 같은 event interface를 ROS2 publisher로 구현한다. 관제 UI의 관리자 확인 service와 Emergency Manager 연결은 후보 이벤트 검증 후 진행한다. Optical flow, 다중 카메라 re-identification과 custom keypoint 모델은 측정 결과가 필요성을 입증한 경우에만 추가한다.
+- box Precision, Recall, mAP50, mAP50-95
+- mask Precision, Recall, mAP50, mAP50-95
+- class별 결과
+- confusion matrix와 validation prediction 이미지
+
+초기 POC training gate는 validation의 `person` mask Recall 0.90 이상과 mask mAP50 0.80 이상이다. test 결과는 gate 조정에 사용하지 않고 최종 보고만 한다. posture manifest가 충분한 경우 standing/fallen 그룹의 `person` mask Recall도 별도로 보고한다. 이 기준은 실시간 낙상 안전 인증이 아닌 다음 개발 단계 진입 기준이다.
+
+산출물 구조는 다음과 같다.
+
+```text
+runs/lego_worker/<run_id>/
+├── preflight/
+│   ├── dataset_report.json
+│   ├── instances.csv
+│   ├── posture_candidates.csv
+│   └── contact_sheets/
+├── config/
+│   ├── run.json
+│   └── resolved.yaml
+├── train/
+│   └── weights/{best.pt,last.pt}
+├── evaluation/
+│   ├── validation_metrics.json
+│   └── test_metrics.json
+├── artifact_manifest.json
+└── status.json
+```
+
+`artifact_manifest.json`은 후속 실시간 모듈이 사용할 `best.pt`, class ID/name, imgsz, confidence 후보값, dataset fingerprint와 지표 경로를 제공한다.
+
+## 6. 자동 테스트와 Smoke Test
+
+실제 GPU 없이 실행하는 자동 테스트는 다음을 검증한다.
+
+- 정상 dataset 계약 통과
+- 누락 image/label, 범위 밖 좌표, 잘못된 class ID 거부
+- train/valid/test content hash 중복 탐지
+- 빈 label 통계
+- posture manifest 검증과 부족 gate
+- 모델 축약명 해석
+- resolved config와 dataset fingerprint의 결정성
+- run status가 성공·실패를 정확히 나타냄
+- 학습 backend를 대체한 fake 결과로 validation/test orchestration과 artifact manifest 생성
+
+GPU smoke test는 실제 컨테이너에서 `--epochs 1`, 작은 batch, 제한된 workers로 전체 orchestration을 확인한다. 이것은 성능 판정이 아니라 코드 경로 검증이다. 실제 성능 평가는 전체 설정으로 별도 실행한다.
+
+## 7. 후속 실시간 파이프라인 계약
+
+학습 gate를 통과한 `artifact_manifest.json`을 입력으로 다음 단계를 구현한다.
+
+```text
+Camera / MP4
+  → YOLOE person mask
+  → ByteTrack worker ID
+  → aspect ratio + PCA orientation + calibrated centroid
+  → FALL_SUSPECTED / FALLEN
+  → centroid displacement + time-window mask IoU
+  → IMMOBILE
+  → EMERGENCY_CANDIDATE
+  → 관제 시스템 관리자 확인 요청
+```
+
+AI는 비상을 확정하지 않는다. 관제 요청 payload는 worker ID, zone, fall score, immobile duration, timestamp와 근거 frame/clip reference를 포함한다. 관리자가 확인한 뒤에만 Emergency Manager가 로봇 안전 제어를 수행한다.
+
+정지 이미지 학습 데이터만으로 tracking, 낙상 동작 시점, 무움직임 지속 시간이나 실시간 FPS를 검증했다고 주장하지 않는다. 이 항목은 학습 완료 후 별도 영상 시나리오로 검증한다.
+
+## 8. 안전 경계와 비범위
+
+- POC 모델은 LEGO 전용이며 실제 사람 안전 성능을 주장하지 않는다.
+- 기존 dataset 원본을 자동 재배치하거나 덮어쓰지 않는다.
+- test split을 학습, early stopping 또는 threshold 선택에 사용하지 않는다.
+- 누운 LEGO가 없는 test 결과로 낙상 성능이 검증됐다고 보고하지 않는다.
+- 이번 사이클에서는 ROS2 메시지, 관제 UI와 로봇 정지 동작을 구현하지 않는다.
+- pose estimation, optical flow와 별도 시계열 신경망은 초기 POC 범위에서 제외한다.
