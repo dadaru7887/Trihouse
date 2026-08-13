@@ -516,7 +516,16 @@ def test_development_seed_inventory_matches_qr_contract(mysql_db):
 
 
 def test_development_seed_smoke_job_uses_qr_inventory(mysql_db):
-    _apply_seed_twice(mysql_db)
+    before = mysql_db.one("SELECT NOW(6) AS now")["now"]
+    execute_sql_script(mysql_db.connection, SEED_PATH)
+    after_first_seed = mysql_db.one("SELECT NOW(6) AS now")["now"]
+    first_times = mysql_db.one(
+        "SELECT created_at, due_at FROM jobs WHERE job_code = 'JOB-DEV-001'"
+    )
+    execute_sql_script(mysql_db.connection, SEED_PATH)
+    second_times = mysql_db.one(
+        "SELECT created_at, due_at FROM jobs WHERE job_code = 'JOB-DEV-001'"
+    )
 
     smoke = mysql_db.one(
         """
@@ -539,3 +548,6 @@ def test_development_seed_smoke_job_uses_qr_inventory(mysql_db):
         "verification_state": "pending",
         "lot_code": "LOT-AMB-ORANGE-001",
     }
+    assert before <= first_times["created_at"] <= after_first_seed
+    assert first_times["due_at"] - first_times["created_at"] == dt.timedelta(hours=1)
+    assert second_times == first_times

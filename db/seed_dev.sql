@@ -217,14 +217,13 @@ VALUES
    '00000000-0000-0000-0000-000000000001',
    (SELECT location_id FROM locations WHERE location_code = 'AMB-L2-S01'),
    (SELECT location_id FROM locations WHERE location_code = 'OUT-DOCK-01'),
-   '2026-08-03 10:00:00.000000', 'PK_01',
-   JSON_OBJECT('source', 'dev_seed'), '2026-08-03 09:05:00.000000')
+   DATE_ADD(CURRENT_TIMESTAMP(6), INTERVAL 1 HOUR), 'PK_01',
+   JSON_OBJECT('source', 'dev_seed'), CURRENT_TIMESTAMP(6))
 ON DUPLICATE KEY UPDATE
   priority = VALUES(priority),
   state = VALUES(state),
   source_location_id = VALUES(source_location_id),
   destination_location_id = VALUES(destination_location_id),
-  due_at = VALUES(due_at),
   assigned_mobile_id = VALUES(assigned_mobile_id),
   context = VALUES(context);
 
