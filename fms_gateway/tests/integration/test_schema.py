@@ -11,31 +11,65 @@ from conftest import SEED_PATH, execute_sql_script
 pytestmark = pytest.mark.integration
 
 
+FMS_TABLES = {
+    "artifacts",
+    "device_states",
+    "devices",
+    "incidents",
+    "integration_messages",
+    "inventory_lots",
+    "inventory_moves",
+    "job_items",
+    "job_step_attempts",
+    "job_steps",
+    "jobs",
+    "location_recovery_profiles",
+    "locations",
+    "map_features",
+    "map_project_files",
+    "map_project_fleets",
+    "map_project_lanes",
+    "map_project_robots",
+    "map_project_waypoints",
+    "map_projects",
+    "map_revisions",
+    "operation_events",
+    "reservations",
+    "workers",
+}
+RECOVERY_TABLES = {"recovery_episodes", "recovery_steps"}
+
+
+def _invalid_english_comment(value: object) -> bool:
+    comment = str(value).strip()
+    return not comment or not comment.isascii() or bool(re.search(r"[가-힣]", comment))
+
+
 def test_schema_applies_cleanly(fresh_schema):
     """A deploy must create both FMS and recovery schemas cleanly."""
     assert fresh_schema is None
 
 
 def test_recovery_memory_tables_are_created(mysql_db, recovery_mysql_db):
-    fms_tables = mysql_db.one(
+    fms_tables = mysql_db.all(
         """
-        SELECT COUNT(*) AS count
+        SELECT table_name AS table_name
         FROM information_schema.tables
         WHERE table_schema = 'trihouse_fms'
           AND table_type = 'BASE TABLE'
         """
     )
-    recovery_tables = recovery_mysql_db.one(
+    recovery_tables = recovery_mysql_db.all(
         """
-        SELECT COUNT(*) AS count
+        SELECT table_name AS table_name
         FROM information_schema.tables
         WHERE table_schema = 'trihouse_recovery'
           AND table_type = 'BASE TABLE'
         """
     )
 
-    assert fms_tables["count"] == 16
-    assert recovery_tables["count"] == 2
+    assert {row["table_name"] for row in fms_tables} == FMS_TABLES
+    assert {row["table_name"] for row in recovery_tables} == RECOVERY_TABLES
 
 
 def test_all_tables_have_english_comments(mysql_db):
@@ -52,12 +86,10 @@ def test_all_tables_have_english_comments(mysql_db):
         """
     )
 
-    assert len(tables) == 18
     invalid = [
         f"{row['schema_name']}.{row['table_name']}"
         for row in tables
-        if not str(row["table_comment"]).isascii()
-        or re.search(r"[가-힣]", str(row["table_comment"]))
+        if _invalid_english_comment(row["table_comment"])
     ]
     assert invalid == []
 
@@ -76,12 +108,10 @@ def test_all_columns_have_english_comments(mysql_db):
         """
     )
 
-    assert len(columns) == 253
     invalid = [
         f"{row['schema_name']}.{row['table_name']}.{row['column_name']}"
         for row in columns
-        if not str(row["column_comment"]).isascii()
-        or re.search(r"[가-힣]", str(row["column_comment"]))
+        if _invalid_english_comment(row["column_comment"])
     ]
     assert invalid == []
 

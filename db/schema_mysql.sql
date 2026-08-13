@@ -37,9 +37,9 @@ CREATE TABLE IF NOT EXISTS map_projects (
   waypoint_count      INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Number of active draft waypoints.',
   lane_count          INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Number of active draft lanes.',
   draft_revision      BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT 'Optimistic draft version.',
-  created_at          DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  created_at          DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'Timestamp when the map project was created.',
   updated_at          DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-                        ON UPDATE CURRENT_TIMESTAMP(6),
+                        ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'Timestamp when the map project was last updated.',
   PRIMARY KEY (project_id),
   UNIQUE KEY uq_map_projects_name (map_name),
   CONSTRAINT chk_map_projects_payload CHECK (JSON_TYPE(payload) = 'OBJECT')
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS map_projects (
 
 CREATE TABLE IF NOT EXISTS map_project_waypoints (
   waypoint_uuid       CHAR(36) NOT NULL COMMENT 'Immutable waypoint UUID.',
-  project_id          BIGINT UNSIGNED NOT NULL,
+  project_id          BIGINT UNSIGNED NOT NULL COMMENT 'Identifier of the parent map project.',
   seq                 INT UNSIGNED NOT NULL COMMENT 'Stable display order within the current draft.',
   location_code       VARCHAR(96) NULL COMMENT 'Stable FMS location business key for operational waypoints.',
   rmf_waypoint_name   VARCHAR(128) NOT NULL COMMENT 'Waypoint name written to the RMF graph.',
@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS map_project_waypoints (
   map_x               DOUBLE NULL COMMENT 'Published RMF map-frame X coordinate in meters.',
   map_y               DOUBLE NULL COMMENT 'Published RMF map-frame Y coordinate in meters.',
   map_yaw             DOUBLE NULL COMMENT 'Published RMF map-frame heading in radians.',
-  active              TINYINT(1) NOT NULL DEFAULT 1,
+  active              TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'Indicates whether the waypoint belongs to the active draft.',
   PRIMARY KEY (project_id, seq),
   UNIQUE KEY uq_map_waypoints_uuid (waypoint_uuid),
   UNIQUE KEY uq_map_waypoints_name (project_id, rmf_waypoint_name),
@@ -73,15 +73,15 @@ CREATE TABLE IF NOT EXISTS map_project_waypoints (
 
 CREATE TABLE IF NOT EXISTS map_project_lanes (
   lane_uuid            CHAR(36) NOT NULL COMMENT 'Immutable lane UUID.',
-  project_id           BIGINT UNSIGNED NOT NULL,
+  project_id           BIGINT UNSIGNED NOT NULL COMMENT 'Identifier of the parent map project.',
   seq                  INT UNSIGNED NOT NULL COMMENT 'Display order within the current draft.',
-  start_waypoint_uuid  CHAR(36) NOT NULL,
-  end_waypoint_uuid    CHAR(36) NOT NULL,
-  direction            VARCHAR(16) NOT NULL,
-  speed_limit          DOUBLE NULL,
-  orientation          VARCHAR(16) NULL,
-  mutex_group          VARCHAR(64) NULL,
-  active               TINYINT(1) NOT NULL DEFAULT 1,
+  start_waypoint_uuid  CHAR(36) NOT NULL COMMENT 'UUID of the lane start waypoint.',
+  end_waypoint_uuid    CHAR(36) NOT NULL COMMENT 'UUID of the lane end waypoint.',
+  direction            VARCHAR(16) NOT NULL COMMENT 'Allowed travel direction for the lane.',
+  speed_limit          DOUBLE NULL COMMENT 'Optional lane speed limit in meters per second.',
+  orientation          VARCHAR(16) NULL COMMENT 'Optional robot orientation constraint for the lane.',
+  mutex_group          VARCHAR(64) NULL COMMENT 'Optional mutual-exclusion group used by the lane.',
+  active               TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'Indicates whether the lane belongs to the active draft.',
   PRIMARY KEY (project_id, seq),
   UNIQUE KEY uq_map_lanes_uuid (lane_uuid),
   CONSTRAINT fk_map_lanes_project FOREIGN KEY (project_id)
@@ -96,13 +96,13 @@ CREATE TABLE IF NOT EXISTS map_project_lanes (
 ) ENGINE=InnoDB COMMENT='Stores lane topology by stable waypoint UUID instead of floating-point coordinates.';
 
 CREATE TABLE IF NOT EXISTS map_project_files (
-  project_id    BIGINT UNSIGNED NOT NULL,
-  file_name     VARCHAR(255) NOT NULL,
-  kind          VARCHAR(32) NOT NULL,
-  description   VARCHAR(512) NOT NULL DEFAULT '',
-  executable    TINYINT(1) NOT NULL DEFAULT 0,
-  content       LONGTEXT NOT NULL,
-  generated_at  DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  project_id    BIGINT UNSIGNED NOT NULL COMMENT 'Identifier of the parent map project.',
+  file_name     VARCHAR(255) NOT NULL COMMENT 'File name unique within the map project.',
+  kind          VARCHAR(32) NOT NULL COMMENT 'Generated file category.',
+  description   VARCHAR(512) NOT NULL DEFAULT '' COMMENT 'Human-readable description of the generated file.',
+  executable    TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Indicates whether the generated file must be executable.',
+  content       LONGTEXT NOT NULL COMMENT 'Text content of the generated file.',
+  generated_at  DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'Timestamp when the file content was generated.',
   PRIMARY KEY (project_id, file_name),
   KEY idx_map_files_kind (project_id, kind),
   CONSTRAINT fk_map_files_project FOREIGN KEY (project_id)
@@ -110,11 +110,11 @@ CREATE TABLE IF NOT EXISTS map_project_files (
 ) ENGINE=InnoDB COMMENT='Stores generated launch, fleet, bridge, and script files for each editable map project.';
 
 CREATE TABLE IF NOT EXISTS map_project_fleets (
-  project_id       BIGINT UNSIGNED NOT NULL,
-  fleet_name       VARCHAR(96) NOT NULL,
-  settings         JSON NOT NULL,
+  project_id       BIGINT UNSIGNED NOT NULL COMMENT 'Identifier of the parent map project.',
+  fleet_name       VARCHAR(96) NOT NULL COMMENT 'Open-RMF fleet name for the map project.',
+  settings         JSON NOT NULL COMMENT 'JSON object containing draft fleet parameters.',
   updated_at       DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-                     ON UPDATE CURRENT_TIMESTAMP(6),
+                     ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'Timestamp when the fleet settings were last updated.',
   PRIMARY KEY (project_id),
   CONSTRAINT fk_map_fleets_project FOREIGN KEY (project_id)
     REFERENCES map_projects (project_id) ON DELETE CASCADE,
@@ -122,19 +122,19 @@ CREATE TABLE IF NOT EXISTS map_project_fleets (
 ) ENGINE=InnoDB COMMENT='Stores draft Open-RMF fleet parameters per map project.';
 
 CREATE TABLE IF NOT EXISTS map_project_robots (
-  project_id        BIGINT UNSIGNED NOT NULL,
-  robot_id          VARCHAR(64) NOT NULL,
-  seq               INT UNSIGNED NOT NULL,
-  display_name      VARCHAR(128) NOT NULL,
-  model             VARCHAR(96) NOT NULL,
-  kind              VARCHAR(16) NOT NULL,
-  data_source       VARCHAR(16) NOT NULL,
-  gz_name           VARCHAR(64) NOT NULL,
-  zones             JSON NOT NULL,
-  charger_waypoint_uuid CHAR(36) NULL,
-  spawn_x           DOUBLE NULL,
-  spawn_y           DOUBLE NULL,
-  spawn_heading     DOUBLE NOT NULL DEFAULT 0,
+  project_id        BIGINT UNSIGNED NOT NULL COMMENT 'Identifier of the parent map project.',
+  robot_id          VARCHAR(64) NOT NULL COMMENT 'Stable robot identifier within the map project.',
+  seq               INT UNSIGNED NOT NULL COMMENT 'Stable display order within the map project.',
+  display_name      VARCHAR(128) NOT NULL COMMENT 'Robot name displayed in operator interfaces.',
+  model             VARCHAR(96) NOT NULL COMMENT 'Robot model name.',
+  kind              VARCHAR(16) NOT NULL COMMENT 'Robot role: mobile robot or workcell.',
+  data_source       VARCHAR(16) NOT NULL COMMENT 'Runtime source: mock, Gazebo, or real hardware.',
+  gz_name           VARCHAR(64) NOT NULL COMMENT 'Gazebo model and namespace name.',
+  zones             JSON NOT NULL COMMENT 'JSON array of zones the robot may serve.',
+  charger_waypoint_uuid CHAR(36) NULL COMMENT 'UUID of the assigned charger waypoint.',
+  spawn_x           DOUBLE NULL COMMENT 'Optional Gazebo spawn X coordinate in meters.',
+  spawn_y           DOUBLE NULL COMMENT 'Optional Gazebo spawn Y coordinate in meters.',
+  spawn_heading     DOUBLE NOT NULL DEFAULT 0 COMMENT 'Gazebo spawn heading in radians.',
   PRIMARY KEY (project_id, robot_id),
   UNIQUE KEY uq_map_robots_seq (project_id, seq),
   CONSTRAINT fk_map_robots_project FOREIGN KEY (project_id)
@@ -148,16 +148,16 @@ CREATE TABLE IF NOT EXISTS map_project_robots (
 
 CREATE TABLE IF NOT EXISTS map_revisions (
   map_revision       VARCHAR(160) NOT NULL COMMENT 'Published content revision used by RMF and Pinky.',
-  map_name           VARCHAR(95) NOT NULL,
-  source_project_id  BIGINT UNSIGNED NOT NULL,
-  draft_revision     BIGINT UNSIGNED NOT NULL,
-  state              VARCHAR(16) NOT NULL DEFAULT 'published',
-  building_sha256    CHAR(64) NOT NULL,
-  nav_graph_sha256   CHAR(64) NOT NULL,
-  world_sha256       CHAR(64) NOT NULL,
-  manifest           JSON NOT NULL,
-  published_by       VARCHAR(64) NOT NULL,
-  published_at       DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  map_name           VARCHAR(95) NOT NULL COMMENT 'Name of the published map.',
+  source_project_id  BIGINT UNSIGNED NOT NULL COMMENT 'Identifier of the source map project.',
+  draft_revision     BIGINT UNSIGNED NOT NULL COMMENT 'Draft revision used to create the publication.',
+  state              VARCHAR(16) NOT NULL DEFAULT 'published' COMMENT 'Publication state: published or retired.',
+  building_sha256    CHAR(64) NOT NULL COMMENT 'SHA-256 digest of the building YAML.',
+  nav_graph_sha256   CHAR(64) NOT NULL COMMENT 'SHA-256 digest of the navigation graph.',
+  world_sha256       CHAR(64) NOT NULL COMMENT 'SHA-256 digest of the Gazebo world.',
+  manifest           JSON NOT NULL COMMENT 'JSON object containing the immutable publication manifest.',
+  published_by       VARCHAR(64) NOT NULL COMMENT 'Worker or process that published the map.',
+  published_at       DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'Timestamp when the map revision was published.',
   PRIMARY KEY (map_revision),
   UNIQUE KEY uq_map_revisions_revision (map_revision),
   KEY idx_map_revisions_current (map_name, state, published_at),
