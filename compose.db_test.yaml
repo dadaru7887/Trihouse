@@ -30,7 +30,7 @@ services:
       - /var/lib/mysql
 
     volumes:
-      # Recreate the complete v4 schema and test data on every new container.
+      # Recreate the canonical schema and test data on every new container.
       - ./db/schema_mysql.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
       - ./db/seed_dev.sql:/docker-entrypoint-initdb.d/002_seed.sql:ro
       - ./db/init/003_grant_gateway_recovery.sh:/docker-entrypoint-initdb.d/003_grant_gateway_recovery.sh:ro

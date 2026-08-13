@@ -1,6 +1,6 @@
 # Trihouse FMS 데이터베이스 가이드라인
 
-기준 스키마: [db/schema_mysql.sql](../../db/schema_mysql.sql) (v5: FMS 17개 + recovery 2개 테이블)
+기준 스키마: [db/schema_mysql.sql](../../db/schema_mysql.sql) (FMS + recovery 전체 계약)
 관련 문서: [환경 구성](../deployment/environment_overview.md) · [DB 시연](../deployment/database_demo.md) · [Recovery Memory](../architecture/recovery_memory.md)
 
 이 문서는 `trihouse_fms` 스키마를 읽고 쓰는 모든 코드가 지켜야 할 규약을 정리한다. 스키마 자체의 정의는 SQL 파일이 기준이며, 이 문서는 **왜 그렇게 설계했고 어떻게 써야 하는가**를 설명한다.
@@ -1475,7 +1475,7 @@ job은 `completed`, step은 `succeeded`다. 공용 상태 매핑 함수를 만�
 
 ### 12.1 원칙
 
-- **현재 FMS 17개 운영 도메인 테이블을 유지한다.** 입고·출고·재고·예약·관제의
+- **현재 `schema_mysql.sql`의 운영 도메인 테이블을 기준으로 유지한다.** 입고·출고·재고·예약·관제의
   새 요구는 먼저 기존 테이블의 컬럼·JSON·열거값으로 표현할 수 있는지 검토한다.
   정상 작업의 세밀한 실행 이력은 `job_step_attempts`, 원본 파일은 `artifacts`로 해결한다 (10.4).
 - VLM/RL 복구 데이터는 v4의 세 테이블로 역할을 분리한다.
