@@ -54,3 +54,6 @@ __pycache__/
 build/
 install/
 log/
+/build/
+/install/
+/log/
