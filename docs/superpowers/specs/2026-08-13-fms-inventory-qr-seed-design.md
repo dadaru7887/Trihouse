@@ -64,13 +64,13 @@
 
 ```json
 {
-  "warehouse_no": 1,
-  "shelf_levels": 2,
-  "slots_per_level": 2,
-  "rmf_access_location_code": "A-SLOT-01",
-  "source": "dev_seed"
+  "rmf_access_location_code": "A-SLOT-01"
 }
 ```
+
+`warehouse_no`는 `location_code`와 `name`에서 이미 식별되고, `shelf_levels`와
+`slots_per_level`은 자식 슬롯 행에서 계산할 수 있으므로 중복 저장하지 않는다.
+`source='dev_seed'`도 운영 의미가 없는 시드 구현 정보라 저장하지 않는다.
 
 ### 슬롯 행
 
@@ -80,8 +80,7 @@
 ```json
 {
   "shelf_level": 1,
-  "slot_index": 1,
-  "source": "dev_seed"
+  "slot_index": 1
 }
 ```
 
@@ -102,6 +101,32 @@
 
 `locations`에는 창고·슬롯 자체만 저장한다. 상품명, lot, 수량, 유통기한은
 `inventory_lots`에 저장하고 `inventory_lots.location_id`로 슬롯을 참조한다.
+
+## 컬럼 최소화 검토
+
+이번 데이터 때문에 `schema_mysql.sql`에 새 컬럼을 추가하지 않는다. 관련 기존 컬럼도
+각각 다음 용도가 있어 삭제 대상으로 보지 않는다.
+
+| 테이블.컬럼 | 유지 이유 |
+| --- | --- |
+| `locations.parent_location_id` | 슬롯과 창고의 계층 관계를 FK로 보장한다. |
+| `locations.zone_code` | 업무 구역 코드이며 물품의 보관 조건인 `temperature_zone`과 의미가 다르다. |
+| `locations.temperature_zone` | 해당 위치가 허용하는 온도 구역을 표현한다. |
+| `locations.map_name`, `rmf_waypoint_name`, `pose_*` | 새 물리 슬롯에서는 NULL이지만 waypoint·도크·충전기 등 다른 Location 타입이 사용한다. |
+| `locations.metadata` | 현재 스키마에 없는 층·슬롯 번호와 RMF 접근 지점만 최소 저장한다. |
+| `inventory_lots.product_code` | 서로 다른 lot를 같은 상품으로 검색·주문하기 위한 키다. |
+| `inventory_lots.item_name` | 별도 상품 마스터 테이블이 없는 현재 UI의 표시명이다. 상품 마스터가 생기면 중복 여부를 재검토한다. |
+| `inventory_lots.temperature_zone` | 상품 자체의 보관 요구조건으로, 현재 적재 위치의 온도와 독립적으로 검증한다. |
+| `inventory_lots.unit_weight_kg` | OMX 파지와 Pinky 적재중량 판단에 사용한다. |
+| `inventory_lots.available_qty`, `reserved_qty` | 물리 수량과 주문 예약 수량을 분리한다. |
+| `inventory_lots.state` | 수량만으로 표현할 수 없는 보류·손상·만료 상태를 관리한다. |
+| `inventory_lots.received_at`, `updated_at` | 입고 및 변경 감사 시각을 보존한다. |
+
+불필요했던 값은 DB 컬럼이 아니라 앞서 제안한 JSON metadata의 파생·구현 정보였다.
+따라서 창고 metadata는 `rmf_access_location_code`, 슬롯 metadata는
+`shelf_level`과 `slot_index`만 저장한다. 향후 컬럼 삭제를 검토할 때는 Gateway,
+관제 UI, RMF import, migration, 운영 쿼리 사용처를 모두 확인하고 별도 migration으로
+진행한다.
 
 ## 재고 데이터
 
