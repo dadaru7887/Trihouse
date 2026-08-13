@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
-from .dataset_audit import audit_dataset
+from dataloader.audit import audit_dataset
 from .device import resolve_device
 from .environment import capture_environment, validate_training_environment, write_environment
 from .run_config import TrainingConfig
@@ -99,14 +99,16 @@ def run_pipeline(config: TrainingConfig, backend: TrainingBackend) -> Path:
         validation = backend.evaluate(weights, "val", config, run_dir)
         _write_json(run_dir / "evaluation/validation_metrics.json", validation)
         stage = "VALIDATION_GATE"
+        gate_recall = validation.get("person_mask_recall", validation.get("mask_recall", -1.0))
+        gate_map50 = validation.get("person_mask_map50", validation.get("mask_map50", -1.0))
         validation_gate_passed = not (
-            validation.get("mask_recall", -1.0) < config.min_mask_recall
-            or validation.get("mask_map50", -1.0) < config.min_mask_map50
+            gate_recall < config.min_mask_recall
+            or gate_map50 < config.min_mask_map50
         )
         if not validation_gate_passed and not config.test_on_validation_gate_failure:
             raise PipelineError(
                 "validation gate 실패: "
-                f"mask_recall={validation.get('mask_recall')}, mask_map50={validation.get('mask_map50')}"
+                f"person_mask_recall={gate_recall}, person_mask_map50={gate_map50}"
             )
 
         stage = "TEST"

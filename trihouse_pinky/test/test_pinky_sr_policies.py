@@ -19,8 +19,9 @@ from trihouse_pinky_fleet.workflow import (  # noqa: E402
     TransportWorkflow,
 )
 from trihouse_pinky_fleet.status import StatusInputs, build_status  # noqa: E402
+from trihouse_pinky_fleet.battery_policy import classify_battery  # noqa: E402
 from trihouse_pinky_fleet.recovery_health import RecoveryHealthInputs, evaluate_recovery_health  # noqa: E402
-from trihouse_pinky_fleet.protocol import ProtocolError, parse_clear_keep_out_zone, parse_emergency_command, parse_keep_out_zone, parse_transport_command  # noqa: E402
+from trihouse_pinky_fleet.protocol import ProtocolError, classify_gateway_response, parse_clear_keep_out_zone, parse_emergency_command, parse_keep_out_zone, parse_transport_command  # noqa: E402
 from trihouse_pinky_fleet.arrival import within_tolerance  # noqa: E402
 from trihouse_pinky_io.indicator import Indicator, select_indicator  # noqa: E402
 from trihouse_pinky_io.destination_display import destination_label  # noqa: E402
@@ -233,10 +234,39 @@ class StatusPolicyTest(unittest.TestCase):
     def test_stale_required_sensor_marks_robot_unready_and_reports_error(self) -> None:
         """FMS must see work unavailable when a mandatory sensor stops reporting."""
         status = build_status(
-            StatusInputs(robot_id="PK-01", job_id="job-1", scan_fresh=False, odom_fresh=True, battery_fresh=True)
+            StatusInputs(robot_id="PK_01", scan_fresh=False, odom_fresh=True, battery_fresh=True)
         )
         self.assertFalse(status.ready)
         self.assertEqual(("scan_stale",), status.errors)
+
+    def test_readiness_is_split_into_telemetry_execution_and_dispatch_layers(self) -> None:
+        """상태 조회 가능, 실행 가능, 신규 할당 가능은 서로 다른 판단이어야 한다."""
+        telemetry_only = build_status(StatusInputs(
+            robot_id="PK_01", control_link_online=False,
+        ))
+        execution_only = build_status(StatusInputs(
+            robot_id="PK_01", battery_dispatchable=False,
+        ))
+
+        self.assertTrue(telemetry_only.telemetry_valid)
+        self.assertFalse(telemetry_only.execution_ready)
+        self.assertFalse(telemetry_only.dispatchable)
+        self.assertTrue(execution_only.execution_ready)
+        self.assertFalse(execution_only.dispatchable)
+        self.assertFalse(execution_only.ready)
+
+
+class BatteryPolicyProjectionTest(unittest.TestCase):
+    def test_valid_condition_projects_same_threshold_states_as_control_tower(self) -> None:
+        self.assertEqual("NORMAL", classify_battery(20.1, valid=True).state)
+        self.assertEqual("LOCAL_ONLY", classify_battery(20.0, valid=True).state)
+        self.assertEqual("RETURN_REQUIRED", classify_battery(10.0, valid=True).state)
+
+    def test_invalid_or_charging_condition_is_not_dispatchable(self) -> None:
+        self.assertFalse(classify_battery(80.0, valid=False).ready)
+        charging = classify_battery(80.0, valid=True, charging=True)
+        self.assertEqual("CHARGING", charging.state)
+        self.assertFalse(charging.ready)
 
 
 class RecoveryHealthTest(unittest.TestCase):
@@ -248,6 +278,14 @@ class RecoveryHealthTest(unittest.TestCase):
 
 
 class FleetProtocolTest(unittest.TestCase):
+    def test_gateway_ack_and_rejection_are_control_messages_not_robot_commands(self) -> None:
+        self.assertEqual("ack", classify_gateway_response({"type": "ack", "action": "robot_status"}))
+        self.assertEqual(
+            "event_rejected",
+            classify_gateway_response({"type": "event_rejected", "reason_code": "STALE_SEQUENCE"}),
+        )
+        self.assertEqual("command", classify_gateway_response({"type": "execute_transport"}))
+
     def test_transport_command_requires_message_id_and_pose(self) -> None:
         """Malformed network data must not become a Nav2 action goal."""
         with self.assertRaises(ProtocolError):
@@ -256,12 +294,20 @@ class FleetProtocolTest(unittest.TestCase):
     def test_transport_command_preserves_return_mode_and_destination_code(self) -> None:
         """Gateway conversion must retain FMS intent rather than infer a destination."""
         command = parse_transport_command({
-            'type': 'execute_transport', 'message_id': 'msg-1', 'job_id': 'job-1', 'job_step_id': 'step-1',
-            'map_revision': 'map-7', 'dropoff_location_id': 'wait-1', 'destination_code': 'RETURN',
+            'type': 'execute_transport', 'message_id': 'msg-1',
+            'task_context': {
+                'active': True, 'job_id': 7, 'job_step_id': 10,
+                'assignment_revision': 3, 'rmf_task_id': 'rmf-task-1',
+                'command_id': 'cmd-1', 'map_revision': 'map-7',
+                'command_source': 'FMS_GATEWAY',
+            },
+            'dropoff_location_id': 'wait-1', 'destination_code': 'RETURN',
             'dropoff_pose': {'frame_id': 'map', 'x': 1.0, 'y': 2.0, 'yaw': 0.0}, 'mode': 'RETURN_TO_WAIT',
         })
         self.assertEqual('RETURN_TO_WAIT', command.mode)
         self.assertEqual('RETURN', command.destination_code)
+        self.assertEqual(7, command.task_context.job_id)
+        self.assertEqual(3, command.task_context.assignment_revision)
 
     def test_clear_emergency_requires_operator_identity(self) -> None:
         """A network packet cannot clear an emergency latch anonymously."""

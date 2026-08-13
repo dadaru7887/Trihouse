@@ -7,7 +7,6 @@ import math
 import sys
 from threading import Lock
 from typing import Any
-from uuid import uuid4
 
 import rclpy
 from rclpy.action import ActionClient
@@ -22,6 +21,7 @@ from trihouse_interfaces.action import ExecuteTransport
 from trihouse_interfaces.msg import RobotStatus
 
 from .execution import ExecutionRegistry
+from .fms_client import CommandClaimError, FmsCommandClaimClient
 from .state import PinkyState
 
 
@@ -48,6 +48,8 @@ class PinkyRobotAdapter:
         transport_action: str,
         map_revision: str,
         status_timeout_s: float,
+        fms_base_url: str,
+        fms_timeout_s: float,
     ) -> None:
         self._node = node
         self._fleet_handle = fleet_handle
@@ -64,6 +66,9 @@ class PinkyRobotAdapter:
         self._last_invalid_reason = ""
         self._last_rejected_frame = ""
         self._registry = ExecutionRegistry()
+        self._command_claims = FmsCommandClaimClient(
+            fms_base_url, timeout_s=fms_timeout_s,
+        )
         self._executions: dict[str, Any] = {}
         self._goal_handles: dict[str, Any] = {}
 
@@ -100,7 +105,7 @@ class PinkyRobotAdapter:
             y=float(pose.position.y),
             yaw=_yaw_of(pose.orientation),
             battery_percentage=float(message.battery_percentage),
-            ready=bool(message.ready),
+            ready=bool(message.dispatchable),
             observed_at_ns=received_at_ns,
         )
         with self._lock:
@@ -172,7 +177,23 @@ class PinkyRobotAdapter:
         update_handle.update(rmf_state, self._registry.current_activity())
 
     def _navigate(self, destination: Any, execution: Any) -> None:
-        command_id = str(uuid4())
+        with self._lock:
+            update_handle = self._update_handle
+        rmf_task_id = ""
+        if update_handle is not None:
+            rmf_task_id = str(update_handle.more().current_task_id() or "")
+        try:
+            context = self._command_claims.claim(
+                rmf_task_id=rmf_task_id,
+                robot_id=self._robot_name,
+                execution_id=str(execution.identifier),
+                map_revision=self._map_revision,
+            )
+        except CommandClaimError as error:
+            self._fail_without_finish(str(error))
+            return
+
+        command_id = context.command_id
         decision = self._registry.start(execution.identifier, command_id)
         if not decision.accepted:
             self._fail_without_finish("RMF execution 또는 command ID가 없습니다.")
@@ -183,7 +204,6 @@ class PinkyRobotAdapter:
 
         with self._lock:
             self._executions[command_id] = execution
-            update_handle = self._update_handle
 
         if not self._transport.server_is_ready():
             self._fail_command(command_id, "Pinky ExecuteTransport action server가 없습니다.")
@@ -195,13 +215,14 @@ class PinkyRobotAdapter:
             return
 
         goal = ExecuteTransport.Goal()
-        goal.command_id = command_id
-        current_task_id = ""
-        if update_handle is not None:
-            current_task_id = update_handle.more().current_task_id()
-        goal.job_id = current_task_id or f"rmf:{command_id}"
-        goal.job_step_id = f"rmf-nav:{command_id}"
-        goal.map_revision = self._map_revision
+        goal.task_context.active = context.active
+        goal.task_context.job_id = context.job_id
+        goal.task_context.job_step_id = context.job_step_id
+        goal.task_context.assignment_revision = context.assignment_revision
+        goal.task_context.rmf_task_id = context.rmf_task_id
+        goal.task_context.command_id = context.command_id
+        goal.task_context.map_revision = context.map_revision
+        goal.task_context.command_source = context.command_source
         destination_name = str(getattr(destination, "name", "") or "")
         goal.dropoff_location_id = destination_name
         goal.destination_code = destination_name or "RMF"
@@ -216,7 +237,7 @@ class PinkyRobotAdapter:
         goal.mode = ExecuteTransport.Goal.MODE_RMF_NAVIGATION
 
         self._node.get_logger().info(
-            f"[{self._robot_name}] RMF {goal.job_id} -> "
+            f"[{self._robot_name}] RMF {context.rmf_task_id} -> "
             f"({position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f})"
         )
         future = self._transport.send_goal_async(goal)
@@ -329,8 +350,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--charger-waypoint", default="충전1")
     parser.add_argument("--status-topic", default="/trihouse/status")
     parser.add_argument("--transport-action", default="/trihouse/transport/execute")
-    parser.add_argument("--map-revision", default="gwanghee-2026-08-12")
+    parser.add_argument("--map-revision", required=True)
     parser.add_argument("--status-timeout", type=float, default=3.0)
+    parser.add_argument("--fms-base-url", default="http://127.0.0.1:8000")
+    parser.add_argument("--fms-timeout", type=float, default=2.0)
     parser.add_argument("--use-sim-time", action="store_true")
     return parser.parse_args(rclpy.utilities.remove_ros_args(argv)[1:])
 
@@ -385,6 +408,8 @@ def main(argv: list[str] | None = None) -> None:
         transport_action=args.transport_action,
         map_revision=args.map_revision,
         status_timeout_s=args.status_timeout,
+        fms_base_url=args.fms_base_url,
+        fms_timeout_s=args.fms_timeout,
     )
     period = max(0.1, fleet_config.update_interval.total_seconds())
     node.create_timer(period, robot.update)

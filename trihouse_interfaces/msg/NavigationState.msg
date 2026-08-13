@@ -6,9 +6,7 @@ uint8 STATE_FAILED=4
 
 builtin_interfaces/Time stamp
 string robot_id
-string goal_id
-string job_id
-string job_step_id
+trihouse_interfaces/TaskContext task_context
 uint8 state
 float32 progress
 geometry_msgs/PoseStamped target_pose

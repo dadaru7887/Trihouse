@@ -18,7 +18,7 @@ def main() -> int:
     if not config_path.is_file():
         raise SystemExit(f"preflight resolved config가 없습니다: {config_path}")
     config = TrainingConfig.from_dict(json.loads(config_path.read_text(encoding="utf-8")))
-    from pipeline.yoloe_backend import YOLOEBackend
+    from trainer.yoloe_trainer import YOLOEBackend
 
     weights = YOLOEBackend().train(config, args.run_dir)
     result = args.run_dir / "train_stage.json"

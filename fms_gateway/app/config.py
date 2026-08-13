@@ -18,6 +18,20 @@ class Settings(BaseSettings):
     pool_size: int = 5
 
 
+class TcpSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="FMS_TCP_", extra="ignore")
+
+    enabled: bool = True
+    host: str = "127.0.0.1"
+    port: int = 8788
+    max_line_bytes: int = 65536
+
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+@lru_cache
+def get_tcp_settings() -> TcpSettings:
+    return TcpSettings()

@@ -19,12 +19,18 @@ class StatusInputs:
     frozen=True이므로 객체가 생성된 뒤에는 필드 값을 변경할 수 없다.
     """
 
-    robot_id: str               # 로봇 고유  식별자
-    job_id: str = ""            # 현재 작업 식별자, 없으면 빈 문자열
+    robot_id: str               # 로봇 고유 식별자
 
     scan_fresh: bool = True     # 라이다 스캔 메시지 수신 여부
     odom_fresh: bool = True     # odometry 메시지 수신 여부
     battery_fresh: bool = True  # 배터리 상태 메시지 수신 여부
+    map_pose_fresh: bool = True
+    nav_available: bool = True
+    control_link_online: bool = True
+    safety_clear: bool = True
+    battery_dispatchable: bool = True
+    maintenance_clear: bool = True
+    cargo_allows_dispatch: bool = True
 
 
 @dataclass(frozen=True)
@@ -37,9 +43,10 @@ class StatusSummary:
     """
 
     robot_id: str
-    job_id: str
-
-    ready: bool                 # 모든 필수 센서가 최신이어서 새 작업을 받을 수 있으면 True다.
+    telemetry_valid: bool
+    execution_ready: bool
+    dispatchable: bool
+    ready: bool                 # 하위 호환 alias이며 dispatchable과 항상 같다.
 
     errors: tuple[str, ...]     # 오래된 센서에 대응하는 오류 이름들을 순서대로 담는다.
 
@@ -57,14 +64,37 @@ def build_status(inputs: StatusInputs) -> StatusSummary:
 
     # 센서별 오류 이름과 최신 여부를 한 쌍으로 묶어 차례대로 검사한다.
     # fresh가 False인 센서의 오류 이름만 tuple에 포함된다.
-    errors = tuple(
+    sensor_errors = tuple(
         name for name, fresh in (
             ("scan_stale", inputs.scan_fresh),
             ("odom_stale", inputs.odom_fresh),
             ("battery_stale", inputs.battery_fresh),
+            ("map_pose_stale", inputs.map_pose_fresh),
         ) if not fresh
     )
-
-    # 빈 tuple은 False로 평가되므로 `not errors`는 오류가 없을 때만 True다.
-    # 로봇·작업 식별자와 계산한 준비 여부 및 오류 목록을 결과로 반환한다.
-    return StatusSummary(inputs.robot_id, inputs.job_id, not errors, errors)
+    execution_errors = tuple(
+        name for name, allowed in (
+            ("nav_unavailable", inputs.nav_available),
+            ("control_link_offline", inputs.control_link_online),
+            ("safety_blocked", inputs.safety_clear),
+        ) if not allowed
+    )
+    dispatch_errors = tuple(
+        name for name, allowed in (
+            ("battery_not_dispatchable", inputs.battery_dispatchable),
+            ("maintenance_blocked", inputs.maintenance_clear),
+            ("cargo_blocks_dispatch", inputs.cargo_allows_dispatch),
+        ) if not allowed
+    )
+    telemetry_valid = not sensor_errors
+    execution_ready = telemetry_valid and not execution_errors
+    dispatchable = execution_ready and not dispatch_errors
+    errors = sensor_errors + execution_errors + dispatch_errors
+    return StatusSummary(
+        inputs.robot_id,
+        telemetry_valid,
+        execution_ready,
+        dispatchable,
+        dispatchable,
+        errors,
+    )

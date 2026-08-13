@@ -49,6 +49,17 @@ def test_invalid_telemetry_controls_rmf_commission() -> None:
     assert "unstable_decommission" in source
     assert "unstable_recommission" in source
     assert "override_status" in source
+    assert "message.dispatchable" in source
+
+
+def test_rmf_navigation_claims_fms_context_without_synthetic_job_ids() -> None:
+    source = _source()
+
+    assert "self._command_claims.claim(" in source
+    assert "goal.task_context" in source
+    assert 'f"rmf:{command_id}"' not in source
+    assert 'f"rmf-nav:{command_id}"' not in source
+    assert 'parser.add_argument("--map-revision", required=True)' in source
 
 
 def test_help_is_parsed_before_ros_logging_initialization() -> None:

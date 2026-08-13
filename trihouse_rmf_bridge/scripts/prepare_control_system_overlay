@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+
+from trihouse_rmf_bridge.control_system_overlay import main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

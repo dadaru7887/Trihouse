@@ -2,7 +2,6 @@
 import os
 from pathlib import Path
 
-import mysql.connector
 import pytest
 
 
@@ -33,6 +32,8 @@ def _connection_options(
 
 def mysql_connection(*, database: str | None = None):
     """Connect as the least-privileged Gateway account used by the application."""
+    import mysql.connector
+
     options = _connection_options(
         user_variable="FMS_DB_USER",
         password_variable="FMS_DB_PASSWORD",
@@ -45,6 +46,8 @@ def mysql_connection(*, database: str | None = None):
 
 def admin_mysql_connection(*, database: str | None = None):
     """Connect as the test-only administrator used for schema reset operations."""
+    import mysql.connector
+
     options = _connection_options(
         user_variable="FMS_DB_ADMIN_USER",
         password_variable="FMS_DB_ADMIN_PASSWORD",

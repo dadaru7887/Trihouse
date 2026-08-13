@@ -19,7 +19,7 @@ def generate_launch_description():
     vendor_bringup = PathJoinSubstitution([FindPackageShare('pinky_bringup'), 'launch', 'bringup_robot.launch.xml'])
     navigation = PathJoinSubstitution([FindPackageShare('pinky_navigation'), 'launch', 'bringup_launch.xml'])
     return LaunchDescription([
-        DeclareLaunchArgument('robot_id', default_value='PK-01'),
+        DeclareLaunchArgument('robot_id', default_value='PK_01'),
         DeclareLaunchArgument('map_revision', default_value=''),
         DeclareLaunchArgument('map', default_value=''),
         DeclareLaunchArgument('control_host', default_value='127.0.0.1'),
@@ -42,7 +42,8 @@ def generate_launch_description():
         Node(package='trihouse_pinky_safety', executable='safety_supervisor', parameters=[{'robot_id': robot_id}]),
         Node(package='trihouse_pinky_bringup', executable='readiness_checker', parameters=[{'robot_id': robot_id}]),
         Node(package='trihouse_pinky_fleet', executable='battery_condition', parameters=[{'robot_id': robot_id}]),
-        Node(package='trihouse_pinky_fleet', executable='status_node', parameters=[{'robot_id': robot_id}]),
+        Node(package='trihouse_pinky_fleet', executable='battery_policy'),
+        Node(package='trihouse_pinky_fleet', executable='status_node', parameters=[{'robot_id': robot_id, 'map_revision': map_revision}]),
         Node(package='trihouse_pinky_fleet', executable='recovery_health', parameters=[{'robot_id': robot_id}]),
         Node(package='trihouse_pinky_fleet', executable='fleet_node', parameters=[{'robot_id': robot_id, 'map_revision': map_revision}]),
         Node(package='trihouse_pinky_fleet', executable='fleet_gateway', parameters=[{'robot_id': robot_id, 'control_host': control_host, 'control_port': control_port}]),

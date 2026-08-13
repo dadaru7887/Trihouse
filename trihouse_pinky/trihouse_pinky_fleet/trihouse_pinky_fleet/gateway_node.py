@@ -4,6 +4,8 @@ import math
 import os
 import re
 from collections import deque
+from time import monotonic
+from uuid import uuid4
 
 import rclpy
 from geometry_msgs.msg import Point32, Quaternion
@@ -17,9 +19,11 @@ from trihouse_interfaces.srv import ClearEmergency
 
 from .measurement_log import MeasurementLogWriter
 from .ndjson_client import NdjsonClient
+from .event_outbox import EventOutbox
 from .protocol import (
     ProtocolError,
     TransportCommand,
+    classify_gateway_response,
     parse_clear_keep_out_zone,
     parse_emergency_command,
     parse_keep_out_zone,
@@ -28,7 +32,11 @@ from .protocol import (
 
 
 def build_robot_status_payload(
-    message: RobotStatus, *, sent_at_ns: int
+    message: RobotStatus,
+    *,
+    sent_at_ns: int,
+    session_id: str = '',
+    sequence: int = 0,
 ) -> dict[str, object]:
     """ROS RobotStatus를 Control Tower용 JSON 객체로 변환한다.
 
@@ -37,13 +45,53 @@ def build_robot_status_payload(
     """
     # 배터리 원본 검증 결과는 BatteryPolicyState 안의 condition에 들어 있다.
     condition = message.battery_policy.condition
+    context = message.task_context
+    pose = message.pose.pose
+    orientation = pose.orientation
+    yaw = math.atan2(
+        2.0 * (
+            orientation.w * orientation.z
+            + orientation.x * orientation.y
+        ),
+        1.0 - 2.0 * (
+            orientation.y * orientation.y
+            + orientation.z * orientation.z
+        ),
+    )
+    twist = message.twist
     return {
         'type': 'robot_status',
-        'schema_version': 1,
+        'schema_version': 3,
         'robot_id': message.robot_id,
         'sent_at_ns': sent_at_ns,
-        'job_id': message.current_job_id,
-        'job_step_id': message.current_job_step_id,
+        'session_id': session_id,
+        'sequence': sequence,
+        'frame_id': message.frame_id,
+        'map_revision': message.map_revision,
+        'pose': {
+            'x': pose.position.x,
+            'y': pose.position.y,
+            'yaw': yaw,
+        },
+        'twist': {
+            'linear_x_mps': twist.linear.x,
+            'angular_z_rps': twist.angular.z,
+        },
+        'navigation_state': message.navigation_state,
+        'task_progress': message.task_progress,
+        'task_context': {
+            'active': context.active,
+            'job_id': context.job_id,
+            'job_step_id': context.job_step_id,
+            'assignment_revision': context.assignment_revision,
+            'rmf_task_id': context.rmf_task_id,
+            'command_id': context.command_id,
+            'map_revision': context.map_revision,
+            'command_source': context.command_source,
+        },
+        'telemetry_valid': message.telemetry_valid,
+        'execution_ready': message.execution_ready,
+        'dispatchable': message.dispatchable,
         'ready': message.ready,
         'battery_percentage': message.battery_percentage,
         'battery_condition': {
@@ -66,6 +114,40 @@ def build_robot_status_payload(
     }
 
 
+def build_task_event_payload(
+    message: TaskEvent, *, session_id: str,
+) -> dict[str, object]:
+    """ROS TaskEvent를 FMS Gateway의 schema v3 wire 계약으로 바꾼다."""
+    event_names = {
+        TaskEvent.EVENT_STARTED: 'started',
+        TaskEvent.EVENT_ARRIVED: 'arrived',
+        TaskEvent.EVENT_CANCELED: 'canceled',
+        TaskEvent.EVENT_FAILED: 'failed',
+    }
+    context = message.task_context
+    return {
+        'type': 'task_event',
+        'schema_version': 3,
+        'event_id': message.event_id,
+        'robot_id': message.robot_id,
+        'session_id': session_id,
+        'task_context': {
+            'active': context.active,
+            'job_id': context.job_id,
+            'job_step_id': context.job_step_id,
+            'assignment_revision': context.assignment_revision,
+            'rmf_task_id': context.rmf_task_id,
+            'command_id': context.command_id,
+            'map_revision': context.map_revision,
+            'command_source': context.command_source,
+        },
+        'event_type': event_names[message.event_type],
+        'reason_code': message.reason_code,
+        'method_code': message.method_code,
+        'detail': message.detail,
+    }
+
+
 def _stream_robot_id(robot_id: str) -> str:
     """로봇 ID를 디렉터리 경로로 해석되지 않는 안전한 파일명 토큰으로 바꾼다."""
     # 영문자·숫자·밑줄·점·하이픈 이외의 문자를 모두 밑줄로 치환한다.
@@ -73,6 +155,53 @@ def _stream_robot_id(robot_id: str) -> str:
     token = re.sub(r"[^A-Za-z0-9_.-]", "_", robot_id).lstrip(".")
     # 모든 문자가 제거되어 빈 값이 되면 예측 가능한 기본 이름을 사용한다.
     return token or "unknown"
+
+
+def _context_identity(context: object) -> tuple[object, ...]:
+    if not isinstance(context, dict):
+        context = {
+            name: getattr(context, name)
+            for name in (
+                'job_id', 'job_step_id', 'assignment_revision', 'rmf_task_id',
+                'command_id', 'map_revision', 'command_source',
+            )
+        }
+    return tuple(
+        context[name]
+        for name in (
+            'job_id', 'job_step_id', 'assignment_revision', 'rmf_task_id',
+            'command_id', 'map_revision', 'command_source',
+        )
+    )
+
+
+def _event_required_navigation_state(event_type: str) -> int | None:
+    return {
+        'started': 1,
+        'arrived': 2,
+        'canceled': 3,
+        'failed': 4,
+    }.get(event_type)
+
+
+def _with_replay_sequence(
+    status_payload: dict[str, object], *, sequence: int, sent_at_ns: int,
+) -> dict[str, object]:
+    replay = dict(status_payload)
+    replay['sequence'] = sequence
+    replay['sent_at_ns'] = sent_at_ns
+    return replay
+
+
+def _status_evidence_is_current(
+    status_payload: dict[str, object], *, runtime_id: str, now: float,
+) -> bool:
+    captured_at = status_payload.get('_captured_monotonic')
+    return (
+        status_payload.get('_runtime_id') == runtime_id
+        and isinstance(captured_at, (int, float))
+        and now - float(captured_at) <= 1.5
+    )
 
 
 class GatewayNode(Node):
@@ -83,7 +212,7 @@ class GatewayNode(Node):
         super().__init__('fleet_gateway')
 
         # 로봇 식별자와 Control Tower TCP endpoint를 launch에서 바꿀 수 있게 한다.
-        self.declare_parameter('robot_id', 'PK-01')
+        self.declare_parameter('robot_id', 'PK_01')
         self.declare_parameter('control_host', '127.0.0.1')
         self.declare_parameter('control_port', 8788)
 
@@ -91,8 +220,30 @@ class GatewayNode(Node):
         self.declare_parameter('measurement_logging_enabled', True)
         self.declare_parameter('measurement_log_root', '')
         self.declare_parameter('measurement_run_id', '')
+        self.declare_parameter(
+            'event_outbox_path',
+            f'/tmp/trihouse_event_outbox_{os.getpid()}.sqlite3',
+        )
+        self.declare_parameter('event_outbox_max_pending', 1000)
 
         self.robot_id = self.get_parameter('robot_id').value
+        self.event_outbox = EventOutbox(
+            self.get_parameter('event_outbox_path').value,
+            max_pending=int(self.get_parameter('event_outbox_max_pending').value),
+        )
+        # session과 sequence는 SQLite에 보존해 event inbox identity를 유지한다.
+        # 단, 과거 terminal RobotStatus는 최신 상태로 replay하지 않고 보류한다.
+        self.session_id = self.event_outbox.session_id
+        self.runtime_id = str(uuid4())
+        self.connected = False
+        self.connection_generation = 0
+        self.status_contexts: dict[
+            int, tuple[int, tuple[object, ...], int]
+        ] = {}
+        self.acked_status_facts: set[tuple[tuple[object, ...], int]] = set()
+        self.latest_status_payloads: dict[tuple[object, ...], dict[str, object]] = {}
+        self.status_evidence_retry_at: dict[tuple[tuple[object, ...], int], float] = {}
+        self.last_event_attempt: dict[str, float] = {}
 
         # 네트워크 thread는 ROS API를 직접 호출하지 않는다. 받은 데이터와 연결
         # 상태를 queue에 넣고, ROS timer callback인 _drain이 안전하게 처리한다.
@@ -116,6 +267,9 @@ class GatewayNode(Node):
 
         # Control Tower 접속 상태를 로봇 내부의 다른 ROS 노드에 알린다.
         self.state_pub = self.create_publisher(ConnectionState, '/trihouse/fms/state', 10)
+        self.outbox_ready_pub = self.create_publisher(
+            Bool, '/trihouse/fms/event_outbox_ready', 10
+        )
 
         # 통합 로봇 상태와 작업 이벤트는 Control Tower로 보내기 위해 구독한다.
         self.create_subscription(RobotStatus, '/trihouse/status', self._status, 10)
@@ -141,9 +295,17 @@ class GatewayNode(Node):
         # 20 Hz로 queue를 비우고, 2초마다 연결 생존 확인 메시지를 보낸다.
         self.create_timer(0.05, self._drain)
         self.create_timer(2.0, self._heartbeat)
+        self.create_timer(0.25, self._flush_event_outbox)
 
     def _publish_link_state(self, connected: bool) -> None:
         """Control Tower 연결 상태를 ROS에 발행하고 접속 직후 로봇을 등록한다."""
+        # ACK는 TCP connection 하나에서만 유효하다. reconnect 때 이전 ACK로
+        # event가 먼저 풀리지 않도록 generation과 모든 volatile 증거를 비운다.
+        self.connection_generation += 1
+        self.status_contexts.clear()
+        self.acked_status_facts.clear()
+        self.status_evidence_retry_at.clear()
+        self.connected = connected
         message = ConnectionState()
         message.stamp = self.get_clock().now().to_msg()
         message.robot_id = self.robot_id
@@ -164,16 +326,36 @@ class GatewayNode(Node):
             self.link.send(
                 {
                     'type': 'hello',
-                    'schema_version': 1,
+                    'schema_version': 3,
                     'robot_id': self.robot_id,
+                    'session_id': self.session_id,
                 }
             )
 
     def _status(self, message: RobotStatus) -> None:
         """최신 RobotStatus를 관제로 보내고 같은 내용을 배터리 측정 파일에 남긴다."""
+        status_sequence = self.event_outbox.next_status_sequence()
         payload = build_robot_status_payload(
-            message, sent_at_ns=self.get_clock().now().nanoseconds
+            message,
+            sent_at_ns=self.get_clock().now().nanoseconds,
+            session_id=self.session_id,
+            sequence=status_sequence,
         )
+        if message.task_context.active:
+            context = _context_identity(payload['task_context'])
+            decorated_payload = {
+                **payload,
+                '_runtime_id': self.runtime_id,
+                '_captured_monotonic': monotonic(),
+            }
+            self.latest_status_payloads[context] = decorated_payload
+            self.event_outbox.attach_status_evidence(decorated_payload)
+            if self.connected:
+                self.status_contexts[status_sequence] = (
+                    self.connection_generation,
+                    context,
+                    int(payload['navigation_state']),
+                )
 
         # 연결이 끊겨 있으면 NdjsonClient.send가 조용히 반환하고 다음 상태를 기다린다.
         self.link.send(payload)
@@ -192,26 +374,69 @@ class GatewayNode(Node):
 
     def _task_event(self, message: TaskEvent) -> None:
         """로봇에서 발생한 작업 단계 이벤트를 Control Tower에 전달한다."""
-        self.link.send(
-            {
-                'type': 'task_event',
-                'schema_version': 1,
-                'message_id': message.event_id,
-                'robot_id': message.robot_id,
-                'job_id': message.job_id,
-                'job_step_id': message.job_step_id,
-                'event_type': message.event_type,
-                'detail': message.detail,
-            }
+        payload = build_task_event_payload(message, session_id=self.session_id)
+        self.event_outbox.enqueue(
+            payload,
+            status_payload=(
+                self.latest_status_payloads[
+                    _context_identity(payload['task_context'])
+                ]
+                if _context_identity(payload['task_context'])
+                in self.latest_status_payloads else None
+            ),
         )
+
+    def _flush_event_outbox(self) -> None:
+        """matching RobotStatus ACK 뒤에만 미확인 event를 같은 ID로 재전송한다."""
+        self.outbox_ready_pub.publish(Bool(data=not self.event_outbox.is_full))
+        if not self.connected:
+            return
+        now = monotonic()
+        for payload, status_payload in self.event_outbox.pending_records():
+            event_id = str(payload['event_id'])
+            context = _context_identity(payload['task_context'])
+            expected_state = _event_required_navigation_state(
+                str(payload.get('event_type', ''))
+            )
+            if expected_state is None or status_payload is None:
+                continue
+            if not _status_evidence_is_current(
+                status_payload, runtime_id=self.runtime_id, now=now,
+            ):
+                continue
+            if (context, expected_state) not in self.acked_status_facts:
+                retry_key = (context, expected_state)
+                if now - self.status_evidence_retry_at.get(retry_key, 0.0) >= 0.25:
+                    sequence = self.event_outbox.next_status_sequence()
+                    wire_status = {
+                        key: value for key, value in status_payload.items()
+                        if not key.startswith('_')
+                    }
+                    replay_payload = _with_replay_sequence(
+                        wire_status,
+                        sequence=sequence,
+                        sent_at_ns=self.get_clock().now().nanoseconds,
+                    )
+                    self.status_contexts[sequence] = (
+                        self.connection_generation, context, expected_state,
+                    )
+                    self.link.send(replay_payload)
+                    self.status_evidence_retry_at[retry_key] = now
+                continue
+            if now - self.last_event_attempt.get(event_id, 0.0) < 1.0:
+                continue
+            self.link.send(payload)
+            self.event_outbox.mark_attempted(event_id)
+            self.last_event_attempt[event_id] = now
 
     def _heartbeat(self) -> None:
         """상태 변화가 없어도 연결 생존 여부를 확인할 heartbeat를 보낸다."""
         self.link.send(
             {
                 'type': 'heartbeat',
-                'schema_version': 1,
+                'schema_version': 3,
                 'robot_id': self.robot_id,
+                'session_id': self.session_id,
             }
         )
 
@@ -224,6 +449,35 @@ class GatewayNode(Node):
         # Control Tower에서 받은 JSON 명령을 종류별 handler로 분기한다.
         while self.inbox:
             payload = self.inbox.popleft()
+            response_kind = classify_gateway_response(payload)
+            if response_kind == 'ack':
+                if payload.get('action') == 'robot_status':
+                    sequence = payload.get('sequence')
+                    if isinstance(sequence, int):
+                        evidence = self.status_contexts.pop(sequence, None)
+                        if (
+                            evidence is not None
+                            and evidence[0] == self.connection_generation
+                        ):
+                            self.acked_status_facts.add((evidence[1], evidence[2]))
+                elif payload.get('action') == 'task_event':
+                    event_id = payload.get('event_id')
+                    if isinstance(event_id, str):
+                        self.event_outbox.acknowledge(event_id)
+                        self.last_event_attempt.pop(event_id, None)
+                continue
+            if response_kind == 'event_rejected':
+                event_id = payload.get('event_id')
+                if isinstance(event_id, str):
+                    self.event_outbox.reject(
+                        event_id, str(payload.get('reason_code', 'UNKNOWN'))
+                    )
+                    self.last_event_attempt.pop(event_id, None)
+                self.get_logger().error(
+                    'FMS rejected telemetry/event: '
+                    f"{payload.get('reason_code', 'UNKNOWN')}"
+                )
+                continue
             if payload.get('type') in ('emergency_request', 'clear_emergency'):
                 self._handle_emergency(payload)
                 continue
@@ -255,6 +509,17 @@ class GatewayNode(Node):
                         'robot_id': self.robot_id,
                         'message_id': command.message_id,
                         'duplicate': True,
+                    }
+                )
+                continue
+
+            if self.event_outbox.is_full:
+                self.link.send(
+                    {
+                        'type': 'command_rejected',
+                        'robot_id': self.robot_id,
+                        'message_id': command.message_id,
+                        'detail': 'task event outbox capacity reached',
                     }
                 )
                 continue
@@ -448,10 +713,15 @@ class GatewayNode(Node):
             return
 
         goal = ExecuteTransport.Goal()
-        goal.command_id = command.message_id
-        goal.job_id = command.job_id
-        goal.job_step_id = command.job_step_id
-        goal.map_revision = command.map_revision
+        context = command.task_context
+        goal.task_context.active = context.active
+        goal.task_context.job_id = context.job_id
+        goal.task_context.job_step_id = context.job_step_id
+        goal.task_context.assignment_revision = context.assignment_revision
+        goal.task_context.rmf_task_id = context.rmf_task_id
+        goal.task_context.command_id = context.command_id
+        goal.task_context.map_revision = context.map_revision
+        goal.task_context.command_source = context.command_source
         goal.dropoff_location_id = command.dropoff_location_id
         goal.destination_code = command.destination_code
         goal.requires_precise_stop = command.requires_precise_stop

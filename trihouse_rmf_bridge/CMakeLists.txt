@@ -63,6 +63,12 @@ if(BUILD_TESTING)
     test_pinky_fleet_config test/test_pinky_fleet_config.py TIMEOUT 30)
   ament_add_pytest_test(
     test_pinky_rmf_gazebo_launch test/test_pinky_rmf_gazebo_launch.py TIMEOUT 30)
+  ament_add_pytest_test(
+    test_fms_command_claim test/test_fms_command_claim.py TIMEOUT 30)
+  ament_add_pytest_test(
+    test_control_system_overlay test/test_control_system_overlay.py TIMEOUT 30)
+  ament_add_pytest_test(
+    test_control_system_rmf_launch test/test_control_system_rmf_launch.py TIMEOUT 30)
 endif()
 
 install(DIRECTORY include/ DESTINATION include)
@@ -70,7 +76,9 @@ install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME}
   PATTERN "__pycache__" EXCLUDE
   PATTERN "*.pyc" EXCLUDE)
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
-install(PROGRAMS scripts/pinky_easy_fleet_adapter
+install(PROGRAMS
+  scripts/pinky_easy_fleet_adapter
+  scripts/prepare_control_system_overlay
   DESTINATION lib/${PROJECT_NAME})
 install(TARGETS fleet_state_store energy_estimator trihouse_rmf_bridge_node
   ARCHIVE DESTINATION lib

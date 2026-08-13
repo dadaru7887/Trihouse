@@ -20,7 +20,7 @@ class SafetySupervisor(Node):
     """The only operational publisher for the motor `/cmd_vel` topic."""
     def __init__(self) -> None:
         super().__init__('safety_supervisor')
-        self.declare_parameter('robot_id', 'PK-01')
+        self.declare_parameter('robot_id', 'PK_01')
         self.declare_parameter('sensor_timeout_s', 0.5)
         self.declare_parameter('stop_distance_m', 0.30)
         self.declare_parameter('slow_distance_m', 0.70)

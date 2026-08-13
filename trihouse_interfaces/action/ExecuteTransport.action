@@ -1,7 +1,4 @@
-string command_id
-string job_id
-string job_step_id
-string map_revision
+trihouse_interfaces/TaskContext task_context
 string pickup_location_id
 string dropoff_location_id
 string destination_code

@@ -21,7 +21,7 @@ def main() -> int:
         raise SystemExit(f"preflight resolved config가 없습니다: {config_path}")
     config = TrainingConfig.from_dict(json.loads(config_path.read_text(encoding="utf-8")))
     weights = args.weights or args.run_dir / "train/weights/best.pt"
-    from pipeline.yoloe_backend import YOLOEBackend
+    from trainer.yoloe_trainer import YOLOEBackend
 
     metrics = YOLOEBackend().evaluate(weights, args.split, config, args.run_dir)
     output = args.run_dir / "evaluation" / f"{args.split}_metrics.json"

@@ -20,6 +20,6 @@ COPY . /app/fms_gateway
 
 USER trihouse
 
-EXPOSE 8080
+EXPOSE 8080 8788
 
 CMD ["python", "-m", "uvicorn", "fms_gateway.app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]

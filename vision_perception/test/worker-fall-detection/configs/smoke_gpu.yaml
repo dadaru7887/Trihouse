@@ -28,5 +28,5 @@ evaluation:
 output:
   run_root: runs/lego_worker_smoke
 selection:
-  metric: mask_map50_95
-  tie_breaker: mask_recall
+  metric: person_mask_map50_95
+  tie_breaker: person_mask_recall

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from pipeline.config_loader import config_for_seed, load_experiment_config
 from pipeline.orchestrator import run_pipeline
-from pipeline.yoloe_backend import YOLOEBackend
+from trainer.yoloe_trainer import YOLOEBackend
 
 
 def main() -> None:

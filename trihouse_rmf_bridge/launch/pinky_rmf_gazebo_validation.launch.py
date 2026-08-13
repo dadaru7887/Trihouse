@@ -30,7 +30,7 @@ def generate_launch_description() -> LaunchDescription:
 
     return LaunchDescription(
         [
-            DeclareLaunchArgument("robot_name", default_value="PK-01"),
+            DeclareLaunchArgument("robot_name", default_value="PK_01"),
             DeclareLaunchArgument("rmf_map_name", default_value="L1"),
             DeclareLaunchArgument("charger_waypoint", default_value="충전1"),
             DeclareLaunchArgument(
@@ -42,6 +42,7 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("start_rmf_core", default_value="true"),
             DeclareLaunchArgument("control_host", default_value="127.0.0.1"),
             DeclareLaunchArgument("control_port", default_value="8788"),
+            DeclareLaunchArgument("fms_base_url", default_value="http://127.0.0.1:8080"),
             DeclareLaunchArgument("battery_percentage", default_value="1.0"),
             DeclareLaunchArgument("charging", default_value="false"),
             DeclareLaunchArgument(
@@ -98,6 +99,7 @@ def generate_launch_description() -> LaunchDescription:
                     ),
                     "map_revision": LaunchConfiguration("map_revision"),
                     "use_sim_time": use_sim_time,
+                    "fms_base_url": LaunchConfiguration("fms_base_url"),
                 }.items(),
             ),
         ]

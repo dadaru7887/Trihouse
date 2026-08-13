@@ -6,15 +6,25 @@ INSERT INTO locations
    map_name, rmf_waypoint_name, pose_x, pose_y, pose_yaw, state)
 VALUES
   ('A-SLOT-01', '상온 랙 슬롯 1', 'slot', 'ambient', 'ambient',
-   'warehouse', 'A_SLOT_01', 4.0, 3.0, 0.0, 'available'),
+   'project1', '픽업1', 4.0, 3.0, 0.0, 'available'),
   ('OUT-DOCK-01', '출고 도크 1', 'outbound_dock', 'outbound', NULL,
-   'warehouse', 'OUT_DOCK_01', 28.0, 6.0, 0.0, 'available'),
+   'project1', '드랍오프1', 28.0, 6.0, 0.0, 'available'),
   ('CHG-01', 'Pinky 충전기 1', 'charger', 'ambient', NULL,
-   'warehouse', 'CHG_01', 2.0, 2.0, 3.141593, 'available'),
+   'project1', '충전1', 2.0, 2.0, 3.141593, 'available'),
+  ('CHG-02', 'Pinky 충전기 2', 'charger', 'ambient', NULL,
+   'project1', '충전2', 2.5, 2.0, 3.141593, 'available'),
+  ('IN-WAIT-01', '입고 대기점 1', 'staging', 'ambient', NULL,
+   'project1', '대기1', NULL, NULL, NULL, 'available'),
+  ('NARROW-WAIT-01', '협로 대기점 1', 'staging', 'ambient', NULL,
+   'project1', '대기3', NULL, NULL, NULL, 'available'),
   ('OMX-WS-01', 'OMX 인계 작업장 1', 'workstation', 'ambient', 'ambient',
-   'warehouse', 'OMX_WS_01', 18.0, 6.0, 0.0, 'available')
+   'project1', '설비1', 18.0, 6.0, 0.0, 'available'),
+  ('OMX-WS-02', 'OMX 인계 작업장 2', 'workstation', 'ambient', 'ambient',
+   'project1', '설비2', NULL, NULL, NULL, 'available')
 ON DUPLICATE KEY UPDATE
   name = VALUES(name),
+  map_name = VALUES(map_name),
+  rmf_waypoint_name = VALUES(rmf_waypoint_name),
   state = VALUES(state);
 
 INSERT INTO workers
@@ -34,28 +44,31 @@ INSERT INTO devices
   (device_id, device_type, name, model, fleet_name, home_location_id,
    current_location_id, control_mode, active, capabilities, registered_at)
 VALUES
-  ('PINKY-01', 'mobile', 'Pinky-Pro #1', 'Pinky-Pro', 'pinky_fleet',
+  ('PK_01', 'mobile', 'Pinky-Pro #1', 'Pinky-Pro', 'project1_pinky',
    (SELECT location_id FROM locations WHERE location_code = 'CHG-01'),
    (SELECT location_id FROM locations WHERE location_code = 'CHG-01'),
-   'automatic', 1, JSON_OBJECT('navigation', true, 'rmf', true),
+   'automatic', 1, JSON_OBJECT('navigation', true, 'rmf', true,
+     'rmf_robot_name', 'PK_01'),
    '2026-08-03 09:00:00.000000'),
-  ('PINKY-02', 'mobile', 'Pinky-Pro #2', 'Pinky-Pro', 'pinky_fleet',
-   (SELECT location_id FROM locations WHERE location_code = 'CHG-01'),
-   (SELECT location_id FROM locations WHERE location_code = 'CHG-01'),
-   'automatic', 1, JSON_OBJECT('navigation', true, 'rmf', true),
+  ('PK_02', 'mobile', 'Pinky-Pro #2', 'Pinky-Pro', 'project1_pinky',
+   (SELECT location_id FROM locations WHERE location_code = 'CHG-02'),
+   (SELECT location_id FROM locations WHERE location_code = 'CHG-02'),
+   'automatic', 1, JSON_OBJECT('navigation', true, 'rmf', true,
+     'rmf_robot_name', 'PK_02'),
    '2026-08-03 09:00:00.000000'),
-  ('OMX-01', 'arm', 'OMX-AI #1', 'OMX-AI', 'omx_fleet',
+  ('OMX_01', 'arm', 'OMX-AI #1', 'OMX-AI', NULL,
    (SELECT location_id FROM locations WHERE location_code = 'OMX-WS-01'),
    (SELECT location_id FROM locations WHERE location_code = 'OMX-WS-01'),
    'automatic', 1, JSON_OBJECT('pick', true, 'place', true),
    '2026-08-03 09:00:00.000000'),
-  ('OMX-02', 'arm', 'OMX-AI #2', 'OMX-AI', 'omx_fleet',
-   (SELECT location_id FROM locations WHERE location_code = 'OMX-WS-01'),
-   (SELECT location_id FROM locations WHERE location_code = 'OMX-WS-01'),
+  ('OMX_02', 'arm', 'OMX-AI #2', 'OMX-AI', NULL,
+   (SELECT location_id FROM locations WHERE location_code = 'OMX-WS-02'),
+   (SELECT location_id FROM locations WHERE location_code = 'OMX-WS-02'),
    'automatic', 1, JSON_OBJECT('pick', true, 'place', true),
    '2026-08-03 09:00:00.000000')
 ON DUPLICATE KEY UPDATE
   name = VALUES(name),
+  fleet_name = VALUES(fleet_name),
   active = VALUES(active),
   capabilities = VALUES(capabilities);
 
@@ -63,13 +76,13 @@ INSERT INTO device_states
   (device_id, observed_at, state, health, pose_x, pose_y, pose_yaw,
    battery_pct, progress, details)
 VALUES
-  ('PINKY-01', '2026-08-03 09:00:00.000000', 'idle', 'ok',
+  ('PK_01', '2026-08-03 09:00:00.000000', 'idle', 'ok',
    2.0, 2.0, 3.141593, 92.00, 0.0000, JSON_OBJECT('source', 'dev_seed')),
-  ('PINKY-02', '2026-08-03 09:00:00.000000', 'idle', 'ok',
+  ('PK_02', '2026-08-03 09:00:00.000000', 'idle', 'ok',
    2.5, 2.0, 3.141593, 88.00, 0.0000, JSON_OBJECT('source', 'dev_seed')),
-  ('OMX-01', '2026-08-03 09:00:00.000000', 'idle', 'ok',
+  ('OMX_01', '2026-08-03 09:00:00.000000', 'idle', 'ok',
    NULL, NULL, NULL, NULL, 0.0000, JSON_OBJECT('source', 'dev_seed')),
-  ('OMX-02', '2026-08-03 09:00:00.000000', 'idle', 'ok',
+  ('OMX_02', '2026-08-03 09:00:00.000000', 'idle', 'ok',
    NULL, NULL, NULL, NULL, 0.0000, JSON_OBJECT('source', 'dev_seed'))
 ON DUPLICATE KEY UPDATE
   observed_at = VALUES(observed_at),
@@ -103,7 +116,7 @@ VALUES
    '00000000-0000-0000-0000-000000000001',
    (SELECT location_id FROM locations WHERE location_code = 'A-SLOT-01'),
    (SELECT location_id FROM locations WHERE location_code = 'OUT-DOCK-01'),
-   '2026-08-03 10:00:00.000000', 'PINKY-01',
+   '2026-08-03 10:00:00.000000', 'PK_01',
    JSON_OBJECT('source', 'dev_seed'), '2026-08-03 09:05:00.000000')
 ON DUPLICATE KEY UPDATE
   priority = VALUES(priority),
@@ -128,7 +141,7 @@ INSERT INTO job_steps
   (job_id, step_no, executor_type, assigned_device_id, action_type,
    target_location_id, state, input)
 SELECT
-  j.job_id, 1, 'mobile', 'PINKY-01', 'navigate',
+  j.job_id, 1, 'mobile', 'PK_01', 'navigate',
   target.location_id, 'pending', JSON_OBJECT('source', 'dev_seed')
 FROM jobs j
 JOIN locations target ON target.location_code = 'A-SLOT-01'

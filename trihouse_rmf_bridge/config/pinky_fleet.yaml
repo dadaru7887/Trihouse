@@ -2,7 +2,7 @@
 # physical_validation_required: footprint, 속도/가속도, 배터리/기계 계수는
 # 2026-08-12 실측 뒤 보수적인 방향으로 보정해야 한다.
 rmf_fleet:
-  name: "pinky_fleet"
+  name: "project1_pinky"
   limits:
     # Nav2 현재 max_velocity 0.25 m/s를 초과하지 않는 초기값이다.
     linear: [0.250, 0.500]
@@ -11,7 +11,7 @@ rmf_fleet:
     # Nav2 0.12 m 정사각 footprint의 외접 반경을 올림한 값이다.
     footprint: 0.090
     vicinity: 0.150
-  reversible: true
+  reversible: false
   battery_system:
     voltage: 12.000
     capacity: 24.000
@@ -36,9 +36,11 @@ rmf_fleet:
   responsive_wait: true
   reassign_task_interval: 120
   robots:
-    PK-01:
+    PK_01:
       # 현재 gwanghee navigation graph의 is_charger waypoint 이름과 동일하다.
       charger: "충전1"
+    PK_02:
+      charger: "충전2"
 
 fleet_manager:
   ip: "127.0.0.1"

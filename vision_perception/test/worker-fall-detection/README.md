@@ -4,6 +4,41 @@ LEGO를 `person`으로 segmentation하는 YOLOE 모델을 학습·평가하는 P
 
 현재 데이터셋은 `/home/syw/Trihouse/dataset/raw_examples/data.yaml`이며 `obstacle=0`, `person=1`이다. 감사 결과 train에는 수평 mask 후보가 있지만 valid/test에는 명백한 fallen 후보가 없다. 따라서 지금 실행은 `--allow-posture-gap`을 붙인 **LEGO 검출·segmentation 학습**이고, 낙상 성능 검증 완료를 의미하지 않는다.
 
+## 코드 흐름
+
+```text
+main.py
+  → dataloader/   dataset 로딩, 계약 검증, label 품질·분포 분석
+  → trainer/      YOLOE adapter와 multi-seed experiment 실행
+  → evaluation/   box instance 및 mask pixel 지표 계산
+  → analysis/     seed 비교, 학습 정체 진단, 표와 PNG 대시보드
+  → pipeline/     config, device, 환경 기록, 재현성, run lifecycle
+```
+
+`pipeline/dataset_audit.py`와 `pipeline/yoloe_backend.py`는 이전 import 사용자를 위한 호환 shim이다. 실제 구현은 각각 `dataloader/audit.py`, `trainer/yoloe_trainer.py`에 있다.
+
+라벨 분석:
+
+```bash
+venv/yolo_segmentation/bin/python \
+  vision_perception/test/worker-fall-detection/main.py labels \
+  --config vision_perception/test/worker-fall-detection/configs/config.yaml
+```
+
+학습 완료 결과 분석:
+
+```bash
+venv/yolo_segmentation/bin/python \
+  vision_perception/test/worker-fall-detection/main.py analyze \
+  --experiment-dir runs/lego_worker/lego_yoloe_multiseed/<실험시각>
+```
+
+`analysis/`에는 `seed_performance.csv`, `performance_report.json/md`, `seed_dashboard.png`, `training_curves.png`가 생성된다. 새 multi-seed 학습은 종료 시 이 분석을 자동 실행한다.
+
+Segmentation의 핵심 지표는 person mask mAP50-95, mAP50, recall, precision과 F1이다. box confusion matrix에서는 person TP/FP/FN, precision/recall/F1을 계산한다. mask IoU와 Dice/F1은 pixel overlap 품질을 나타낸다. Pixel accuracy는 넓은 배경 때문에 높게 보일 수 있으므로 보조 지표로만 사용한다.
+
+현재 raw dataset의 person instance는 train/valid/test 각각 129/28/26개이며, bbox 면적이 전체 이미지의 1% 미만인 small person이 69/18/19개다. 이 small-object 비율과 작은 validation 표본은 seed별 변동 및 성능 정체의 주요 점검 대상이다.
+
 ## 1. Python 3.12 / CUDA 12.8 환경
 
 Docker는 아직 만들지 않는다. 아래 스크립트가 저장소의 `venv/yolo_segmentation`에 Python 3.12 venv와 PyTorch cu128, Ultralytics를 설치한다.

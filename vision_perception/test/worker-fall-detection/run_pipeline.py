@@ -26,7 +26,7 @@ def main() -> int:
         if config.preflight_only:
             backend = _UnusedBackend()
         else:
-            from pipeline.yoloe_backend import YOLOEBackend
+            from trainer.yoloe_trainer import YOLOEBackend
             backend = YOLOEBackend()
         run_dir = run_pipeline(config, backend)
     except (DatasetAuditError, PipelineError, ValueError, ImportError, RuntimeError) as error:

@@ -16,7 +16,7 @@ from .readiness import ReadinessInputs, evaluate_readiness
 class ReadinessChecker(Node):
     def __init__(self) -> None:
         super().__init__('readiness_checker')
-        self.declare_parameter('robot_id', 'PK-01'); self.declare_parameter('sensor_timeout_s', 1.0)
+        self.declare_parameter('robot_id', 'PK_01'); self.declare_parameter('sensor_timeout_s', 1.0)
         self.robot_id = self.get_parameter('robot_id').value
         self.timeout = float(self.get_parameter('sensor_timeout_s').value)
         self.last_scan, self.last_odom = 0.0, 0.0

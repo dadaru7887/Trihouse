@@ -42,6 +42,10 @@ venv/
 htmlcov/
 runtime/
 
+# Local Git clone used to validate and promote control_system integration.
+# Its changes are tracked by control_system_test/.git, not this repository.
+/control_system_test/
+
 # Python
 __pycache__/
 *.py[cod]

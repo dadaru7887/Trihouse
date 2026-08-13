@@ -8,12 +8,32 @@ class ProtocolError(ValueError):
     pass
 
 
+def classify_gateway_response(payload: dict[str, Any]) -> str:
+    """FMS TCP 응답이 실행 명령으로 재해석되는 ACK loop를 차단한다."""
+    message_type = payload.get('type')
+    if message_type == 'ack':
+        return 'ack'
+    if message_type == 'event_rejected':
+        return 'event_rejected'
+    return 'command'
+
+
+@dataclass(frozen=True)
+class TaskContextCommand:
+    active: bool
+    job_id: int
+    job_step_id: int
+    assignment_revision: int
+    rmf_task_id: str
+    command_id: str
+    map_revision: str
+    command_source: str
+
+
 @dataclass(frozen=True)
 class TransportCommand:
     message_id: str
-    job_id: str
-    job_step_id: str
-    map_revision: str
+    task_context: TaskContextCommand
     dropoff_location_id: str
     destination_code: str
     frame_id: str
@@ -49,9 +69,26 @@ class ClearKeepOutZoneCommand:
 
 
 def parse_transport_command(payload: dict[str, Any]) -> TransportCommand:
-    required = ('message_id', 'job_id', 'job_step_id', 'map_revision', 'dropoff_location_id', 'destination_code', 'dropoff_pose')
+    required = ('message_id', 'task_context', 'dropoff_location_id', 'destination_code', 'dropoff_pose')
     if payload.get('type') != 'execute_transport' or any(not payload.get(key) for key in required):
         raise ProtocolError('execute_transport has missing required fields')
+    context = payload['task_context']
+    context_required = (
+        'job_id', 'job_step_id', 'assignment_revision', 'command_id',
+        'map_revision', 'command_source',
+    )
+    if not isinstance(context, dict) or not context.get('active') or any(
+        context.get(key) in (None, '') for key in context_required
+    ):
+        raise ProtocolError('execute_transport requires an active task_context')
+    try:
+        job_id = int(context['job_id'])
+        job_step_id = int(context['job_step_id'])
+        assignment_revision = int(context['assignment_revision'])
+    except (TypeError, ValueError) as error:
+        raise ProtocolError('task_context numeric identifiers are invalid') from error
+    if job_id <= 0 or job_step_id <= 0 or assignment_revision <= 0:
+        raise ProtocolError('task_context identifiers must be positive')
     pose = payload['dropoff_pose']
     if not isinstance(pose, dict) or any(key not in pose for key in ('frame_id', 'x', 'y', 'yaw')):
         raise ProtocolError('dropoff_pose requires frame_id, x, y, yaw')
@@ -62,7 +99,13 @@ def parse_transport_command(payload: dict[str, Any]) -> TransportCommand:
         raise ProtocolError('unsupported transport mode')
     try:
         return TransportCommand(
-            str(payload['message_id']), str(payload['job_id']), str(payload['job_step_id']), str(payload['map_revision']),
+            str(payload['message_id']),
+            TaskContextCommand(
+                True, job_id, job_step_id, assignment_revision,
+                str(context.get('rmf_task_id', '')),
+                str(context['command_id']), str(context['map_revision']),
+                str(context['command_source']),
+            ),
             str(payload['dropoff_location_id']), str(payload['destination_code']), 'map', float(pose['x']), float(pose['y']), float(pose['yaw']), mode, bool(payload.get('requires_precise_stop', False)),
         )
     except (TypeError, ValueError) as error:

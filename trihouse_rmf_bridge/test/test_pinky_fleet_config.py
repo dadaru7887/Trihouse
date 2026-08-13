@@ -22,8 +22,33 @@ def test_pinky_fleet_has_battery_and_safe_profile_defaults() -> None:
     assert fleet["publish_fleet_state"] > 0
 
 
-def test_single_pinky_has_a_named_charger() -> None:
+def test_project1_fleet_exposes_no_actions_and_is_not_reversible() -> None:
+    fleet = _fleet()
+
+    assert fleet["name"] == "project1_pinky"
+    assert fleet["actions"] == []
+    assert fleet["reversible"] is False
+
+
+def test_two_canonical_pinkies_have_distinct_named_chargers() -> None:
     robots = _fleet()["robots"]
 
-    assert list(robots) == ["PK-01"]
-    assert robots["PK-01"]["charger"] == "충전1"
+    assert robots == {
+        "PK_01": {"charger": "충전1"},
+        "PK_02": {"charger": "충전2"},
+    }
+
+
+def test_runtime_fleet_config_contains_no_legacy_registry_names() -> None:
+    config = CONFIG.read_text(encoding="utf-8")
+
+    for legacy_name in (
+        "pinky_fleet",
+        "PINKY-01",
+        "PINKY-02",
+        "PK-01",
+        "PK-02",
+        "OMX-01",
+        "OMX-02",
+    ):
+        assert legacy_name not in config

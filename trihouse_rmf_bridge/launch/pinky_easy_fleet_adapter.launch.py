@@ -30,6 +30,10 @@ def generate_launch_description() -> LaunchDescription:
         LaunchConfiguration("robot_status_topic"),
         "--transport-action",
         LaunchConfiguration("transport_action"),
+        "--fms-base-url",
+        LaunchConfiguration("fms_base_url"),
+        "--fms-timeout",
+        LaunchConfiguration("fms_timeout"),
     ]
 
     return LaunchDescription(
@@ -40,14 +44,16 @@ def generate_launch_description() -> LaunchDescription:
                 "nav_graph",
                 description="실물 map revision과 일치하는 RMF navigation graph YAML",
             ),
-            DeclareLaunchArgument("robot_name", default_value="PK-01"),
+            DeclareLaunchArgument("robot_name", default_value="PK_01"),
             DeclareLaunchArgument("rmf_map_name", default_value="L1"),
             DeclareLaunchArgument("charger_waypoint", default_value="충전1"),
-            DeclareLaunchArgument("map_revision", default_value="gwanghee-2026-08-12"),
+            DeclareLaunchArgument("map_revision"),
             DeclareLaunchArgument("robot_status_topic", default_value="/trihouse/status"),
             DeclareLaunchArgument(
                 "transport_action", default_value="/trihouse/transport/execute"
             ),
+            DeclareLaunchArgument("fms_base_url", default_value="http://127.0.0.1:8080"),
+            DeclareLaunchArgument("fms_timeout", default_value="2.0"),
             Node(
                 package="trihouse_rmf_bridge",
                 executable="pinky_easy_fleet_adapter",

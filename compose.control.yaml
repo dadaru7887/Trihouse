@@ -22,9 +22,16 @@ services:
       FMS_DB_PASSWORD: ${FMS_DB_PASSWORD}
       FMS_DB_POOL_SIZE: ${FMS_DB_POOL_SIZE:-5}
 
+      # Pinky Gateway NDJSON ingestion. Container 안에서는 모든 interface로
+      # listen하고, host publish 주소는 아래 FMS_TCP_HOST로 제한한다.
+      FMS_TCP_ENABLED: ${FMS_TCP_ENABLED:-true}
+      FMS_TCP_HOST: 0.0.0.0
+      FMS_TCP_PORT: 8788
+
     # Bind the API to the current host by default during local development.
     ports:
       - "${FMS_API_HOST:-127.0.0.1}:${FMS_API_PORT:-8080}:8080"
+      - "${FMS_TCP_HOST:-127.0.0.1}:${FMS_TCP_PORT:-8788}:8788"
 
     # The Gateway is the only application attached to both DB and API networks.
     networks:

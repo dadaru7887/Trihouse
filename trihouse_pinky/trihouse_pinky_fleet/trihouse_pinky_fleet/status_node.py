@@ -13,9 +13,12 @@ from trihouse_interfaces.msg import (
     BatteryCondition,
     BatteryPolicyState,
     CargoState,
+    ConnectionState,
     NavigationState,
+    Readiness,
     RobotStatus,
     SafetyState,
+    TaskContext,
 )
 
 from .status import StatusInputs, build_status
@@ -29,9 +32,11 @@ class StatusNode(Node):
 
         super().__init__('status_node')                     # 노드명
 
-        self.declare_parameter('robot_id', 'PK-01')         # 로봇 식별자
+        self.declare_parameter('robot_id', 'PK_01')         # 로봇 식별자
+        self.declare_parameter('map_revision', '')
         self.declare_parameter('sensor_timeout_s', 1.5)     # 센서 타임아웃(초)
         self.robot_id = self.get_parameter('robot_id').value
+        self.map_revision = self.get_parameter('map_revision').value
         self.timeout = float(self.get_parameter('sensor_timeout_s').value)
 
         # 각 센서 메시지를 마지막으로 받은 monotonic 시각; 초기 상태는 0.0 -> stale
@@ -41,9 +46,9 @@ class StatusNode(Node):
         self.map_pose: PoseWithCovarianceStamped | None = None
         self.battery = 0.0
 
-        # 작업 식별자
-        self.job_id = ''
-        self.step_id = ''
+        self.task_context = TaskContext()
+        self.nav_available = False
+        self.control_link_online = False
 
         # 초기 주행 상태
         self.navigation_state = NavigationState.STATE_IDLE      # 대기
@@ -63,6 +68,8 @@ class StatusNode(Node):
         self.create_subscription(CargoState, '/trihouse/cargo/state', self._cargo, 10)
         self.create_subscription(BatteryPolicyState, '/trihouse/battery/policy_state', lambda m: setattr(self, 'battery_policy', m), 10)
         self.create_subscription(NavigationState, '/trihouse/navigation/state', self._navigation, 10)
+        self.create_subscription(Readiness, '/trihouse/readiness', self._readiness, 10)
+        self.create_subscription(ConnectionState, '/trihouse/fms/state', self._connection, 10)
 
         self.publisher = self.create_publisher(RobotStatus, '/trihouse/status', 10)
 
@@ -105,9 +112,7 @@ class StatusNode(Node):
 
     def _navigation(self, message: NavigationState) -> None:
         """최신 작업 및 주행 상태를 저장하고 통합 상태를 즉시 발행한다."""
-        # NavigationState에 포함된 현재 작업과 세부 단계 ID를 저장한다.
-        self.job_id = message.job_id
-        self.step_id = message.job_step_id
+        self.task_context = message.task_context
 
         # 주행 상태 상수와 작업 진행률을 저장한다.
         self.navigation_state = message.state
@@ -115,6 +120,23 @@ class StatusNode(Node):
 
         # 주행 상태 변경을 중앙 시스템이 바로 알 수 있도록 즉시 발행한다.
         self._publish()
+        if message.state in (
+            NavigationState.STATE_SUCCEEDED,
+            NavigationState.STATE_CANCELED,
+            NavigationState.STATE_FAILED,
+        ):
+            # terminal 상태가 한 번 관측된 뒤 다음 heartbeat는 유휴 상태여야 한다.
+            # 이전 command context를 계속 재전송하면 FMS가 완료 step을 실행 중으로
+            # 오인하므로 로컬 snapshot을 즉시 비활성 context로 되돌린다.
+            self.task_context = TaskContext()
+            self.navigation_state = NavigationState.STATE_IDLE
+            self.task_progress = 0.0
+
+    def _readiness(self, message: Readiness) -> None:
+        self.nav_available = message.state == Readiness.STATE_READY
+
+    def _connection(self, message: ConnectionState) -> None:
+        self.control_link_online = message.state == ConnectionState.STATE_ONLINE
 
     def _publish(self) -> None:
         """현재까지 수집한 값으로 RobotStatus를 조합해 발행한다."""
@@ -131,11 +153,15 @@ class StatusNode(Node):
         # build_status는 이 정보로 작업 할당 가능 여부와 오류 목록을 계산한다.
         summary = build_status(
             StatusInputs(
-                self.robot_id,
-                self.job_id,
-                now - self.last_scan <= self.timeout,
-                now - self.last_odom <= self.timeout,
-                now - self.last_battery <= self.timeout,
+                robot_id=self.robot_id,
+                scan_fresh=now - self.last_scan <= self.timeout,
+                odom_fresh=now - self.last_odom <= self.timeout,
+                battery_fresh=now - self.last_battery <= self.timeout,
+                map_pose_fresh=now - self.last_map_pose <= self.timeout,
+                nav_available=self.nav_available,
+                control_link_online=self.control_link_online,
+                safety_clear=self.safety.state == SafetyState.STATE_CLEAR,
+                battery_dispatchable=self.battery_policy.ready,
             )
         )
 
@@ -146,11 +172,14 @@ class StatusNode(Node):
 
         # 이 상태를 보낸 로봇과 현재 작업의 식별 정보를 채운다.
         message.robot_id = self.robot_id
-        message.current_job_id = self.job_id
-        message.current_job_step_id = self.step_id
+        message.map_revision = self.map_revision or self.task_context.map_revision
+        message.task_context = self.task_context
 
         # 순수 상태 정책이 계산한 준비 여부와 오류 tuple을 ROS 배열로 복사한다.
         message.ready = summary.ready
+        message.telemetry_valid = summary.telemetry_valid
+        message.execution_ready = summary.execution_ready
+        message.dispatchable = summary.dispatchable
         message.errors = list(summary.errors)
 
         # 센서에서 계산한 단순 배터리 잔량을 백분율 필드에 넣는다.

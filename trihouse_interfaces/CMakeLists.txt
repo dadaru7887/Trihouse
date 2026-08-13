@@ -26,6 +26,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RobotStatus.msg"
   "msg/SafetyState.msg"
   "msg/StreamHealth.msg"
+  "msg/TaskContext.msg"
   "msg/TaskEvent.msg"
   "srv/ClearEmergency.srv"
   "srv/EstimateTaskEnergy.srv"

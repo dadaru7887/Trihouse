@@ -21,7 +21,7 @@ class BatteryConditionNode(Node):
 
     def __init__(self) -> None:
         super().__init__('battery_condition_node')
-        self.declare_parameter('robot_id', 'PK-01')
+        self.declare_parameter('robot_id', 'PK_01')
         self.declare_parameter('startup_timeout_s', 5.0)
         self.declare_parameter('telemetry_timeout_s', 3.0)
 

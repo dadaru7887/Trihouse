@@ -29,6 +29,7 @@ MESSAGE_FILES = {
     "RobotStatus.msg",
     "SafetyState.msg",
     "StreamHealth.msg",
+    "TaskContext.msg",
     "TaskEvent.msg",
 }
 
@@ -136,3 +137,57 @@ def test_battery_interfaces_keep_observation_policy_and_action_separate():
     assert "string[] waypoint_ids" in estimate_service
     assert "float64 finish_state_of_charge" in estimate_service
     assert "trihouse_interfaces/BatteryPolicyState battery_policy" in robot_status
+
+
+def test_task_context_is_the_single_execution_identity_contract():
+    task_context = (PACKAGE_ROOT / "msg" / "TaskContext.msg").read_text(
+        encoding="utf-8"
+    )
+    assert task_context.splitlines() == [
+        "bool active",
+        "uint64 job_id",
+        "uint64 job_step_id",
+        "uint64 assignment_revision",
+        "string rmf_task_id",
+        "string command_id",
+        "string map_revision",
+        "string command_source",
+    ]
+
+    execute_transport = (
+        PACKAGE_ROOT / "action" / "ExecuteTransport.action"
+    ).read_text(encoding="utf-8").split("---", 1)[0]
+    navigation_state = (
+        PACKAGE_ROOT / "msg" / "NavigationState.msg"
+    ).read_text(encoding="utf-8")
+    task_event = (PACKAGE_ROOT / "msg" / "TaskEvent.msg").read_text(
+        encoding="utf-8"
+    )
+    robot_status = (PACKAGE_ROOT / "msg" / "RobotStatus.msg").read_text(
+        encoding="utf-8"
+    )
+
+    for contract in (execute_transport, navigation_state, task_event, robot_status):
+        assert "trihouse_interfaces/TaskContext task_context" in contract
+
+    assert "string command_id" not in execute_transport
+    assert "string job_id" not in execute_transport
+    assert "string job_step_id" not in execute_transport
+    assert "string goal_id" not in navigation_state
+    assert "string goal_id" not in task_event
+    assert "string reason_code" in task_event
+    assert "string method_code" in task_event
+
+
+def test_robot_status_exposes_layered_readiness_and_map_revision():
+    robot_status = (PACKAGE_ROOT / "msg" / "RobotStatus.msg").read_text(
+        encoding="utf-8"
+    )
+    for field in (
+        "string map_revision",
+        "bool telemetry_valid",
+        "bool execution_ready",
+        "bool dispatchable",
+        "bool ready",
+    ):
+        assert field in robot_status

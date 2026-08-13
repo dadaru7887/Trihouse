@@ -45,6 +45,12 @@ class FakeBackend:
         return {"mask_recall": self.recall, "mask_map50": self.map50, "mask_map50_95": 0.6, "box_recall": 0.9, "box_map50": 0.8, "box_map50_95": 0.55}
 
 
+class PersonMetricBackend(FakeBackend):
+    def evaluate(self, weights, split, config, run_dir):
+        self.calls.append(f"evaluate:{split}")
+        return {"mask_recall": .99, "mask_map50": .99, "person_mask_recall": .4, "person_mask_map50": .3, "mask_map50_95": .8}
+
+
 def config(tmp_path: Path, data: Path, **updates) -> TrainingConfig:
     values = dict(model="26s", data=data, run_root=tmp_path / "runs", name="unit", allow_posture_gap=True)
     values.update(updates)
@@ -111,3 +117,9 @@ def test_preflight_only_never_invokes_backend(tmp_path: Path) -> None:
 
     assert backend.calls == []
     assert json.loads((run_dir / "status.json").read_text())["state"] == "PREFLIGHT_COMPLETED"
+
+
+def test_validation_gate_prefers_person_metrics_over_macro_average(tmp_path: Path) -> None:
+    data = make_dataset(tmp_path / "dataset")
+    with pytest.raises(PipelineError, match="validation gate"):
+        run_pipeline(config(tmp_path, data), PersonMetricBackend())

@@ -3,13 +3,13 @@
 from contextlib import contextmanager
 from typing import Iterator
 
-from mysql.connector.pooling import MySQLConnectionPool
-
 from .config import Settings
 
 
 class Database:
     def __init__(self, settings: Settings):
+        from mysql.connector.pooling import MySQLConnectionPool
+
         self._pool = MySQLConnectionPool(
             pool_name="trihouse_fms_gateway",
             pool_size=settings.pool_size,

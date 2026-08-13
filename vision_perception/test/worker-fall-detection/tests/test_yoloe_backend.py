@@ -1,8 +1,10 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from pipeline.run_config import TrainingConfig
-from pipeline.yoloe_backend import YOLOEBackend, normalize_metrics
+from trainer.yoloe_trainer import YOLOEBackend, confusion_metrics, normalize_metrics
 
 
 class FakeModel:
@@ -77,7 +79,7 @@ def test_backend_evaluates_explicit_split_and_normalizes_metrics(tmp_path: Path)
     assert calls == [("val", {
         "data": str((tmp_path / "data.yaml").resolve()), "split": "test",
         "imgsz": 320, "batch": 4, "device": "0", "workers": 1,
-        "project": str(tmp_path / "run/evaluation"), "name": "test", "exist_ok": True,
+        "project": str(tmp_path / "run/evaluation"), "name": "test", "exist_ok": True, "plots": True,
     })]
     assert metrics == {
         "box_precision": 0.91, "box_recall": 0.92, "box_map50": 0.93, "box_map50_95": 0.71,
@@ -93,3 +95,23 @@ def test_normalize_metrics_rejects_detection_only_results() -> None:
         assert "segmentation" in str(error)
     else:
         raise AssertionError("segmentation metrics 없이 성공하면 안 됩니다")
+
+
+def test_normalize_metrics_includes_person_class_metrics() -> None:
+    metric = SimpleNamespace(mp=.5, mr=.6, map50=.7, map=.4, class_result=lambda index: (.8, .9, .85, .65))
+    result = SimpleNamespace(box=metric, seg=metric, names={0: "obstacle", 1: "person"})
+    metrics = normalize_metrics(result)
+    assert metrics["person_mask_precision"] == .8
+    assert metrics["person_mask_recall"] == .9
+    assert metrics["person_mask_map50"] == .85
+    assert metrics["person_mask_map50_95"] == .65
+
+
+def test_confusion_metrics_compute_person_instance_f1() -> None:
+    # Rows are predicted classes, columns are true classes; final index is background.
+    matrix = [[7, 1, 2], [0, 8, 1], [3, 2, 0]]
+    metrics = confusion_metrics(matrix, person_id=1)
+    assert metrics["person_box_tp"] == 8
+    assert metrics["person_box_fp"] == 1
+    assert metrics["person_box_fn"] == 3
+    assert metrics["person_box_f1"] == pytest.approx(16 / 20)

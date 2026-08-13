@@ -1,0 +1,69 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+    
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "LEGO: Label Analysis",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/vision_perception/test/worker-fall-detection/main.py",
+            "args": ["labels", "--config", "${workspaceFolder}/vision_perception/test/worker-fall-detection/configs/config.yaml", "--output", "${workspaceFolder}/runs/lego_label_analysis"],
+            "python": "${workspaceFolder}/venv/yolo_segmentation/bin/python",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "env": {"NO_ALBUMENTATIONS_UPDATE": "1", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}
+        },
+        {
+            "name": "LEGO: GPU Smoke Train",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/vision_perception/test/worker-fall-detection/main.py",
+            "args": ["train", "--config", "${workspaceFolder}/vision_perception/test/worker-fall-detection/configs/smoke_gpu.yaml"],
+            "python": "${workspaceFolder}/venv/yolo_segmentation/bin/python",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {"NO_ALBUMENTATIONS_UPDATE": "1"}
+        },
+        {
+            "name": "LEGO: Multi-seed Train",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/vision_perception/test/worker-fall-detection/main.py",
+            "args": ["train", "--config", "${workspaceFolder}/vision_perception/test/worker-fall-detection/configs/config.yaml"],
+            "python": "${workspaceFolder}/venv/yolo_segmentation/bin/python",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {"NO_ALBUMENTATIONS_UPDATE": "1"}
+        },
+        {
+            "name": "LEGO: Analyze Experiment",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/vision_perception/test/worker-fall-detection/main.py",
+            "args": ["analyze", "--experiment-dir", "${input:legoExperimentDir}"],
+            "python": "${workspaceFolder}/venv/yolo_segmentation/bin/python",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "legoExperimentDir",
+            "type": "promptString",
+            "description": "Multi-seed experiment directory",
+            "default": "${workspaceFolder}/runs/lego_worker/lego_yoloe_multiseed/YYYYMMDD_HHMMSS"
+        }
+    ]
+}

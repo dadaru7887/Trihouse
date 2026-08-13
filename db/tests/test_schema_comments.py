@@ -15,7 +15,7 @@ def test_schema_metadata_uses_web_safe_english_comments() -> None:
     table_comments = TABLE_COMMENT.findall(schema)
     column_comments = COLUMN_COMMENT.findall(schema)
 
-    assert len(table_comments) == 19
-    assert len(column_comments) == 298
+    assert len(table_comments) == 26
+    assert len(column_comments) == 326
     assert all(comment.isascii() for comment in table_comments + column_comments)
     assert not any(KOREAN_TEXT.search(comment) for comment in table_comments + column_comments)

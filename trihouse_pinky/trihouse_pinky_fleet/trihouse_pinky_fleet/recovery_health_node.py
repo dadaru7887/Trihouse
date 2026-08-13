@@ -14,7 +14,7 @@ from .recovery_health import RecoveryHealthInputs, evaluate_recovery_health
 class RecoveryHealthNode(Node):
     def __init__(self) -> None:
         super().__init__('recovery_health')
-        self.declare_parameter('robot_id', 'PK-01'); self.declare_parameter('timeout_s', 1.5)
+        self.declare_parameter('robot_id', 'PK_01'); self.declare_parameter('timeout_s', 1.5)
         self.robot_id = self.get_parameter('robot_id').value; self.timeout = float(self.get_parameter('timeout_s').value)
         self.last_odom = self.last_scan = self.last_range = self.last_battery = 0.0
         self.cargo_present = False
