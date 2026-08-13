@@ -47,30 +47,26 @@
 계속 사용하며 실제 상품 재고의 적재 슬롯으로 사용하지 않는다.
 
 새 창고와 슬롯에는 실측하지 않은 `pose_x`, `pose_y`, `pose_yaw`를 만들지 않는다.
-또한 하나의 RMF waypoint를 여러 Location에 중복 연결할 수 없으므로 새 물리 슬롯의
-`map_name`과 `rmf_waypoint_name`은 `NULL`로 둔다. 로컬 시뮬레이션의 이동 Step은
-기존 접근 지점 `A-SLOT-01`을 사용하고, inspect/pick/verify Step은 실제 슬롯
-`location_id`를 대상으로 사용한다.
+또한 하나의 RMF waypoint를 여러 Location에 중복 연결할 수 없으므로 새 창고와 물리
+슬롯의 `map_name`과 `rmf_waypoint_name`은 모두 `NULL`로 둔다. 로컬 시뮬레이션의
+이동 Step은 기존 접근 지점 `A-SLOT-01`을 사용하고, inspect/pick/verify Step은 실제
+슬롯 `location_id`를 대상으로 사용한다.
+
+사용자가 Control System UI에서 창고별 waypoint를 직접 생성한 뒤, 지도 저장·발행이
+창고 Location의 `map_name`, `rmf_waypoint_name`, `pose_*`를 자동 반영하는지는
+별도의 "연결 테스트 1"에서 검증한다. 시드는 이 테스트 결과를 미리 가정하지 않는다.
 
 ### 창고 행
 
 | location_code | name | location_type | zone_code | temperature_zone | state |
 | --- | --- | --- | --- | --- | --- |
-| `WH-AMB-01` | 상온창고1 | `rack` | `ambient` | `ambient` | `occupied` |
-| `WH-CHL-01` | 냉장창고1 | `rack` | `chilled` | `chilled` | `occupied` |
-| `WH-FRZ-01` | 냉동창고1 | `rack` | `frozen` | `frozen` | `occupied` |
+| `WH-AMB-01` | 상온창고 | `rack` | `ambient` | `ambient` | `available` |
+| `WH-CHL-01` | 냉장창고 | `rack` | `chilled` | `chilled` | `available` |
+| `WH-FRZ-01` | 냉동창고 | `rack` | `frozen` | `frozen` | `available` |
 
-창고 `metadata`는 다음 공통 형태를 사용한다.
-
-```json
-{
-  "rmf_access_location_code": "A-SLOT-01"
-}
-```
-
-`warehouse_no`는 `location_code`와 `name`에서 이미 식별되고, `shelf_levels`와
-`slots_per_level`은 자식 슬롯 행에서 계산할 수 있으므로 중복 저장하지 않는다.
-`source='dev_seed'`도 운영 의미가 없는 시드 구현 정보라 저장하지 않는다.
+현재 확인된 창고별 확장 정보가 없으므로 창고 `metadata`는 `NULL`로 둔다.
+창고 번호는 `location_code`에서 이미 식별되고, 층·슬롯 수는 자식 슬롯 행에서 계산할
+수 있다. RMF 접근 Location은 UI 연결 테스트 전까지 가정하지 않는다.
 
 ### 슬롯 행
 
@@ -113,7 +109,7 @@
 | `locations.zone_code` | 업무 구역 코드이며 물품의 보관 조건인 `temperature_zone`과 의미가 다르다. |
 | `locations.temperature_zone` | 해당 위치가 허용하는 온도 구역을 표현한다. |
 | `locations.map_name`, `rmf_waypoint_name`, `pose_*` | 새 물리 슬롯에서는 NULL이지만 waypoint·도크·충전기 등 다른 Location 타입이 사용한다. |
-| `locations.metadata` | 현재 스키마에 없는 층·슬롯 번호와 RMF 접근 지점만 최소 저장한다. |
+| `locations.metadata` | 현재 스키마에 없는 슬롯의 층·슬롯 번호만 최소 저장한다. 창고 metadata는 현재 NULL이다. |
 | `inventory_lots.product_code` | 서로 다른 lot를 같은 상품으로 검색·주문하기 위한 키다. |
 | `inventory_lots.item_name` | 별도 상품 마스터 테이블이 없는 현재 UI의 표시명이다. 상품 마스터가 생기면 중복 여부를 재검토한다. |
 | `inventory_lots.temperature_zone` | 상품 자체의 보관 요구조건으로, 현재 적재 위치의 온도와 독립적으로 검증한다. |
@@ -123,15 +119,16 @@
 | `inventory_lots.received_at`, `updated_at` | 입고 및 변경 감사 시각을 보존한다. |
 
 불필요했던 값은 DB 컬럼이 아니라 앞서 제안한 JSON metadata의 파생·구현 정보였다.
-따라서 창고 metadata는 `rmf_access_location_code`, 슬롯 metadata는
-`shelf_level`과 `slot_index`만 저장한다. 향후 컬럼 삭제를 검토할 때는 Gateway,
+따라서 창고 metadata는 `NULL`, 슬롯 metadata는 `shelf_level`과 `slot_index`만
+저장한다. 향후 컬럼 삭제를 검토할 때는 Gateway,
 관제 UI, RMF import, migration, 운영 쿼리 사용처를 모두 확인하고 별도 migration으로
 진행한다.
 
 ## 재고 데이터
 
-모든 행은 `reserved_qty=0`, `state='stored'`,
-`received_at='2026-08-13 09:00:00.000000'`을 사용한다.
+모든 행은 `reserved_qty=0`, `state='stored'`을 사용한다. `received_at`은 시드가
+처음 행을 만드는 시점의 `CURRENT_TIMESTAMP(6)`을 사용하며, 중복 키 갱신에서는
+최초 입고 시각을 덮어쓰지 않는다.
 
 | product_code | lot_code | item_name | zone | location_code | expiry_date | unit_weight_kg | available_qty |
 | --- | --- | --- | --- | --- | --- | ---: | ---: |
@@ -230,6 +227,21 @@ geometry, properties)`로 슬롯 또는 창고와 연결한다.
 5. 각 재고의 슬롯 부모, 층, 슬롯 번호, 온도 구역, 수량을 정확히 검증한다.
 6. 빈 `AMB-L1-S02`에는 재고가 없고 `state='available'`인지 검증한다.
 7. 예제 Job의 `job_items.lot_id`와 출발 슬롯이 새 QR 기준 데이터와 일치하는지 검증한다.
+8. 새 창고와 슬롯의 RMF waypoint 및 pose가 시드 단계에서는 NULL인지 검증한다.
+
+## 연결 테스트 1: UI waypoint 자동 반영
+
+시드와 Gateway 검증이 끝난 뒤 Control System UI를 실행한다. 사용자가 창고별 waypoint를
+지도에 직접 생성하고 각 waypoint의 `locationCode`를 `WH-AMB-01`, `WH-CHL-01`,
+`WH-FRZ-01` 중 하나로 지정한다. 지도 초안 저장과 발행 후 다음을 확인한다.
+
+1. `map_project_waypoints.location_code`와 `rmf_waypoint_name`이 UI 입력값과 일치한다.
+2. 지도 발행 후 `locations`의 해당 창고 행에 `map_name`, `rmf_waypoint_name`,
+   `pose_x`, `pose_y`, `pose_yaw`가 자동 반영된다.
+3. 자식 슬롯의 waypoint는 계속 NULL이고 부모 창고를 통해 접근 위치를 찾는다.
+4. 기존 `A-SLOT-01/픽업1` 등 운영 Location 매핑이 깨지지 않는다.
+5. 자동 반영되지 않으면 DB를 수동 수정하지 않고 Gateway의 지도 발행 경로와
+   Location 갱신 로직을 진단한다.
 
 ## 오류 처리와 운영 경계
 
