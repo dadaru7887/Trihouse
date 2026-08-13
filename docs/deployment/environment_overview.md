@@ -23,8 +23,8 @@ recovery record를 로컬 queue에 보관하고 ACK까지 재전송한다.
 
 | 파일 | 역할 | 현재 상태 |
 |---|---|---|
-| `compose.db.yaml` | 보존되는 개발 MySQL | 작성·정적 검증·로컬 실행 검증 완료 (FMS 16개 + recovery 2개) |
-| `compose.db_test.yaml` | tmpfs 테스트 MySQL | 작성·정적 검증·로컬 실행 검증 완료 (FMS 16개 + recovery 2개) |
+| `compose.db.yaml` | 보존되는 개발 MySQL | 작성·정적 검증·로컬 실행 검증 완료 (`schema_mysql.sql` 계약 기준) |
+| `compose.db_test.yaml` | tmpfs 테스트 MySQL | 작성·정적 검증·로컬 실행 검증 완료 (창고·QR 재고 시드 포함) |
 | `compose.control.yaml` | FMS Gateway backend/API | 작성·정적 검증·로컬 build/readiness 검증 완료 |
 | `compose.simulation.yaml` | RMF API/dashboard 지원 stack | 작성·정적 검증 완료, ROS 2/Gazebo는 현재 호스트 실행 |
 | `compose.edge_4060.yaml` | MediaMTX와 4060 application 계약 | 작성·정적 검증 완료, QR·catalog image 구현 필요 |

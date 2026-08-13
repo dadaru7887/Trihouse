@@ -7,7 +7,7 @@
 ├─ 기존 control_system UI       # 기존 관제 화면과 자체 시뮬레이션
 ├─ Pinky SR 정적 테스트         # trihouse_pinky 정책 구현 증거
 ├─ Pinky Gazebo 검증            # 전제조건을 통과한 항목만
-└─ DB 스키마                    # FMS 16개 + recovery 2개 테이블
+└─ DB 스키마                    # 기준 스키마 + 창고·QR 재고 시드
 ```
 
 네 항목은 아직 하나의 end-to-end 통합 증거가 아니다. 발표 화면에도 각각
@@ -77,5 +77,6 @@ ros2 launch trihouse_pinky_bringup trihouse_gazebo_demo.launch.py \
 
 ## 4. DB 스키마
 
-[DB 시연 가이드](database_demo.md)에 따라 두 database와 18개 table, recovery 관계를
-보여준다. 이전 v3 스키마는 Git 이력으로 보존하며, `schema_mysql.sql`만 v4 신규 설치 기준으로 사용한다.
+[DB 시연 가이드](database_demo.md)에 따라 두 database, recovery 관계,
+창고·선반·QR 재고 매핑을 보여준다. 신규 설치의 유일한 기준은
+`db/schema_mysql.sql`이며, 이전 스키마는 Git 이력으로만 참조한다.
