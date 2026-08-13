@@ -1,11 +1,12 @@
 
 import datetime as dt
+import json
 import re
 
 import mysql.connector
 import pytest
 
-from conftest import SEED_PATH, execute_sql_script
+from conftest import QR_PAYLOAD_PATH, SEED_PATH, execute_sql_script
 
 
 pytestmark = pytest.mark.integration
@@ -363,23 +364,178 @@ def test_artifact_uniqueness_keeps_full_uri_semantics(mysql_db):
     assert error.value.errno == 1062
 
 
-def test_development_seed_is_idempotent_and_complete(mysql_db):
+def _apply_seed_twice(mysql_db):
+    before = mysql_db.one("SELECT NOW(6) AS now")["now"]
     execute_sql_script(mysql_db.connection, SEED_PATH)
     execute_sql_script(mysql_db.connection, SEED_PATH)
+    after = mysql_db.one("SELECT NOW(6) AS now")["now"]
+    return before, after
 
-    expected_counts = {
-        "locations": 4,
-        "workers": 2,
-        "devices": 4,
-        "device_states": 4,
-        "inventory_lots": 2,
-        "jobs": 1,
-        "job_items": 1,
-        "job_steps": 1,
+
+def test_development_seed_is_idempotent_and_has_location_hierarchy(mysql_db):
+    _apply_seed_twice(mysql_db)
+
+    expected_warehouses = {
+        "WH-AMB-01": ("상온창고", "ambient", "available"),
+        "WH-CHL-01": ("냉장창고", "chilled", "available"),
+        "WH-FRZ-01": ("냉동창고", "frozen", "available"),
     }
-    actual_counts = {
-        table: mysql_db.one(f"SELECT COUNT(*) AS count FROM `{table}`")["count"]
-        for table in expected_counts
+    warehouses = mysql_db.all(
+        """
+        SELECT location_code, name, temperature_zone, state, metadata,
+               map_name, rmf_waypoint_name, pose_x, pose_y, pose_yaw
+        FROM locations
+        WHERE location_code IN ('WH-AMB-01', 'WH-CHL-01', 'WH-FRZ-01')
+        ORDER BY location_code
+        """
+    )
+    actual_warehouses = {
+        row["location_code"]: (
+            row["name"],
+            row["temperature_zone"],
+            row["state"],
+        )
+        for row in warehouses
+    }
+    assert actual_warehouses == expected_warehouses
+    assert all(
+        row[column] is None
+        for row in warehouses
+        for column in (
+            "metadata",
+            "map_name",
+            "rmf_waypoint_name",
+            "pose_x",
+            "pose_y",
+            "pose_yaw",
+        )
+    )
+
+    expected_slots = {
+        "AMB-L1-S01": ("WH-AMB-01", 1, 1, "occupied"),
+        "AMB-L1-S02": ("WH-AMB-01", 1, 2, "available"),
+        "AMB-L2-S01": ("WH-AMB-01", 2, 1, "occupied"),
+        "AMB-L2-S02": ("WH-AMB-01", 2, 2, "occupied"),
+        "CHL-L1-S01": ("WH-CHL-01", 1, 1, "occupied"),
+        "CHL-L1-S02": ("WH-CHL-01", 1, 2, "occupied"),
+        "CHL-L2-S01": ("WH-CHL-01", 2, 1, "occupied"),
+        "CHL-L2-S02": ("WH-CHL-01", 2, 2, "occupied"),
+        "FRZ-L1-S01": ("WH-FRZ-01", 1, 1, "occupied"),
+        "FRZ-L1-S02": ("WH-FRZ-01", 1, 2, "occupied"),
+        "FRZ-L2-S01": ("WH-FRZ-01", 2, 1, "occupied"),
+        "FRZ-L2-S02": ("WH-FRZ-01", 2, 2, "occupied"),
+    }
+    slots = mysql_db.all(
+        """
+        SELECT child.location_code,
+               parent.location_code AS parent_code,
+               JSON_UNQUOTE(JSON_EXTRACT(child.metadata, '$.shelf_level')) AS shelf_level,
+               JSON_UNQUOTE(JSON_EXTRACT(child.metadata, '$.slot_index')) AS slot_index,
+               child.state, child.map_name, child.rmf_waypoint_name,
+               child.pose_x, child.pose_y, child.pose_yaw
+        FROM locations child
+        JOIN locations parent ON parent.location_id = child.parent_location_id
+        WHERE child.location_code REGEXP '^(AMB|CHL|FRZ)-L[12]-S0[12]$'
+        ORDER BY child.location_code
+        """
+    )
+    actual_slots = {
+        row["location_code"]: (
+            row["parent_code"],
+            int(row["shelf_level"]),
+            int(row["slot_index"]),
+            row["state"],
+        )
+        for row in slots
+    }
+    assert actual_slots == expected_slots
+    assert all(
+        row[column] is None
+        for row in slots
+        for column in ("map_name", "rmf_waypoint_name", "pose_x", "pose_y", "pose_yaw")
+    )
+
+
+def test_development_seed_inventory_matches_qr_contract(mysql_db):
+    before, after = _apply_seed_twice(mysql_db)
+
+    expected_lots = {
+        "LOT-AMB-ORANGE-001": ("SKU-ORANGE", "Orange", "ambient", "AMB-L2-S01", "2026-08-28", "0.200", 1, 0, "stored"),
+        "LOT-AMB-STRAWBERRY-001": ("SKU-STRAWBERRY", "Strawberry", "ambient", "AMB-L2-S02", "2026-08-27", "0.250", 1, 0, "stored"),
+        "LOT-AMB-MANDARIN-001": ("SKU-MANDARIN", "Mandarin", "ambient", "AMB-L1-S01", "2026-09-02", "0.120", 2, 0, "stored"),
+        "LOT-CHL-COFFEE-001": ("SKU-COFFEE", "Coffee", "chilled", "CHL-L2-S01", "2026-10-31", "0.250", 1, 0, "stored"),
+        "LOT-CHL-SANDWICH-001": ("SKU-SANDWICH", "Sandwich", "chilled", "CHL-L2-S02", "2026-09-10", "0.180", 2, 0, "stored"),
+        "LOT-CHL-YOGURT-001": ("SKU-YOGURT", "Yogurt", "chilled", "CHL-L1-S01", "2026-09-30", "0.100", 2, 0, "stored"),
+        "LOT-CHL-MILK-001": ("SKU-MILK", "Milk", "chilled", "CHL-L1-S02", "2026-09-20", "0.200", 1, 0, "stored"),
+        "LOT-FRZ-PORKBELLY-001": ("SKU-PORKBELLY", "Pork belly", "frozen", "FRZ-L2-S01", "2027-08-13", "0.500", 2, 0, "stored"),
+        "LOT-FRZ-DUMPLING-001": ("SKU-DUMPLING", "Dumpling", "frozen", "FRZ-L2-S02", "2027-08-20", "0.400", 1, 0, "stored"),
+        "LOT-FRZ-ICEBAR-001": ("SKU-ICEBAR", "Ice bar", "frozen", "FRZ-L1-S01", "2027-08-25", "0.080", 2, 0, "stored"),
+        "LOT-FRZ-ICECONE-001": ("SKU-ICECONE", "Ice cone", "frozen", "FRZ-L1-S02", "2027-08-31", "0.150", 2, 0, "stored"),
+    }
+    lots = mysql_db.all(
+        """
+        SELECT lot.lot_code, lot.product_code, lot.item_name,
+               lot.temperature_zone, location.location_code,
+               lot.expiry_date, lot.unit_weight_kg, lot.available_qty,
+               lot.reserved_qty, lot.state, lot.received_at
+        FROM inventory_lots lot
+        JOIN locations location ON location.location_id = lot.location_id
+        ORDER BY lot.lot_code
+        """
+    )
+    actual_lots = {
+        row["lot_code"]: (
+            row["product_code"],
+            row["item_name"],
+            row["temperature_zone"],
+            row["location_code"],
+            str(row["expiry_date"]),
+            str(row["unit_weight_kg"]),
+            row["available_qty"],
+            row["reserved_qty"],
+            row["state"],
+        )
+        for row in lots
+    }
+    qr_lots = {
+        entry["lot"]
+        for entry in json.loads(QR_PAYLOAD_PATH.read_text(encoding="utf-8"))
     }
 
-    assert actual_counts == expected_counts
+    assert actual_lots == expected_lots
+    assert set(actual_lots) == qr_lots == set(expected_lots)
+    assert all(before <= row["received_at"] <= after for row in lots)
+    assert mysql_db.one(
+        """
+        SELECT COUNT(*) AS count
+        FROM inventory_lots lot
+        JOIN locations location ON location.location_id = lot.location_id
+        WHERE location.location_code = 'AMB-L1-S02'
+        """
+    )["count"] == 0
+
+
+def test_development_seed_smoke_job_uses_qr_inventory(mysql_db):
+    _apply_seed_twice(mysql_db)
+
+    smoke = mysql_db.one(
+        """
+        SELECT job.job_code, source.location_code AS source_code,
+               item.product_code, item.requested_qty,
+               item.verification_state, lot.lot_code
+        FROM jobs job
+        JOIN locations source ON source.location_id = job.source_location_id
+        JOIN job_items item ON item.job_id = job.job_id
+        JOIN inventory_lots lot ON lot.lot_id = item.lot_id
+        WHERE job.job_code = 'JOB-DEV-001'
+        """
+    )
+
+    assert smoke == {
+        "job_code": "JOB-DEV-001",
+        "source_code": "AMB-L2-S01",
+        "product_code": "SKU-ORANGE",
+        "requested_qty": 1,
+        "verification_state": "pending",
+        "lot_code": "LOT-AMB-ORANGE-001",
+    }
