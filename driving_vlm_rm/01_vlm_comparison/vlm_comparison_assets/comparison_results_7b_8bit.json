@@ -1,0 +1,102 @@
+{
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct",
+  "quant": "8bit",
+  "samples": [
+    {
+      "idx": 0,
+      "category": "clean",
+      "answers": {
+        "A_image_only": "The robot is navigating through a warehouse aisle with no visible obstacles directly in its path. There are some shelves and a blue object on the left side, but these do not appear to be immediate hazards. No people are present in the frame. Given the clear path ahead, it seems safe for the robot to continue moving forward.",
+        "B_with_context": "The robot is navigating through a warehouse aisle with some detected obstacles and people. There is a high-confidence obstacle in the top-left region, which appears to be a blue structure. Two individuals are detected in the middle-center region, but their confidence levels are relatively low at 0.66 and 0.44, respectively. Given these lower confidence levels, it may be prudent to exercise caution or seek additional confirmation before proceeding forward."
+      }
+    },
+    {
+      "idx": 1,
+      "category": "clean",
+      "answers": {
+        "A_image_only": "The robot appears to be navigating through a warehouse aisle. There are no visible people in the immediate vicinity. However, there is a blue object on the left side that could potentially be an obstacle if the robot is not programmed to avoid it. The aisle seems clear otherwise, so it may be safe to proceed forward, but the robot should be cautious of the blue object.",
+        "B_with_context": "The robot is navigating through a warehouse aisle with several obstacles detected. There is a high-confidence obstacle in the top-left corner, which appears to be a blue structure. Additionally, there are two people detected in the middle-center region, but their confidence levels are relatively low at 0.61 and 0.50, respectively. Given these lower confidence levels, it might be prudent to proceed with caution, as the detection of people could be uncertain. However, the main obstacle in the top-left seems clear enough to navigate around."
+      }
+    },
+    {
+      "idx": 2,
+      "category": "s1",
+      "answers": {
+        "A_image_only": "The image shows a warehouse with a robot navigating an aisle. There are no visible people in the immediate vicinity of the robot. However, there appears to be a blue object on the left side that could potentially be an obstacle. It's unclear if it's a fixed structure or a moving object. Given the lack of people and the presence of the blue object, it would be prudent to proceed cautiously, possibly by slowing down or stopping temporarily to assess the situation further.",
+        "B_with_context": "The robot appears to be navigating through a warehouse aisle. There is a high-confidence obstacle in the top-left corner, which could be an object or structure. Two individuals are detected in the middle-center region, with one having a lower confidence level of 0.42. Given the high confidence of the obstacle and the presence of people, it may not be safe to proceed forward without further caution. The lower confidence for one of the people suggests that the detection might not be entirely reliable, so additional verification would be prudent."
+      }
+    },
+    {
+      "idx": 3,
+      "category": "s1",
+      "answers": {
+        "A_image_only": "The robot appears to be navigating through a warehouse aisle with white walls on either side. There is a blue object on the left wall that could potentially be an obstacle. No people are visible in the frame. Given the clear path ahead and the absence of immediate hazards, it seems safe for the robot to continue moving forward.",
+        "B_with_context": "The robot is navigating through a warehouse aisle with several obstacles detected. There is a high-confidence obstacle in the top-left corner, which appears to be a blue structure. Two people are detected in the middle-center region, but their confidence levels are relatively low at 0.60 and 0.52, respectively. Given these lower confidence levels, it might be prudent to proceed with caution or verify the presence of individuals before continuing. The blue structure in the top-left could potentially be an obstacle that needs to be avoided."
+      }
+    },
+    {
+      "idx": 4,
+      "category": "s3",
+      "answers": {
+        "A_image_only": "The robot is navigating through a warehouse aisle with no visible obstacles directly in its path. There are some shelves and a blue object on the left side of the frame, but these do not appear to be immediate hazards. No people are present in the frame. It seems safe for the robot to continue moving forward.",
+        "B_with_context": "The robot is navigating through a warehouse aisle with some detected obstacles and people. There is a high-confidence obstacle in the top-left region, which appears to be a blue structure. Two individuals are detected in the middle-center region, but their confidence levels are relatively low at 0.66 and 0.44, respectively. Given these detections, it would be prudent to proceed cautiously, as the lower confidence in the presence of people suggests uncertainty about their exact location or intent."
+      }
+    },
+    {
+      "idx": 5,
+      "category": "s3",
+      "answers": {
+        "A_image_only": "The robot appears to be navigating through a warehouse aisle. There are no visible people in the immediate vicinity. However, there is a blue object on the left side that could potentially be an obstacle if the robot is not programmed to avoid it. The aisle seems clear otherwise, so it might be safe to proceed forward, but the robot should be cautious of the blue object.",
+        "B_with_context": "The robot is navigating through a warehouse aisle. There appears to be an obstacle in the top-left region with high confidence (0.92), which could potentially block its path. Additionally, there are two people detected in the middle-center region, but their confidence levels are relatively low at 0.61 and 0.50, respectively. Given these detections, it would be prudent to pause and reassess the situation before proceeding forward, as the confidence in detecting the people is not very high."
+      }
+    },
+    {
+      "idx": 6,
+      "category": "s4",
+      "answers": {
+        "A_image_only": "The robot is navigating through a warehouse aisle with no visible obstacles directly in its path. There are some indistinct shapes in the background that appear to be people, but their exact nature and proximity are unclear due to the blurriness of the image. Given the lack of immediate hazards and the absence of other robots or moving objects, it seems safe for the robot to continue forward.",
+        "B_with_context": "The robot is navigating through a warehouse aisle with several detected obstacles and people. There is a high-confidence obstacle in the top-left region, which appears to be a blue structure. Two individuals are detected in the middle-center region, but their confidence levels are relatively low at 0.66 and 0.44, respectively. Given these lower confidence levels, it may not be entirely safe to proceed forward without further verification or additional sensor data."
+      }
+    },
+    {
+      "idx": 7,
+      "category": "s4",
+      "answers": {
+        "A_image_only": "The warehouse robot is navigating through an aisle with white walls on either side. There appears to be a blue door on the left wall and some shelves with items on them further back. No people are visible in the frame. The area seems clear of immediate obstacles, so it is likely safe to proceed forward.",
+        "B_with_context": "The robot is navigating through a warehouse aisle. There appears to be an obstacle in the top-left region with high confidence (0.92), which could be a piece of equipment or furniture. Two individuals are detected in the middle-center region, but their confidence levels are relatively low at 0.61 and 0.49, respectively. Given these lower confidence levels, it might be prudent to exercise caution around the people, as they could be moving or obstructing the path. Overall, the environment seems clear enough to proceed, but the lower confidence in the human detections suggests potential risks that should be monitored closely."
+      }
+    },
+    {
+      "idx": 8,
+      "category": "s5",
+      "answers": {
+        "A_image_only": "The image is very blurry, making it difficult to identify specific obstacles or people. However, there appears to be some indistinct shapes and colors that could potentially be objects or structures within the warehouse. Given the lack of clear visibility, it would be prudent for the robot to pause and reassess its surroundings before proceeding forward to ensure safety.",
+        "B_with_context": "The image shows a blurry scene with an obstacle detected in the top-left region with a high confidence of 0.92. Given the blurriness and the high confidence score, it appears that there might be an object or person in that area, but the exact nature is unclear due to the lack of focus. It would be prudent to exercise caution and possibly slow down or stop to assess the situation more clearly before proceeding forward."
+      }
+    },
+    {
+      "idx": 9,
+      "category": "s5",
+      "answers": {
+        "A_image_only": "The image is blurry, making it difficult to identify specific obstacles or people. However, there appears to be some indistinct shapes on the left side that could potentially be obstacles. Given the lack of clear visibility, it would be prudent for the robot to pause and reassess its surroundings before proceeding forward.",
+        "B_with_context": "The image shows a blurry scene with a blue object in the top-left corner and two individuals in the middle-center area. The obstacle in the top-left has a high confidence of 0.92, suggesting it is likely an obstacle. However, the confidence for the people in the middle-center is relatively low at 0.47 and 0.36, which may not be reliable enough to trust as definitive detections. Given these uncertainties, it would be prudent to exercise caution and possibly slow down or stop to reassess the situation before proceeding forward."
+      }
+    },
+    {
+      "idx": 10,
+      "category": "lowlight",
+      "answers": {
+        "A_image_only": "The image shows a warehouse with a robot navigating an aisle. There are no visible obstacles directly in the robot's path, but there appears to be a person standing near the back wall, partially obscured by the white structure. It seems safe for the robot to continue moving forward as long as it avoids the person and any potential hazards behind them.",
+        "B_with_context": "The image shows a robot navigating an aisle in what appears to be a warehouse. There is a blue object in the top-left corner with high confidence as an obstacle. Two individuals are detected in the middle-center area, but their confidence levels are relatively low at 0.63 and 0.45, which may not be sufficient for reliable navigation decisions. Given these uncertainties, it would be prudent to pause or slow down the robot's movement until more accurate detections can be obtained."
+      }
+    },
+    {
+      "idx": 11,
+      "category": "lowlight",
+      "answers": {
+        "A_image_only": "The warehouse robot appears to be moving through an aisle with no visible obstacles directly in its path. There are some indistinct shapes in the background that could be equipment or storage units, but nothing immediately blocking the way. There are no people visible in the frame. Based on the current view, it seems safe for the robot to continue forward.",
+        "B_with_context": "The image shows a robot navigating through what appears to be a warehouse aisle. There is a high-confidence detection of an obstacle in the top-left corner, which could potentially block the robot's path. Additionally, there are two people detected in the middle-center area with lower confidence levels (0.61 and 0.50), suggesting they might not be significant obstacles but could still pose a risk. Given these detections, it would be prudent to pause or adjust the robot's course to avoid potential collisions with the detected objects."
+      }
+    }
+  ]
+}

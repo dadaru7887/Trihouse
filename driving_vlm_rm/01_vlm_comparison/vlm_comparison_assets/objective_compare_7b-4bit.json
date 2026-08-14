@@ -1,0 +1,399 @@
+{
+  "mode": "7b-4bit",
+  "model_id": "Qwen/Qwen2.5-VL-7B-Instruct",
+  "totals": {
+    "class_correct": 34,
+    "conf_correct": 34,
+    "level_correct": 32,
+    "total": 34,
+    "parse_failures": 0
+  },
+  "results": [
+    {
+      "idx": 0,
+      "category": "clean",
+      "raw": "```json\n{\n  \"detections\": [\n    {\"class\": \"obstacle\", \"confidence\": 0.92, \"risk_level\": \"high\"},\n    {\"class\": \"person\", \"confidence\": 0.66, \"risk_level\": \"moderate\"},\n    {\"class\": \"person\", \"confidence\": 0.44, \"risk_level\": \"low\"}\n  ],\n  \"safe_to_proceed\": false\n}\n```",
+      "parsed": {
+        "detections": [
+          {
+            "class": "obstacle",
+            "confidence": 0.92,
+            "risk_level": "high"
+          },
+          {
+            "class": "person",
+            "confidence": 0.66,
+            "risk_level": "moderate"
+          },
+          {
+            "class": "person",
+            "confidence": 0.44,
+            "risk_level": "low"
+          }
+        ],
+        "safe_to_proceed": false
+      },
+      "score": {
+        "parse_failed": false,
+        "class_correct": 3,
+        "conf_correct": 3,
+        "level_correct": 3,
+        "total": 3,
+        "n_matched": 3
+      }
+    },
+    {
+      "idx": 1,
+      "category": "clean",
+      "raw": "```json\n{\n  \"detections\": [\n    {\"class\": \"obstacle\", \"confidence\": 0.92, \"risk_level\": \"low\"},\n    {\"class\": \"person\", \"confidence\": 0.61, \"risk_level\": \"moderate\"},\n    {\"class\": \"person\", \"confidence\": 0.50, \"risk_level\": \"moderate\"}\n  ],\n  \"safe_to_proceed\": false\n}\n```",
+      "parsed": {
+        "detections": [
+          {
+            "class": "obstacle",
+            "confidence": 0.92,
+            "risk_level": "low"
+          },
+          {
+            "class": "person",
+            "confidence": 0.61,
+            "risk_level": "moderate"
+          },
+          {
+            "class": "person",
+            "confidence": 0.5,
+            "risk_level": "moderate"
+          }
+        ],
+        "safe_to_proceed": false
+      },
+      "score": {
+        "parse_failed": false,
+        "class_correct": 3,
+        "conf_correct": 3,
+        "level_correct": 2,
+        "total": 3,
+        "n_matched": 3
+      }
+    },
+    {
+      "idx": 2,
+      "category": "s1",
+      "raw": "```json\n{\n  \"detections\": [\n    {\n      \"class\": \"obstacle\",\n      \"confidence\": 0.93,\n      \"risk_level\": \"high\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.64,\n      \"risk_level\": \"moderate\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.42,\n      \"risk_level\": \"low\"\n    }\n  ],\n  \"safe_to_proceed\": false\n}\n```",
+      "parsed": {
+        "detections": [
+          {
+            "class": "obstacle",
+            "confidence": 0.93,
+            "risk_level": "high"
+          },
+          {
+            "class": "person",
+            "confidence": 0.64,
+            "risk_level": "moderate"
+          },
+          {
+            "class": "person",
+            "confidence": 0.42,
+            "risk_level": "low"
+          }
+        ],
+        "safe_to_proceed": false
+      },
+      "score": {
+        "parse_failed": false,
+        "class_correct": 3,
+        "conf_correct": 3,
+        "level_correct": 3,
+        "total": 3,
+        "n_matched": 3
+      }
+    },
+    {
+      "idx": 3,
+      "category": "s1",
+      "raw": "```json\n{\n  \"detections\": [\n    {\n      \"class\": \"obstacle\",\n      \"confidence\": 0.92,\n      \"risk_level\": \"high\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.60,\n      \"risk_level\": \"moderate\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.52,\n      \"risk_level\": \"moderate\"\n    }\n  ],\n  \"safe_to_proceed\": false\n}\n```",
+      "parsed": {
+        "detections": [
+          {
+            "class": "obstacle",
+            "confidence": 0.92,
+            "risk_level": "high"
+          },
+          {
+            "class": "person",
+            "confidence": 0.6,
+            "risk_level": "moderate"
+          },
+          {
+            "class": "person",
+            "confidence": 0.52,
+            "risk_level": "moderate"
+          }
+        ],
+        "safe_to_proceed": false
+      },
+      "score": {
+        "parse_failed": false,
+        "class_correct": 3,
+        "conf_correct": 3,
+        "level_correct": 3,
+        "total": 3,
+        "n_matched": 3
+      }
+    },
+    {
+      "idx": 4,
+      "category": "s3",
+      "raw": "```json\n{\n  \"detections\": [\n    {\n      \"class\": \"obstacle\",\n      \"confidence\": 0.92,\n      \"risk_level\": \"high\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.66,\n      \"risk_level\": \"moderate\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.44,\n      \"risk_level\": \"low\"\n    }\n  ],\n  \"safe_to_proceed\": false\n}\n```",
+      "parsed": {
+        "detections": [
+          {
+            "class": "obstacle",
+            "confidence": 0.92,
+            "risk_level": "high"
+          },
+          {
+            "class": "person",
+            "confidence": 0.66,
+            "risk_level": "moderate"
+          },
+          {
+            "class": "person",
+            "confidence": 0.44,
+            "risk_level": "low"
+          }
+        ],
+        "safe_to_proceed": false
+      },
+      "score": {
+        "parse_failed": false,
+        "class_correct": 3,
+        "conf_correct": 3,
+        "level_correct": 3,
+        "total": 3,
+        "n_matched": 3
+      }
+    },
+    {
+      "idx": 5,
+      "category": "s3",
+      "raw": "```json\n{\n  \"detections\": [\n    {\n      \"class\": \"obstacle\",\n      \"confidence\": 0.92,\n      \"risk_level\": \"high\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.61,\n      \"risk_level\": \"moderate\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.50,\n      \"risk_level\": \"moderate\"\n    }\n  ],\n  \"safe_to_proceed\": false\n}\n```",
+      "parsed": {
+        "detections": [
+          {
+            "class": "obstacle",
+            "confidence": 0.92,
+            "risk_level": "high"
+          },
+          {
+            "class": "person",
+            "confidence": 0.61,
+            "risk_level": "moderate"
+          },
+          {
+            "class": "person",
+            "confidence": 0.5,
+            "risk_level": "moderate"
+          }
+        ],
+        "safe_to_proceed": false
+      },
+      "score": {
+        "parse_failed": false,
+        "class_correct": 3,
+        "conf_correct": 3,
+        "level_correct": 3,
+        "total": 3,
+        "n_matched": 3
+      }
+    },
+    {
+      "idx": 6,
+      "category": "s4",
+      "raw": "```json\n{\n  \"detections\": [\n    {\n      \"class\": \"obstacle\",\n      \"confidence\": 0.92,\n      \"risk_level\": \"high\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.66,\n      \"risk_level\": \"moderate\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.44,\n      \"risk_level\": \"low\"\n    }\n  ],\n  \"safe_to_proceed\": false\n}\n```",
+      "parsed": {
+        "detections": [
+          {
+            "class": "obstacle",
+            "confidence": 0.92,
+            "risk_level": "high"
+          },
+          {
+            "class": "person",
+            "confidence": 0.66,
+            "risk_level": "moderate"
+          },
+          {
+            "class": "person",
+            "confidence": 0.44,
+            "risk_level": "low"
+          }
+        ],
+        "safe_to_proceed": false
+      },
+      "score": {
+        "parse_failed": false,
+        "class_correct": 3,
+        "conf_correct": 3,
+        "level_correct": 3,
+        "total": 3,
+        "n_matched": 3
+      }
+    },
+    {
+      "idx": 7,
+      "category": "s4",
+      "raw": "```json\n{\n  \"detections\": [\n    {\n      \"class\": \"obstacle\",\n      \"confidence\": 0.92,\n      \"risk_level\": \"high\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.61,\n      \"risk_level\": \"moderate\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.49,\n      \"risk_level\": \"low\"\n    }\n  ],\n  \"safe_to_proceed\": false\n}\n```",
+      "parsed": {
+        "detections": [
+          {
+            "class": "obstacle",
+            "confidence": 0.92,
+            "risk_level": "high"
+          },
+          {
+            "class": "person",
+            "confidence": 0.61,
+            "risk_level": "moderate"
+          },
+          {
+            "class": "person",
+            "confidence": 0.49,
+            "risk_level": "low"
+          }
+        ],
+        "safe_to_proceed": false
+      },
+      "score": {
+        "parse_failed": false,
+        "class_correct": 3,
+        "conf_correct": 3,
+        "level_correct": 3,
+        "total": 3,
+        "n_matched": 3
+      }
+    },
+    {
+      "idx": 8,
+      "category": "s5",
+      "raw": "{\"detections\": [{\"class\": \"obstacle\", \"confidence\": 0.92, \"risk_level\": \"high\"}], \"safe_to_proceed\": false}",
+      "parsed": {
+        "detections": [
+          {
+            "class": "obstacle",
+            "confidence": 0.92,
+            "risk_level": "high"
+          }
+        ],
+        "safe_to_proceed": false
+      },
+      "score": {
+        "parse_failed": false,
+        "class_correct": 1,
+        "conf_correct": 1,
+        "level_correct": 1,
+        "total": 1,
+        "n_matched": 1
+      }
+    },
+    {
+      "idx": 9,
+      "category": "s5",
+      "raw": "{\n  \"detections\": [\n    {\"class\": \"obstacle\", \"confidence\": 0.92, \"risk_level\": \"high\"},\n    {\"class\": \"person\", \"confidence\": 0.47, \"risk_level\": \"moderate\"},\n    {\"class\": \"person\", \"confidence\": 0.36, \"risk_level\": \"low\"}\n  ],\n  \"safe_to_proceed\": false\n}",
+      "parsed": {
+        "detections": [
+          {
+            "class": "obstacle",
+            "confidence": 0.92,
+            "risk_level": "high"
+          },
+          {
+            "class": "person",
+            "confidence": 0.47,
+            "risk_level": "moderate"
+          },
+          {
+            "class": "person",
+            "confidence": 0.36,
+            "risk_level": "low"
+          }
+        ],
+        "safe_to_proceed": false
+      },
+      "score": {
+        "parse_failed": false,
+        "class_correct": 3,
+        "conf_correct": 3,
+        "level_correct": 2,
+        "total": 3,
+        "n_matched": 3
+      }
+    },
+    {
+      "idx": 10,
+      "category": "lowlight",
+      "raw": "```json\n{\n  \"detections\": [\n    {\n      \"class\": \"obstacle\",\n      \"confidence\": 0.92,\n      \"risk_level\": \"high\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.63,\n      \"risk_level\": \"moderate\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.45,\n      \"risk_level\": \"low\"\n    }\n  ],\n  \"safe_to_proceed\": false\n}\n```",
+      "parsed": {
+        "detections": [
+          {
+            "class": "obstacle",
+            "confidence": 0.92,
+            "risk_level": "high"
+          },
+          {
+            "class": "person",
+            "confidence": 0.63,
+            "risk_level": "moderate"
+          },
+          {
+            "class": "person",
+            "confidence": 0.45,
+            "risk_level": "low"
+          }
+        ],
+        "safe_to_proceed": false
+      },
+      "score": {
+        "parse_failed": false,
+        "class_correct": 3,
+        "conf_correct": 3,
+        "level_correct": 3,
+        "total": 3,
+        "n_matched": 3
+      }
+    },
+    {
+      "idx": 11,
+      "category": "lowlight",
+      "raw": "```json\n{\n  \"detections\": [\n    {\n      \"class\": \"obstacle\",\n      \"confidence\": 0.92,\n      \"risk_level\": \"high\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.61,\n      \"risk_level\": \"moderate\"\n    },\n    {\n      \"class\": \"person\",\n      \"confidence\": 0.50,\n      \"risk_level\": \"moderate\"\n    }\n  ],\n  \"safe_to_proceed\": false\n}\n```",
+      "parsed": {
+        "detections": [
+          {
+            "class": "obstacle",
+            "confidence": 0.92,
+            "risk_level": "high"
+          },
+          {
+            "class": "person",
+            "confidence": 0.61,
+            "risk_level": "moderate"
+          },
+          {
+            "class": "person",
+            "confidence": 0.5,
+            "risk_level": "moderate"
+          }
+        ],
+        "safe_to_proceed": false
+      },
+      "score": {
+        "parse_failed": false,
+        "class_correct": 3,
+        "conf_correct": 3,
+        "level_correct": 3,
+        "total": 3,
+        "n_matched": 3
+      }
+    }
+  ]
+}
