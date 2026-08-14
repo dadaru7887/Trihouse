@@ -9,6 +9,8 @@ services:
     environment:
       TZ: Asia/Seoul
       MTX_LOGLEVEL: info
+      # Start with TCP only: easier firewalling and deterministic cross-host validation.
+      MTX_RTSPTRANSPORTS: tcp
       MTX_API: "yes"
       MTX_APIADDRESS: ":9997"
       MTX_METRICS: "yes"

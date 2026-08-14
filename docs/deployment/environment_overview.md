@@ -66,3 +66,67 @@ Docker Engine은 호스트마다 하나만 설치한다. Compose 파일을 역�
 - `compose.ai_5080.yaml`은 `origin/env`의 backend Docker 작업으로 만든
   `TRIHOUSE_AI_IMAGE`를 실행한다. 현재 branch에서 거대한 AI 환경을 중복 build하지
   않으며, 5080 서버에서 NVIDIA Container Toolkit 검증 후 실행한다.
+
+## PC1 MediaMTX와 PC2 Vision 연결
+
+표준 스트림 경로는 다음 하나로 고정한다.
+
+```text
+rtsp://<PC1_LAN_IP>:8554/pinky/<robot_id>/<camera_id>
+```
+
+예시는 `rtsp://10.0.0.40:8554/pinky/PK_01/front`이다. PC1의 `.env`에는
+`EDGE_BIND_ADDRESS=<PC1_LAN_IP>`를 두고 PC2의 `.env`에는 동일 URL을
+`VISION_RTSP_URL`로 둔다. 8554/tcp는 PC2와 카메라 송신 호스트에서만 접근하도록
+방화벽 범위를 제한한다.
+
+PC1에서 MediaMTX를 시작한다.
+
+```bash
+cd /home/syw/Trihouse
+docker network inspect trihouse_control_edge >/dev/null 2>&1 || \
+  docker network create trihouse_control_edge
+docker compose -f compose.edge_4060.yaml up -d mediamtx
+docker compose -f compose.edge_4060.yaml ps
+curl --fail http://127.0.0.1:9997/v3/paths/list
+curl --fail http://127.0.0.1:9998/metrics | grep 'paths\|readers\|publishers'
+```
+
+Native RTSP/H.264 카메라는 재인코딩 없이 표준 경로로 전달한다.
+
+```bash
+export CAMERA_RTSP_URL='rtsp://CAMERA_IP/native-stream'
+export VISION_RTSP_URL='rtsp://PC1_LAN_IP:8554/pinky/PK_01/front'
+ffmpeg -nostdin -rtsp_transport tcp -i "$CAMERA_RTSP_URL" \
+  -map 0:v:0 -an -c:v copy -f rtsp -rtsp_transport tcp "$VISION_RTSP_URL"
+```
+
+USB 카메라는 먼저 출력 포맷을 확인한다.
+
+```bash
+v4l2-ctl --device /dev/video0 --list-formats-ext
+```
+
+`H264`가 있으면 `vision_system.stream_hub.ingress`의 `VideoEncoder.COPY`,
+MJPEG/YUYV만 있으면 RTX 4060의 `VideoEncoder.NVENC`를 사용한다. CPU fallback은
+`VideoEncoder.LIBX264`이며 두 호스트에서 다시 인코딩하지 않는다.
+
+PC2에서는 스트림이 보이는지 먼저 확인하고 AI Compose를 시작한다.
+
+```bash
+export VISION_RTSP_URL='rtsp://PC1_LAN_IP:8554/pinky/PK_01/front'
+ffprobe -v error -rtsp_transport tcp \
+  -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate \
+  -of default=noprint_wrappers=1 "$VISION_RTSP_URL"
+
+# 한 프레임을 실제로 디코딩할 수 있는지 확인한다. timeout은 끊긴 stream에서 무한 대기하지 않게 한다.
+timeout 10 ffmpeg -nostdin -v error -rtsp_transport tcp -i "$VISION_RTSP_URL" \
+  -map 0:v:0 -frames:v 1 -f framemd5 -
+
+docker compose -f compose.ai_5080.yaml up -d ai_runtime
+docker compose -f compose.ai_5080.yaml logs -f --tail=100 ai_runtime
+```
+
+기대 codec은 `h264`다. 현재 저장소는 PC2 image에 전달할 RTSP 환경 계약과 FFmpeg
+raw-frame 입력 argv까지 제공한다. 실제 YOLO/VLM model entrypoint와 모델 weight는
+`TRIHOUSE_AI_IMAGE`에서 연결하고 서버 GPU에서 별도 검증한다.

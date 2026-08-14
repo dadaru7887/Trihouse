@@ -14,6 +14,12 @@ services:
 
       # The 5080 sends records through the Gateway and never receives MySQL credentials.
       FMS_GATEWAY_URL: ${FMS_GATEWAY_URL:-http://host.docker.internal:8080}
+      # PC2 always consumes the canonical PC1 MediaMTX URL, regardless of camera type.
+      VISION_RTSP_URL: ${VISION_RTSP_URL:?Set VISION_RTSP_URL to the PC1 MediaMTX stream}
+      VISION_CAMERA_ID: ${VISION_CAMERA_ID:-front}
+      VISION_FRAME_WIDTH: ${VISION_FRAME_WIDTH:-1280}
+      VISION_FRAME_HEIGHT: ${VISION_FRAME_HEIGHT:-720}
+      VISION_INFERENCE_FPS: ${VISION_INFERENCE_FPS:-15}
       RECOVERY_QUEUE_DIR: /var/lib/trihouse/recovery_queue
       MODEL_DIR: /models
       DATASET_DIR: /data

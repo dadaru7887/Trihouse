@@ -86,6 +86,12 @@ Pinky의 제동거리·통로·배터리 로그를 측정한 뒤 한 항목씩 �
   실제 FFmpeg, file watcher, storage 삭제 권한은 서버 런타임에서 확인해야 한다.
 - 사람 쓰러짐 감지(SR_52)는 기술 조사·데이터·수용 기준을 정하기 전까지 계획 단계다. 이 문서의
   현재 코드/테스트를 최종 쓰러짐 감지 구현으로 사용하지 않는다.
+- `vision_system/stream_hub/ingress.py`는 USB 카메라 입력을 PC1 MediaMTX의
+  `pinky/<robot_id>/<camera_id>` 경로로 만드는 FFmpeg argv를 소유한다. 카메라가 H.264를
+  제공하면 `COPY`, 그 외에는 `NVENC` 또는 `LIBX264`를 명시한다.
+- `vision_system/inference_common/stream.py`는 PC2의 `VISION_RTSP_URL`을 검증하고 모델이
+  읽을 BGR24 raw-frame FFmpeg argv를 만든다. 모델 worker는 `frame_size_bytes` 단위로 읽되
+  처리 지연 시 과거 frame queue를 끝까지 처리하지 말고 latest-frame 정책을 적용한다.
 
 ## 정적 정책 테스트
 
@@ -126,7 +132,10 @@ python3 -m unittest -q \
   vision_system.tests.test_basket_correction \
   vision_system.tests.test_dataset_policy \
   vision_system.tests.test_recording_catalog \
-  vision_system.tests.test_recorder
+  vision_system.tests.test_recorder \
+  vision_system.tests.test_stream_ingress \
+  vision_system.tests.test_inference_stream \
+  vision_system.tests.test_vision_compose_contract
 python3 -m compileall -q control_tower trihouse_pinky vision_system
 git diff --check
 ```

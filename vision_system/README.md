@@ -16,6 +16,45 @@ RTX 4060 영상 수신·저장과 RTX 5080 추론을 역할별로 분리한다. 
 | `training/`, `evaluation/` | 학습과 재현 가능한 평가 |
 | `tests/` | recorded stream·장애 profile 통합 시험 |
 
+## PC1 → PC2 표준 영상 입력
+
+모든 카메라는 최종적으로 다음 RTSP 경로를 제공한다.
+
+```text
+rtsp://<PC1_LAN_IP>:8554/pinky/<robot_id>/<camera_id>
+```
+
+- Native RTSP/H.264: PC1 MediaMTX로 stream-copy한다.
+- USB H.264: `UsbVideoFormat.H264`와 `VideoEncoder.COPY`를 사용한다.
+- USB MJPEG/YUYV: 카메라 연결 호스트에서 `NVENC`로 한 번 인코딩하고, GPU를 사용할 수
+  없을 때만 `LIBX264`를 사용한다.
+- PC2: `InferenceStreamConfig.from_env()`로 `VISION_RTSP_URL`을 읽고
+  `build_ffmpeg_frame_command()`의 BGR24 frame을 YOLO/VLM 입력으로 사용한다.
+
+명령 확인 예시:
+
+```bash
+cd /home/syw/Trihouse
+python3 - <<'PY'
+from vision_system.stream_hub.ingress import (
+    StreamIdentity, UsbIngressConfig, UsbVideoFormat, VideoEncoder,
+    build_usb_ingress_command,
+)
+
+config = UsbIngressConfig(
+    identity=StreamIdentity(robot_id='PK_01', camera_id='front'),
+    device='/dev/video0',
+    mediamtx_base_url='rtsp://PC1_LAN_IP:8554',
+    input_format=UsbVideoFormat.MJPEG,
+    encoder=VideoEncoder.NVENC,
+)
+print(' '.join(build_usb_ingress_command(config)))
+PY
+```
+
+출력된 명령을 카메라가 연결된 호스트에서 실행한다. 실제 `/dev/video0` 지원 포맷은
+`v4l2-ctl --device /dev/video0 --list-formats-ext`로 먼저 확인한다.
+
 ## 현재 구현된 결정 규칙
 
 - `person_worker/policy.py`는 모델의 사람 box·track·자세·움직임 결과에 ROI와 연속 프레임
