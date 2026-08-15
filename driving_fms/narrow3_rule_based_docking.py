@@ -7,7 +7,7 @@ RPP가 냉동구역(narrow_3) 코너에서 계속 collision ahead로 막혀서, 
 
 zone마다 스텝 구성이 다름(오늘 사진 기준):
 - narrow_1(상온), narrow_2(냉장): 진입이 비교적 직선이라 [회전 -> 후진] 2단계면 충분해 보임
-- narrow_3(냉동): 코너를 끼고 도는 진입이라 [회전 -> 직진 -> 회전 -> 후진] 4단계 필요
+- narrow_3(냉동): 오늘 실측 결과 [직진 -> 회전 -> 후진] 3단계로 확정
 
 **주의**: 이 스크립트도 LiDAR 충돌 감지가 없음(replay_trajectory.py와 동일한 트레이드오프).
 반드시 사람이 로봇 옆에서 지켜보다가 이상하면 Ctrl+C.
@@ -43,34 +43,56 @@ POS_TOL = 0.02
 ZONES: dict[str, dict] = {
     "narrow_1": {  # 상온
         "geometry": {
-            "cx": 0.0, "cy": 0.0, "yaw": 0.0,     # TODO: 실측값
-            "length": 0.4, "width": 0.3,          # TODO: 실측값
+            # 2026-08-15 실측 시작점 (stddev x=10.9cm/y=6.0cm/yaw=10.6deg)
+            "cx": 1.010244055594586, "cy": 0.9167344977253539, "yaw": -0.08675495954950327,
+            "length": 0.05, "width": 0.20,        # 2026-08-15 실측: 세로 5cm, 가로 20cm
         },
-        "sequence": [
-            ("rotate", 0.0),     # TODO: 1) 주차 방향(ArUco 보는 방향과 동일하다고 가정, 다르면 분리)
-            ("straight", -0.15),  # TODO: 2) 후진 거리(음수)
+        # 2026-08-15 실측: 존 진입 후 바로 -- 현재 yaw로 회전 -> 30cm 후진, 2단계.
+        "sequence": [  # 입고
+            ("rotate", -2.805721254488808),  # 1) 주차 방향 -- 2026-08-15 마지막에 재저장한 값
+            ("straight", -0.30),             # 2) 30cm 후진
+        ],
+        # 2026-08-15 실측: 출고 -- 30cm 직진(후진 되돌리기) -> 회전(-179.4deg) -> zone 벗어날 때까지 전진
+        "sequence_exit": [
+            ("straight", 0.30),
+            ("rotate", -3.130293455959265),  # stddev yaw=11.3deg
+            ("exit_zone", None),
         ],
     },
     "narrow_2": {  # 냉장
         "geometry": {
-            "cx": 0.0, "cy": 0.0, "yaw": 0.0,     # TODO: 실측값
-            "length": 0.4, "width": 0.3,          # TODO: 실측값
+            # 2026-08-15 실측 시작점 (stddev x=11.5cm/y=6.9cm/yaw=13.0deg)
+            "cx": 1.1013315221281241, "cy": -0.10045055614140724, "yaw": 3.1029342608092607,
+            "length": 0.05, "width": 0.20,        # narrow_1과 동일
         },
+        # narrow_1과 시퀀스 동일(회전/거리값은 narrow_1 값 그대로 재사용, 미검증 -- 다음에 확인 필요)
         "sequence": [
-            ("rotate", 0.0),      # TODO
-            ("straight", -0.15),  # TODO
+            ("rotate", 2.4189105956431427),
+            ("straight", -0.30),
+        ],
+        "sequence_exit": [
+            ("straight", 0.30),
+            ("rotate", -3.130293455959265),
+            ("exit_zone", None),
         ],
     },
-    "narrow_3": {  # 냉동 -- 오늘 씨름했던 코너, 4단계 필요
+    "narrow_3": {  # 냉동 -- 오늘 씨름했던 코너, 실측 완료(직진->회전->후진 3단계)
         "geometry": {
-            "cx": 0.0, "cy": 0.0, "yaw": 0.0,     # TODO: 실측값
-            "length": 0.5, "width": 0.3,          # TODO: 실측값
+            # 2026-08-15 실측 (x=0.920, y=-1.189, yaw=-0.032rad, stddev x=15.8cm/y=4.3cm/yaw=17.5deg)
+            "cx": 0.9198039894575488, "cy": -1.1892528962848725, "yaw": -0.03242978898931081,
+            "length": 0.10, "width": 0.20,        # 2026-08-15 실측: 세로(진행축) 10cm, 가로(양쪽벽사이) 20cm
         },
-        "sequence": [
-            ("rotate", -1.408),   # TODO: 1) ArUco 방향(sub_sub_midgoal_3 저장 yaw 참고값)
-            ("straight", 0.3),    # TODO: 2) 직진 거리
-            ("rotate", -1.408),   # TODO: 3) 주차 방향(1번과 다를 수 있음, "그 주차장의 yaw")
-            ("straight", -0.15),  # TODO: 4) 후진 거리(음수)
+        # 2026-08-15 실측 (재측정): 존 진입 -> 10cm 직진 -> 처음 각도로 회전 -> 31.5cm 후진.
+        "sequence": [  # 입고(냉동구역 안으로 들어가기)
+            ("straight", 0.10),                # 1) 존 진입 후 10cm 직진
+            ("rotate", -1.5253226652048426),   # 2) 처음 저장한 각도로 제자리 회전
+            ("straight", -0.315),              # 3) 31.5cm 후진
+        ],
+        # 2026-08-15 실측: 출고(냉동구역에서 나오기) -- 입고의 역순.
+        "sequence_exit": [
+            ("straight", 0.315),               # 1) 후진했던 만큼(31.5cm) 다시 전진
+            ("rotate", -2.999132807834344),    # 2) 출고 방향(-171.8deg)으로 제자리 회전
+            ("exit_zone", None),               # 3) in_oriented_zone()이 False될 때까지 전진(거리 사전측정 불필요)
         ],
     },
     "narrow_5": {  # bottleneck_2 근처 통로 -- 3번 꺾어서 중앙 열린 공간으로 나옴.
@@ -78,17 +100,17 @@ ZONES: dict[str, dict] = {
         # (2026-08-15 결정) -- 문제가 되는 건 start_zone_1에서 출발하는 경로일 때뿐이라,
         # 아래 START_ZONE_1_DEPARTURE로 미션 시작 시 한 번만 처리하는 게 훨씬 간단함.
         "geometry": {
-            "cx": 0.0, "cy": 0.0, "yaw": 0.0,     # TODO: 실측값
-            "length": 0.8, "width": 0.3,          # TODO: 실측값 (3번 꺾이는 구간 전체 길이)
+            # 2026-08-15 실측 시작점 (stddev x=9.3cm/y=7.0cm/yaw=8.2deg)
+            "cx": 0.5337560352123113, "cy": -0.3448596267925549, "yaw": -0.11990788131625577,
+            "length": 0.10, "width": 0.20,        # 2026-08-15 실측: 세로 10cm, 가로 20cm
         },
         "sequence": [
-            ("rotate", 0.0),      # TODO: 1)
-            ("straight", 0.2),    # TODO: 2)
-            ("rotate", 0.0),      # TODO: 3)
-            ("straight", 0.2),    # TODO: 4)
-            ("rotate", 0.0),      # TODO: 5)
-            ("straight", 0.2),    # TODO: 6) -- 이 마지막 지점이 "중앙 열린 공간"에 해당해야 함,
-                                   # 여기서 끝나면 이후 Nav2가 이어받아 end_zone_1/2로 감(별도 스크립트 필요 없음)
+            ("rotate", -0.11990788131625577),  # 1) 2026-08-15 실측: 시작점 yaw 그대로
+            ("straight", 0.06),   # 2) 2026-08-15 실측: 6cm 직진
+            ("rotate", 1.504),    # 3) 2026-08-15 실측
+            ("straight", 0.5),    # 4) 2026-08-15: 0.5m 직진
+            ("rotate", 2.893),    # 5) 2026-08-15 실측 -- 여기서 끝, "중앙 열린 공간" 도달.
+                                   # 이 회전 이후 별도 직진 스텝 없이 바로 Nav2로 넘겨서 end_zone_1/2로 감.
         ],
     },
 }
@@ -120,36 +142,46 @@ def mark_zone_completed(zone_name: str) -> None:
 
 
 # ============================================================
-# start_zone_1 출발 전용 -- narrow_4(코너 2개) 문제를 zone/시퀀스로 안 풀고, 미션 시작
-# 시점에 한 번만 처리. start_zone_1에서 출발하는 경로만 narrow_4를 지나가야 해서
-# 생기는 문제이므로, 회전 없이(= start_zone_1에 저장된 yaw로 이미 정렬돼있다고 가정)
+# start_zone_1/2 출발 전용 -- narrow_4(코너 2개) 문제를 zone/시퀀스로 안 풀고, 미션 시작
+# 시점에 한 번만 처리. start_zone에서 출발하는 경로만 narrow_4를 지나가야 해서
+# 생기는 문제이므로, 회전 없이(= start_zone에 저장된 yaw로 이미 정렬돼있다고 가정)
 # 정해진 거리만 먼저 직진시켜서 narrow_4 구간을 통째로 빠져나간 뒤 Nav2로 넘김.
+# 2026-08-15: start_zone_1에서 실측한 0.7m가 start_zone_2에도 동일하게 적용된다고 보고 재사용.
 # ============================================================
-START_ZONE_1 = (0.171, 0.202)   # fms_feature_points.jsonl 저장값
-START_ZONE_1_TRIGGER_RADIUS = 0.3   # 이 반경 안에서 출발하면 아래 처리 적용
-START_ZONE_1_DEPART_DISTANCE = 0.5  # TODO: 실측값 -- narrow_4 구간을 벗어나는 데 필요한 직진 거리
+START_ZONES = {
+    "start_zone_1": (0.171, 0.202),   # fms_feature_points.jsonl 저장값
+    "start_zone_2": (0.076, -0.013),  # fms_feature_points.jsonl 저장값
+}
+START_ZONE_TRIGGER_RADIUS = 0.3   # 이 반경 안에서 출발하면 아래 처리 적용
+START_ZONE_DEPART_DISTANCE = 0.7  # 2026-08-15 실측(start_zone_1 기준): narrow_4 벗어나려면 약 70cm 직진 필요
+# (2026-08-15) 직진 후 회전+후진도 추가했다가, 그냥 직진 0.7m만으로 충분하다고 판단해 폐기함.
 
 
-def near_start_zone_1(x: float, y: float) -> bool:
-    return math.hypot(x - START_ZONE_1[0], y - START_ZONE_1[1]) <= START_ZONE_1_TRIGGER_RADIUS
+def near_start_zone(x: float, y: float) -> str | None:
+    """가까운 start_zone 이름을 반환(없으면 None)."""
+    for name, (zx, zy) in START_ZONES.items():
+        if math.hypot(x - zx, y - zy) <= START_ZONE_TRIGGER_RADIUS:
+            return name
+    return None
 
 
 def depart_from_start_zone_1(node: Node, buf: Buffer, pub) -> bool:
-    """미션 시작 직후 한 번만 호출. start_zone_1 근처가 아니면 아무것도 안 하고 바로
-    통과(False 반환, 호출부는 평소대로 Nav2로 진행하면 됨)."""
+    """미션 시작 직후 한 번만 호출. start_zone_1/2 근처가 아니면 아무것도 안 하고 바로
+    통과(False 반환, 호출부는 평소대로 Nav2로 진행하면 됨). 함수명은 호환성 위해 유지."""
     pose = get_pose(buf)
     if pose is None:
         print("!! TF 못 얻음 -- AMCL 수렴 확인 필요")
         return False
     x, y, yaw = pose
-    if not near_start_zone_1(x, y):
-        print("start_zone_1 근처 아님 -- 평소대로 Nav2 진행")
+    zone = near_start_zone(x, y)
+    if zone is None:
+        print("start_zone_1/2 근처 아님 -- 평소대로 Nav2 진행")
         return False
 
-    print(f"start_zone_1 근처에서 출발 감지 ({x:.3f},{y:.3f}) -- "
-          f"narrow_4 회피용 직진 {START_ZONE_1_DEPART_DISTANCE:.2f}m 먼저 실행")
+    print(f"{zone} 근처에서 출발 감지 ({x:.3f},{y:.3f}) -- "
+          f"narrow_4 회피용 직진 {START_ZONE_DEPART_DISTANCE:.2f}m 먼저 실행")
     try:
-        if not drive_straight(node, buf, pub, START_ZONE_1_DEPART_DISTANCE):
+        if not drive_straight(node, buf, pub, START_ZONE_DEPART_DISTANCE):
             print("!! 직진 타임아웃"); return False
         print("직진 완료 -- 이제 Nav2로 넘기세요")
         return True
@@ -243,12 +275,36 @@ def drive_straight(node: Node, buf: Buffer, pub, distance: float,
     return False
 
 
-def run_zone_sequence(node: Node, buf: Buffer, pub, zone_name: str) -> bool:
+def drive_until_outside_zone(node: Node, buf: Buffer, pub, geometry: dict,
+                              timeout: float = 30.0) -> bool:
+    """distance를 미리 재지 않고, 현재 yaw 방향으로 전진하면서 in_oriented_zone()이
+    False가 될 때(= zone 사각형을 완전히 벗어날 때)까지 계속 감. 출고(exit) 마지막 스텝용."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        rclpy.spin_once(node, timeout_sec=0.05)
+        pose = get_pose(buf)
+        if pose is None:
+            continue
+        x, y, _ = pose
+        if not in_oriented_zone(x, y, geometry):
+            pub.publish(Twist())
+            return True
+        tw = Twist()
+        tw.linear.x = MAX_LIN
+        pub.publish(tw)
+        time.sleep(0.05)
+    pub.publish(Twist())
+    return False
+
+
+def run_zone_sequence(node: Node, buf: Buffer, pub, zone_name: str, exit: bool = False) -> bool:
     if zone_name not in ZONES:
         print(f"!! 알 수 없는 zone: {zone_name} (가능: {list(ZONES)})")
         return False
     cfg = ZONES[zone_name]
-    geometry, sequence = cfg["geometry"], cfg["sequence"]
+    geometry = cfg["geometry"]
+    sequence = cfg.get("sequence_exit", cfg["sequence"]) if exit else cfg["sequence"]
+    mode = "출고" if exit else "입고"
 
     pose = get_pose(buf)
     if pose is None:
@@ -261,7 +317,7 @@ def run_zone_sequence(node: Node, buf: Buffer, pub, zone_name: str) -> bool:
         print(f"아직 {zone_name} 영역 밖 -- 시퀀스 시작 안 함(Nav2로 계속 접근하세요)")
         return False
 
-    print(f"=== {zone_name} 영역 진입 확인, {len(sequence)}단계 시퀀스 시작 ===")
+    print(f"=== {zone_name} 영역 진입 확인, {mode} {len(sequence)}단계 시퀀스 시작 ===")
     try:
         for i, (kind, value) in enumerate(sequence, 1):
             if kind == "rotate":
@@ -273,6 +329,10 @@ def run_zone_sequence(node: Node, buf: Buffer, pub, zone_name: str) -> bool:
                 print(f"{i}) {direction} {abs(value):.2f}m...")
                 if not drive_straight(node, buf, pub, value):
                     print(f"!! {i}단계 {direction} 타임아웃"); return False
+            elif kind == "exit_zone":
+                print(f"{i}) zone 벗어날 때까지 전진...")
+                if not drive_until_outside_zone(node, buf, pub, geometry):
+                    print(f"!! {i}단계 exit_zone 타임아웃"); return False
             else:
                 print(f"!! 알 수 없는 스텝 종류: {kind}"); return False
 
@@ -287,12 +347,16 @@ def run_zone_sequence(node: Node, buf: Buffer, pub, zone_name: str) -> bool:
 
 
 def main() -> None:
-    valid = list(ZONES) + ["depart"]
+    valid = list(ZONES) + [z + "_exit" for z in ZONES] + ["depart"]
     if len(sys.argv) < 2 or sys.argv[1] not in valid:
-        print(f"사용법: python3 {sys.argv[0]} <zone_name|depart>  (가능: {valid})")
+        print(f"사용법: python3 {sys.argv[0]} <zone_name|zone_name_exit|depart>  (가능: {valid})")
         print("  depart: start_zone_1 근처면 narrow_4 회피용 직진 후 Nav2로 넘김")
+        print("  <zone_name>_exit: 물품 적재 후 존을 빠져나가는 출고 시퀀스(sequence_exit) 실행")
         sys.exit(1)
     target = sys.argv[1]
+    exit_mode = target.endswith("_exit") and target[:-len("_exit")] in ZONES
+    if exit_mode:
+        target = target[:-len("_exit")]
 
     rclpy.init()
     node = Node("narrow_rule_based_docking")
@@ -307,7 +371,7 @@ def main() -> None:
     if target == "depart":
         depart_from_start_zone_1(node, buf, pub)
     else:
-        run_zone_sequence(node, buf, pub, target)
+        run_zone_sequence(node, buf, pub, target, exit=exit_mode)
 
     pub.publish(Twist())
     node.destroy_node()
