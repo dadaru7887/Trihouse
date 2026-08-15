@@ -8,14 +8,21 @@ class MapWaypointPresentation {
     required this.code,
     required this.position,
     required this.yaw,
+    this.draggable = true,
   });
 
   final String code;
   final Offset position;
   final double yaw;
+  final bool draggable;
 
   MapWaypointPresentation movedTo(Offset value) =>
-      MapWaypointPresentation(code: code, position: value, yaw: yaw);
+      MapWaypointPresentation(
+        code: code,
+        position: value,
+        yaw: yaw,
+        draggable: draggable,
+      );
 }
 
 class MapWorkspace extends StatefulWidget {
@@ -149,10 +156,16 @@ class _MapWorkspaceState extends State<MapWorkspace> {
                             key: Key('waypoint-${_waypoints[index].code}'),
                             behavior: HitTestBehavior.opaque,
                             dragStartBehavior: DragStartBehavior.down,
-                            onPanUpdate: (details) =>
-                                _move(index, details.delta, ended: false),
-                            onPanEnd: (_) =>
-                                _move(index, Offset.zero, ended: true),
+                            onPanUpdate: (details) {
+                              if (_waypoints[index].draggable) {
+                                _move(index, details.delta, ended: false);
+                              }
+                            },
+                            onPanEnd: (_) {
+                              if (_waypoints[index].draggable) {
+                                _move(index, Offset.zero, ended: true);
+                              }
+                            },
                             child: Tooltip(
                               message: _waypoints[index].code,
                               child: const Icon(

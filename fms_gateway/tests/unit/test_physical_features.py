@@ -207,6 +207,39 @@ def test_canonical_p0_import_rejects_incomplete_record_counts(tmp_path: Path) ->
         _importer().parse(incomplete)
 
 
+def test_p0_shape_cannot_be_bypassed_by_renaming_embedded_map(tmp_path: Path) -> None:
+    records = _records()
+    for record in records:
+        record["target_map_name"] = "reused_by_another_project"
+    records[8]["radius_m"] = 0.11
+    records[8]["source_diameter_m"] = 0.22
+    records[8]["source_measurements"][0]["source_diameter_m"] = 0.22  # type: ignore[index]
+    renamed = _write_records(tmp_path / "renamed.jsonl", records)
+
+    with pytest.raises(ValueError, match="radius 0.10 m and diameter 0.20 m"):
+        _importer().parse(renamed)
+
+
+def test_p0_fiducial_recognition_poses_must_be_distinct_for_any_map_name(
+    tmp_path: Path,
+) -> None:
+    records = _records()
+    for record in records:
+        record["target_map_name"] = "reused_by_another_project"
+    records[-1]["recognition_pose"] = records[-2]["recognition_pose"]
+    records[-1]["source_measurements"][0].update(  # type: ignore[index,union-attr]
+        {
+            "map_x": records[-2]["recognition_pose"]["x"],  # type: ignore[index]
+            "map_y": records[-2]["recognition_pose"]["y"],  # type: ignore[index]
+            "map_yaw": records[-2]["recognition_pose"]["yaw"],  # type: ignore[index]
+        }
+    )
+    renamed = _write_records(tmp_path / "duplicate-pose.jsonl", records)
+
+    with pytest.raises(ValueError, match="distinct recognition poses"):
+        _importer().parse(renamed)
+
+
 def test_import_rejects_records_from_multiple_target_maps(tmp_path: Path) -> None:
     records = _records()
     records[-1]["target_map_name"] = "another_map"

@@ -4,14 +4,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePath
 import re
 import secrets
 import shutil
+import struct
 import time
 from typing import Any, Iterable
 import uuid
+import zlib
 
 import yaml
 
@@ -21,6 +24,11 @@ from .physical_features import (
     PhysicalFeatureImporter,
 )
 from .runtime_profiles import RuntimeProfileProvider
+from .repositories import (
+    MapDraftRevisionConflict,
+    MapProjectValidationError,
+    MapRevisionContentConflict,
+)
 
 
 SOURCE_MIME_TYPES = {
@@ -36,6 +44,9 @@ SOURCE_MIME_TYPES = {
     ),
 }
 UPLOAD_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
+RUNTIME_ARTIFACT_KEYS = frozenset(
+    {"building_yaml", "nav_graph_yaml", "world_sdf"}
+)
 
 
 class MapWorkflowError(ValueError):
@@ -45,6 +56,10 @@ class MapWorkflowError(ValueError):
         self.code = code
         self.detail = detail
         super().__init__(detail)
+
+
+class MapWorkflowConflict(MapWorkflowError):
+    """Stable conflict for a well-formed request that lost a concurrent race."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,6 +340,12 @@ class MapSourceStaging:
                 pending.rename(claimed_dir)
                 claimed_source = self._source_from_dir(claimed_dir)
                 claimed.append(ClaimedMapSource(claimed_source, claimed_dir))
+        except FileNotFoundError as error:
+            self.restore_claims(claimed)
+            raise MapWorkflowConflict(
+                "STAGED_SOURCE_TOKEN_CONSUMED",
+                "upload token was consumed by another save",
+            ) from error
         except Exception:
             self.restore_claims(claimed)
             raise
@@ -387,6 +408,203 @@ def _canonical_json(value: Any) -> bytes:
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")
+
+
+def _content_identity(content: object) -> tuple[bytes, str, int] | None:
+    if not isinstance(content, (bytes, bytearray)):
+        return None
+    raw = bytes(content)
+    return raw, hashlib.sha256(raw).hexdigest(), len(raw)
+
+
+def _finite_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
+def _validate_slam_yaml(content: bytes, image_file_name: str) -> bool:
+    try:
+        parsed = yaml.safe_load(content)
+    except (UnicodeDecodeError, yaml.YAMLError):
+        return False
+    if not isinstance(parsed, dict) or set(
+        ("image", "resolution", "origin", "negate", "occupied_thresh", "free_thresh")
+    ) - set(parsed):
+        return False
+    image = parsed.get("image")
+    if (
+        not isinstance(image, str)
+        or PurePath(image).name != image
+        or image != image_file_name
+    ):
+        return False
+    resolution = parsed.get("resolution")
+    origin = parsed.get("origin")
+    negate = parsed.get("negate")
+    occupied = parsed.get("occupied_thresh")
+    free = parsed.get("free_thresh")
+    return (
+        _finite_number(resolution)
+        and float(resolution) > 0
+        and isinstance(origin, list)
+        and len(origin) == 3
+        and all(_finite_number(value) for value in origin)
+        and isinstance(negate, int)
+        and not isinstance(negate, bool)
+        and negate in {0, 1}
+        and _finite_number(occupied)
+        and _finite_number(free)
+        and 0.0 <= float(free) < float(occupied) <= 1.0
+    )
+
+
+def _pgm_shape(content: bytes) -> tuple[int, int] | None:
+    position = 0
+
+    def token() -> bytes | None:
+        nonlocal position
+        while position < len(content):
+            if content[position] in b" \t\r\n":
+                position += 1
+                continue
+            if content[position] == ord("#"):
+                newline = content.find(b"\n", position)
+                position = len(content) if newline < 0 else newline + 1
+                continue
+            break
+        start = position
+        while position < len(content) and content[position] not in b" \t\r\n#":
+            position += 1
+        return content[start:position] if position > start else None
+
+    try:
+        magic = token()
+        width = int(token() or b"")
+        height = int(token() or b"")
+        maximum = int(token() or b"")
+    except ValueError:
+        return None
+    if magic not in {b"P2", b"P5"} or width <= 0 or height <= 0:
+        return None
+    if maximum <= 0 or maximum > 65535 or position >= len(content):
+        return None
+    if magic == b"P2":
+        values: list[int] = []
+        try:
+            while (value := token()) is not None:
+                values.append(int(value))
+        except ValueError:
+            return None
+        if len(values) != width * height or any(
+            value < 0 or value > maximum for value in values
+        ):
+            return None
+    else:
+        if content[position : position + 2] == b"\r\n":
+            position += 2
+        elif content[position] in b" \t\r\n":
+            position += 1
+        else:
+            return None
+        bytes_per_pixel = 1 if maximum < 256 else 2
+        if len(content) - position != width * height * bytes_per_pixel:
+            return None
+    return width, height
+
+
+def _png_shape(content: bytes) -> tuple[int, int] | None:
+    if (
+        len(content) < 33
+        or content[:8] != b"\x89PNG\r\n\x1a\n"
+        or content[12:16] != b"IHDR"
+        or struct.unpack(">I", content[8:12])[0] != 13
+    ):
+        return None
+    width, height = struct.unpack(">II", content[16:24])
+    bit_depth, color_type, compression, filtering, interlace = content[24:29]
+    valid_depths = {
+        0: {1, 2, 4, 8, 16},
+        2: {8, 16},
+        3: {1, 2, 4, 8},
+        4: {8, 16},
+        6: {8, 16},
+    }
+    if (
+        width <= 0
+        or height <= 0
+        or bit_depth not in valid_depths.get(color_type, set())
+        or compression != 0
+        or filtering != 0
+        or interlace != 0
+    ):
+        return None
+    position = 8
+    chunks: list[tuple[bytes, bytes]] = []
+    try:
+        while position + 12 <= len(content):
+            length = struct.unpack(">I", content[position : position + 4])[0]
+            chunk_type = content[position + 4 : position + 8]
+            end = position + 12 + length
+            if end > len(content):
+                return None
+            data = content[position + 8 : position + 8 + length]
+            expected_crc = struct.unpack(">I", content[position + 8 + length : end])[0]
+            if zlib.crc32(chunk_type + data) & 0xFFFFFFFF != expected_crc:
+                return None
+            chunks.append((chunk_type, data))
+            position = end
+            if chunk_type == b"IEND":
+                break
+    except struct.error:
+        return None
+    if (
+        position != len(content)
+        or not chunks
+        or chunks[0][0] != b"IHDR"
+        or chunks[-1] != (b"IEND", b"")
+        or not any(chunk_type == b"IDAT" for chunk_type, _ in chunks)
+        or (color_type == 3 and not any(chunk_type == b"PLTE" for chunk_type, _ in chunks))
+    ):
+        return None
+    compressed = b"".join(data for chunk_type, data in chunks if chunk_type == b"IDAT")
+    try:
+        pixels = zlib.decompress(compressed)
+    except zlib.error:
+        return None
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
+    row_bytes = (width * channels * bit_depth + 7) // 8
+    if len(pixels) != height * (row_bytes + 1):
+        return None
+    for row in range(height):
+        if pixels[row * (row_bytes + 1)] > 4:
+            return None
+    return width, height
+
+
+def _slam_image_shape(content: bytes, file_name: str) -> tuple[int, int] | None:
+    suffix = PurePath(file_name).suffix.lower()
+    if suffix == ".pgm":
+        return _pgm_shape(content)
+    if suffix == ".png":
+        return _png_shape(content)
+    return None
+
+
+def _revision_identity(manifest: dict[str, Any]) -> dict[str, Any]:
+    artifacts = manifest["artifacts"]
+    return {
+        "snapshot_sha256": manifest["snapshot_sha256"],
+        "runtime_profile_hash": manifest["runtime_profile_hash"],
+        "source_manifest_sha256": hashlib.sha256(
+            _canonical_json(manifest["source_manifest"])
+        ).hexdigest(),
+        "artifact_sha256": {
+            name: artifacts[name]["sha256"] for name in sorted(RUNTIME_ARTIFACT_KEYS)
+        },
+    }
 
 
 def _runtime_artifacts(
@@ -465,14 +683,18 @@ class MapDeploymentCoordinator:
             source = self.repository.get_map_project_source(map_name, source_uuid)
             if source is None:
                 continue
+            identity = _content_identity(source.get("content_bytes"))
+            if identity is None:
+                continue
+            _, actual_hash, actual_size = identity
             source_manifest.append(
                 {
                     "source_type": source_type,
                     "source_uuid": source_uuid,
                     "file_name": source["file_name"],
                     "mime_type": source["mime_type"],
-                    "sha256": source["sha256"],
-                    "byte_size": source["byte_size"],
+                    "sha256": actual_hash,
+                    "byte_size": actual_size,
                 }
             )
         snapshot_hash = hashlib.sha256(_canonical_json(draft)).hexdigest()
@@ -522,15 +744,74 @@ class MapDeploymentCoordinator:
             manifest = self._manifest(staged)
         except MapWorkflowError as error:
             return (error.code,)
+        snapshot = manifest.get("draft_snapshot")
+        if not isinstance(snapshot, dict):
+            errors.add("DEPLOYMENT_SNAPSHOT_INVALID")
+            snapshot = {}
+        else:
+            try:
+                snapshot_hash = hashlib.sha256(_canonical_json(snapshot)).hexdigest()
+            except (TypeError, ValueError):
+                snapshot_hash = ""
+            if snapshot_hash != manifest.get("snapshot_sha256"):
+                errors.add("DEPLOYMENT_SNAPSHOT_HASH_MISMATCH")
+            if (
+                snapshot.get("map_name") != staged.map_name
+                or snapshot.get("draft_revision") != staged.draft_revision
+            ):
+                errors.add("DEPLOYMENT_SNAPSHOT_IDENTITY_MISMATCH")
+            if snapshot.get("runtime_profile_hash") != manifest.get(
+                "runtime_profile_hash"
+            ):
+                errors.add("DEPLOYMENT_PROFILE_BINDING_MISMATCH")
+
+        source_values = manifest.get("source_manifest")
+        if not isinstance(source_values, list):
+            errors.add("DEPLOYMENT_SOURCE_MANIFEST_INVALID")
+            source_values = []
+        by_type: dict[str, dict[str, Any]] = {}
+        for value in source_values:
+            if (
+                not isinstance(value, dict)
+                or set(value)
+                != {
+                    "source_type",
+                    "source_uuid",
+                    "file_name",
+                    "mime_type",
+                    "sha256",
+                    "byte_size",
+                }
+                or not isinstance(value.get("source_type"), str)
+                or value["source_type"] in by_type
+            ):
+                errors.add("DEPLOYMENT_SOURCE_MANIFEST_INVALID")
+                continue
+            by_type[value["source_type"]] = value
+        bound_source_uuids = {
+            source_type: value.get("source_uuid")
+            for source_type, value in by_type.items()
+        }
+        if snapshot.get("source_uuids") != bound_source_uuids:
+            errors.add("DEPLOYMENT_SOURCE_MANIFEST_MISMATCH")
+
         draft = self.repository.get_public_map_draft(staged.map_name)
         if draft is None:
             errors.add("MAP_DRAFT_NOT_FOUND")
         elif draft["draft_revision"] != staged.draft_revision:
             errors.add("DRAFT_REVISION_CHANGED")
-        elif hashlib.sha256(_canonical_json(draft)).hexdigest() != manifest.get(
-            "snapshot_sha256"
-        ):
-            errors.add("DRAFT_SNAPSHOT_CHANGED")
+        else:
+            try:
+                current_snapshot_hash = hashlib.sha256(
+                    _canonical_json(draft)
+                ).hexdigest()
+            except (TypeError, ValueError):
+                current_snapshot_hash = ""
+            if (
+                current_snapshot_hash != manifest.get("snapshot_sha256")
+                or draft != snapshot
+            ):
+                errors.add("DRAFT_SNAPSHOT_CHANGED")
 
         try:
             current_profile = self.runtime_profiles.load()
@@ -542,14 +823,10 @@ class MapDeploymentCoordinator:
         ) != current_profile["profile_hash"]:
             errors.add("RUNTIME_PROFILE_HASH_MISMATCH")
 
-        by_type = {
-            value["source_type"]: value
-            for value in manifest.get("source_manifest", [])
-            if isinstance(value, dict) and "source_type" in value
-        }
         for required in ("slam_yaml", "slam_image", "physical_features_import"):
             if required not in by_type:
                 errors.add(f"SOURCE_{required.upper()}_MISSING")
+        persisted_by_type: dict[str, dict[str, Any]] = {}
         for source_type, source_manifest in by_type.items():
             source = self.repository.get_map_project_source(
                 staged.map_name, source_manifest.get("source_uuid", "")
@@ -557,19 +834,19 @@ class MapDeploymentCoordinator:
             if source is None:
                 errors.add("SOURCE_REFERENCE_INVALID")
                 continue
+            persisted_by_type[source_type] = source
+            identity = _content_identity(source.get("content_bytes"))
             if (
-                source.get("sha256") != source_manifest.get("sha256")
-                or source.get("byte_size") != source_manifest.get("byte_size")
+                identity is None
+                or identity[1] != source_manifest.get("sha256")
+                or identity[2] != source_manifest.get("byte_size")
+                or source.get("source_uuid") != source_manifest.get("source_uuid")
+                or source.get("source_type") != source_type
+                or source.get("file_name") != source_manifest.get("file_name")
+                or source.get("mime_type") != source_manifest.get("mime_type")
             ):
                 errors.add("SOURCE_HASH_MISMATCH")
                 continue
-            if source_type == "slam_yaml":
-                try:
-                    parsed = yaml.safe_load(source["content_bytes"])
-                    if not isinstance(parsed, dict):
-                        raise ValueError
-                except (ValueError, yaml.YAMLError):
-                    errors.add("SLAM_YAML_INVALID")
             if source_type == "physical_features_import":
                 try:
                     imported = PhysicalFeatureImporter().parse(source["content_bytes"])
@@ -593,8 +870,30 @@ class MapDeploymentCoordinator:
                         errors.add("PHYSICAL_FEATURE_RECORD_SET_MISMATCH")
                 except PhysicalFeatureImportError:
                     errors.add("PHYSICAL_FEATURES_INVALID")
-        for artifact in manifest.get("artifacts", {}).values():
-            if not isinstance(artifact, dict):
+
+        slam_image = persisted_by_type.get("slam_image")
+        slam_yaml = persisted_by_type.get("slam_yaml")
+        if slam_image is not None:
+            image_content = _content_identity(slam_image.get("content_bytes"))
+            if image_content is None or _slam_image_shape(
+                image_content[0], str(slam_image.get("file_name", ""))
+            ) is None:
+                errors.add("SLAM_IMAGE_INVALID")
+        if slam_yaml is not None and slam_image is not None:
+            yaml_content = _content_identity(slam_yaml.get("content_bytes"))
+            if yaml_content is None or not _validate_slam_yaml(
+                yaml_content[0], str(slam_image.get("file_name", ""))
+            ):
+                errors.add("SLAM_YAML_INVALID")
+
+        artifacts = manifest.get("artifacts")
+        if not isinstance(artifacts, dict) or set(artifacts) != RUNTIME_ARTIFACT_KEYS:
+            errors.add("RUNTIME_ARTIFACT_SET_INVALID")
+            artifacts = artifacts if isinstance(artifacts, dict) else {}
+        expected_artifacts = _runtime_artifacts(staged.map_name, snapshot)
+        for name in RUNTIME_ARTIFACT_KEYS:
+            artifact = artifacts.get(name)
+            if not isinstance(artifact, dict) or set(artifact) != {"content", "sha256"}:
                 errors.add("RUNTIME_ARTIFACT_INVALID")
                 continue
             content = artifact.get("content")
@@ -602,11 +901,15 @@ class MapDeploymentCoordinator:
                 content.encode("utf-8")
             ).hexdigest() != artifact.get("sha256"):
                 errors.add("RUNTIME_ARTIFACT_HASH_MISMATCH")
+                continue
+            if artifact != expected_artifacts[name]:
+                errors.add("RUNTIME_ARTIFACT_CONTENT_MISMATCH")
         return tuple(sorted(errors))
 
     def activate(self, staged: StagedDeployment, published_by: str) -> dict[str, Any]:
         errors = self.validate(staged)
         if errors:
+            shutil.rmtree(staged.staging_dir, ignore_errors=True)
             raise MapWorkflowError("DEPLOYMENT_VALIDATION_FAILED", ", ".join(errors))
         manifest = self._manifest(staged)
         artifacts = manifest["artifacts"]
@@ -615,25 +918,45 @@ class MapDeploymentCoordinator:
             "nav_graph_sha256": artifacts["nav_graph_yaml"]["sha256"],
             "world_sha256": artifacts["world_sdf"]["sha256"],
         }
-        revision_hash = hashlib.sha256(
-            json.dumps(
-                hash_identity, sort_keys=True, separators=(",", ":")
-            ).encode("utf-8")
-        ).hexdigest()
+        revision_identity = _revision_identity(manifest)
+        revision_hash = hashlib.sha256(_canonical_json(revision_identity)).hexdigest()
+        map_revision = f"{staged.map_name}:{revision_hash}"
+        publication_manifest = {
+            **manifest,
+            "map_revision": map_revision,
+            "revision_identity": revision_identity,
+        }
         publication = {
-            "map_revision": f"{staged.map_name}:{revision_hash}",
+            "map_revision": map_revision,
             **hash_identity,
             "building_yaml_content": artifacts["building_yaml"]["content"],
             "nav_graph_yaml_content": artifacts["nav_graph_yaml"]["content"],
             "world_content": artifacts["world_sdf"]["content"],
             "published_by": published_by,
-            "manifest": {
-                **manifest,
-                "map_revision": f"{staged.map_name}:{revision_hash}",
+            "manifest": publication_manifest,
+            "expected_draft": {
+                "draft_revision": manifest["draft_revision"],
+                "draft_snapshot": manifest["draft_snapshot"],
+                "snapshot_sha256": manifest["snapshot_sha256"],
+                "source_manifest": manifest["source_manifest"],
+                "runtime_profile_hash": manifest["runtime_profile_hash"],
             },
         }
-        published = self.repository.publish_map_project(staged.map_name, publication)
-        self._write_active_manifest(manifest, published)
+        try:
+            published = self.repository.publish_map_project(
+                staged.map_name, publication
+            )
+        except (
+            MapDraftRevisionConflict,
+            MapProjectValidationError,
+            MapRevisionContentConflict,
+        ):
+            shutil.rmtree(staged.staging_dir, ignore_errors=True)
+            raise
+        active_manifest = published.get("manifest")
+        if not isinstance(active_manifest, dict):
+            active_manifest = publication_manifest
+        self._write_active_manifest(active_manifest, published)
         shutil.rmtree(staged.staging_dir, ignore_errors=True)
         return published
 
@@ -647,13 +970,16 @@ class MapDeploymentCoordinator:
         revision_dir.mkdir(parents=True, exist_ok=True)
         active_manifest = revision_dir / "manifest.json"
         temporary_manifest = revision_dir / ".manifest.tmp"
-        temporary_manifest.write_bytes(_canonical_json(manifest))
-        os.replace(temporary_manifest, active_manifest)
+        self._atomic_json_write(
+            active_manifest, temporary_manifest, _canonical_json(manifest)
+        )
         pointer = self.active_root / f"{map_name}.json"
         temporary_pointer = (
             self.active_root / f".{map_name}.{manifest['deployment_uuid']}.tmp"
         )
-        temporary_pointer.write_bytes(
+        self._atomic_json_write(
+            pointer,
+            temporary_pointer,
             _canonical_json(
                 {
                     "deployment_uuid": manifest["deployment_uuid"],
@@ -661,9 +987,23 @@ class MapDeploymentCoordinator:
                     "map_revision": map_revision,
                     "manifest_path": str(active_manifest),
                 }
-            )
+            ),
         )
-        os.replace(temporary_pointer, pointer)
+
+    @staticmethod
+    def _atomic_json_write(destination: Path, temporary: Path, content: bytes) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with temporary.open("wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_fd = os.open(destination.parent, flags)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
     def reconcile_startup(self) -> tuple[str, ...]:
         reconciled: list[str] = []

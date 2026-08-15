@@ -15,7 +15,7 @@ abstract interface class FmsApi {
 
   Future<MapProjectDraftDto> saveMapDraft(
     MapProjectDraftDto draft, {
-    int? expectedRevision,
+    required int expectedRevision,
   });
 
   Future<void> deleteMapDraft(String mapName);

@@ -719,20 +719,39 @@ class PhysicalFeatureImporter:
             )
 
         counts = (len(waypoints), len(bottlenecks), len(fiducials))
-        if map_name == CANONICAL_P0_MAP_NAME:
-            if counts != CANONICAL_P0_COUNTS:
-                raise PhysicalFeatureImportError(
-                    "trihouse_test_01 requires exactly 8 waypoints, 2 bottlenecks, "
-                    "and 3 fiducials"
-                )
-            targets = frozenset(
-                binding.target_location_code for binding in fiducials
+        if counts != CANONICAL_P0_COUNTS:
+            raise PhysicalFeatureImportError(
+                "P0 physical features require exactly 8 waypoints, 2 bottlenecks, "
+                "and 3 fiducials"
             )
-            if targets != CANONICAL_P0_FIDUCIAL_TARGETS:
-                raise PhysicalFeatureImportError(
-                    "canonical fiducial target_location_code bindings must cover "
-                    "the three warehouse docks exactly once"
-                )
+        if any(
+            not math.isclose(feature.radius_m, 0.10, rel_tol=0.0, abs_tol=1e-12)
+            or not math.isclose(
+                feature.source_diameter_m, 0.20, rel_tol=0.0, abs_tol=1e-12
+            )
+            for feature in bottlenecks
+        ):
+            raise PhysicalFeatureImportError(
+                "P0 bottlenecks require radius 0.10 m and diameter 0.20 m"
+            )
+        targets = frozenset(binding.target_location_code for binding in fiducials)
+        if targets != CANONICAL_P0_FIDUCIAL_TARGETS:
+            raise PhysicalFeatureImportError(
+                "canonical fiducial target_location_code bindings must cover "
+                "the three warehouse docks exactly once"
+            )
+        recognition_poses = {
+            (
+                binding.recognition_pose.x,
+                binding.recognition_pose.y,
+                binding.recognition_pose.yaw,
+            )
+            for binding in fiducials
+        }
+        if len(recognition_poses) != len(fiducials):
+            raise PhysicalFeatureImportError(
+                "P0 fiducials require three distinct recognition poses"
+            )
 
         return PhysicalFeatureImport(
             map_name=map_name,

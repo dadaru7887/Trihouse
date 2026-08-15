@@ -455,14 +455,14 @@ class FmsApiClient implements FmsApi {
   @override
   Future<MapProjectDraftDto> saveMapDraft(
     MapProjectDraftDto draft, {
-    int? expectedRevision,
+    required int expectedRevision,
   }) async {
     const operation = 'PUT map draft';
     final response = await _sendJson(
       'PUT',
       _mapPath(draft.mapName),
       body: draft.toJson(),
-      headers: {if (expectedRevision != null) 'If-Match': '$expectedRevision'},
+      headers: {'If-Match': '$expectedRevision'},
     );
     try {
       return MapProjectDraftDto.fromJson(_object(response, operation));

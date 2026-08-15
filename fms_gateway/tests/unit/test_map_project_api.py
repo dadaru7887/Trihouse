@@ -1,6 +1,7 @@
 import hashlib
 import json
 from pathlib import Path
+import threading
 import time
 
 from fastapi.testclient import TestClient
@@ -520,6 +521,59 @@ def test_source_stage_rejects_path_mime_size_and_expired_tokens(tmp_path: Path):
     assert expired.json()["detail"]["code"] == "STAGED_SOURCE_TOKEN_EXPIRED"
 
 
+def test_concurrent_public_save_with_one_token_returns_200_and_stable_409(
+    tmp_path: Path, monkeypatch
+):
+    repository = InMemoryFmsRepository()
+    app = create_app(repository, map_runtime_root=tmp_path)
+    client = TestClient(app)
+    staged = _stage(
+        client,
+        "trihouse_test_01",
+        "slam_yaml",
+        b"image: floor.pgm\n",
+        file_name="floor.yaml",
+        mime_type="application/x-yaml",
+    )
+    staging = app.state.map_source_staging
+    barrier = threading.Barrier(2)
+    original = staging._source_from_dir
+
+    def synchronized_read(directory: Path):
+        source = original(directory)
+        if directory.parent == staging.pending_root:
+            barrier.wait(timeout=3)
+        return source
+
+    monkeypatch.setattr(staging, "_source_from_dir", synchronized_read)
+    body = _public_draft(
+        _profile_hash(client),
+        staged_source_tokens={"slam_yaml": staged["upload_token"]},
+    )
+    responses = []
+
+    def save() -> None:
+        concurrent_client = TestClient(app)
+        responses.append(
+            concurrent_client.put(
+                "/api/v1/map-projects/trihouse_test_01",
+                json=body,
+                headers={"If-Match": "0"},
+            )
+        )
+
+    threads = [threading.Thread(target=save) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    conflict = next(response for response in responses if response.status_code == 409)
+    assert conflict.json()["detail"]["code"] == "STAGED_SOURCE_TOKEN_CONSUMED"
+    assert repository.get_public_map_draft("trihouse_test_01")["draft_revision"] == 1
+
+
 def test_delete_without_active_removes_draft_and_unreferenced_sources(tmp_path: Path):
     repository = InMemoryFmsRepository()
     client = TestClient(create_app(repository, map_runtime_root=tmp_path))
@@ -566,8 +620,11 @@ def test_publish_failure_preserves_active_without_audit_and_delete_restores_it(
         client,
         "trihouse_test_01",
         "slam_yaml",
-        b"image: floor.pgm\nresolution: 0.05\norigin: [0, 0, 0]\n",
-        file_name="map.data",
+        (
+            b"image: floor.pgm\nresolution: 0.05\norigin: [0, 0, 0]\n"
+            b"negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n"
+        ),
+        file_name="floor.yaml",
         mime_type="application/x-yaml",
     )
     staged_image = _stage(
@@ -575,7 +632,7 @@ def test_publish_failure_preserves_active_without_audit_and_delete_restores_it(
         "trihouse_test_01",
         "slam_image",
         b"P5\n1 1\n255\n\x00",
-        file_name="image.data",
+        file_name="floor.pgm",
         mime_type="image/x-portable-graymap",
     )
     tokens = {
@@ -600,6 +657,14 @@ def test_publish_failure_preserves_active_without_audit_and_delete_restores_it(
     )
     assert published.status_code == 200, published.text
     active_revision = published.json()["map_revision"]
+    repeated = client.post(
+        "/api/v1/map-projects/trihouse_test_01/publish",
+        json={"expected_draft_revision": 1, "published_by": "W-OP-01"},
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["map_revision"] == active_revision
+    assert repeated.json()["published_at"] == published.json()["published_at"]
+    assert list((tmp_path / "staging").glob("*")) == []
 
     edited_body = {
         **first_draft,

@@ -60,6 +60,40 @@ class _MapProjectPageState extends State<MapProjectPage> {
     }
   }
 
+  Future<bool> _confirmDiscard() async {
+    if (!_dirty) return true;
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('저장되지 않은 변경'),
+            content: const Text('마지막 저장 이후 변경을 버리고 계속하시겠습니까?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('취소'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('버리기'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  Future<void> _requestOpen(String mapName) async {
+    if (!await _confirmDiscard() || !mounted) return;
+    if (_dirty) setState(() => _dirty = false);
+    await _open(mapName);
+  }
+
+  Future<void> _requestPop() async {
+    if (!await _confirmDiscard() || !mounted) return;
+    if (_dirty) setState(() => _dirty = false);
+    Navigator.of(context).pop();
+  }
+
   MapProjectDraftDto _copyDraft({
     Map<String, String>? sourceUuids,
     Map<String, String>? stagedSourceTokens,
@@ -189,6 +223,7 @@ class _MapProjectPageState extends State<MapProjectPage> {
             300 - (waypoint['y']! as num).toDouble() * 80,
           ),
           yaw: (waypoint['yaw'] as num?)?.toDouble() ?? 0,
+          draggable: waypoint['origin'] == 'manual',
         ),
   ];
 
@@ -270,24 +305,11 @@ class _MapProjectPageState extends State<MapProjectPage> {
     });
   }
 
-  Future<void> _warnUnsaved() async {
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('저장되지 않은 변경'),
-        content: const Text('이 화면을 나가면 마지막 저장 이후 변경은 유지되지 않습니다.'),
-        actions: [
-          FilledButton(onPressed: () => Navigator.pop(context), child: const Text('확인')),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) => PopScope(
     canPop: !_dirty,
     onPopInvokedWithResult: (didPop, result) {
-      if (!didPop && _dirty) _warnUnsaved();
+      if (!didPop && _dirty) _requestPop();
     },
     child: Padding(
       padding: const EdgeInsets.all(28),
@@ -385,7 +407,10 @@ class _MapProjectPageState extends State<MapProjectPage> {
               children: [
                 SizedBox(
                   width: 270,
-                  child: _ProjectList(projects: _projects, onOpen: _open),
+                  child: _ProjectList(
+                    projects: _projects,
+                    onOpen: _requestOpen,
+                  ),
                 ),
                 const SizedBox(width: 18),
                 Expanded(

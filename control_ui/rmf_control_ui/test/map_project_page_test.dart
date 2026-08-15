@@ -92,9 +92,10 @@ List<JsonObject> _features() => const [
 class _MapApi implements FmsApi {
   var saved = 0;
   var deleted = 0;
+  final opened = <String>[];
 
-  MapProjectDraftDto get draft => MapProjectDraftDto(
-    mapName: 'trihouse_test_01',
+  MapProjectDraftDto draftFor(String mapName) => MapProjectDraftDto(
+    mapName: mapName,
     formatVersion: 1,
     draftRevision: 4,
     sourceUuids: const {
@@ -120,15 +121,27 @@ class _MapApi implements FmsApi {
       hasBuildingYaml: false,
       updatedAt: DateTime(2026, 8, 16),
     ),
+    MapProjectSummaryDto(
+      mapName: 'second_project',
+      drawingName: 'second.pgm',
+      formatVersion: 1,
+      waypointCount: 8,
+      laneCount: 0,
+      draftRevision: 4,
+      hasBuildingYaml: false,
+      updatedAt: DateTime(2026, 8, 16),
+    ),
   ];
 
   @override
-  Future<MapProjectOpenDto> openMapProject(String mapName) async =>
-      MapProjectOpenDto(
-        draft: draft,
+  Future<MapProjectOpenDto> openMapProject(String mapName) async {
+    opened.add(mapName);
+    return MapProjectOpenDto(
+        draft: draftFor(mapName),
         openExisting: true,
-        activeRevision: 'trihouse_test_01:active',
+        activeRevision: '$mapName:active',
       );
+  }
 
   @override
   Future<RuntimeProfileDto> getRuntimeProfile() async => RuntimeProfileDto.fromJson({
@@ -170,7 +183,7 @@ class _MapApi implements FmsApi {
   @override
   Future<MapProjectDraftDto> saveMapDraft(
     MapProjectDraftDto draft, {
-    int? expectedRevision,
+    required int expectedRevision,
   }) async {
     saved += 1;
     return draft;
@@ -193,6 +206,38 @@ Future<_MapApi> _pumpPage(WidgetTester tester) async {
   final api = _MapApi();
   await tester.pumpWidget(
     MaterialApp(home: Scaffold(body: MapProjectPage(api: api))),
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('trihouse_test_01').first);
+  await tester.pumpAndSettle();
+  return api;
+}
+
+Future<void> _addManualWaypoint(WidgetTester tester) async {
+  await tester.tap(find.text('Waypoint 추가'));
+  await tester.pumpAndSettle();
+  await tester.enterText(find.widgetWithText(TextField, '코드'), 'manual-1');
+  await tester.enterText(find.widgetWithText(TextField, 'x (m)'), '0');
+  await tester.enterText(find.widgetWithText(TextField, 'y (m)'), '0');
+  await tester.enterText(find.widgetWithText(TextField, 'yaw (rad)'), '1.57');
+  await tester.tap(find.text('추가'));
+  await tester.pumpAndSettle();
+}
+
+Future<_MapApi> _pumpNavigablePage(WidgetTester tester) async {
+  tester.view.physicalSize = const Size(1440, 1000);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  final api = _MapApi();
+  await tester.pumpWidget(
+    MaterialApp(
+      initialRoute: '/maps',
+      routes: {
+        '/': (_) => const Scaffold(body: Text('underlying route')),
+        '/maps': (_) => Scaffold(body: MapProjectPage(api: api)),
+      },
+    ),
   );
   await tester.pumpAndSettle();
   await tester.tap(find.text('trihouse_test_01').first);
@@ -258,14 +303,7 @@ void main() {
     tester,
   ) async {
     final api = await _pumpPage(tester);
-    await tester.tap(find.text('Waypoint 추가'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.widgetWithText(TextField, '코드'), 'manual-1');
-    await tester.enterText(find.widgetWithText(TextField, 'x (m)'), '0');
-    await tester.enterText(find.widgetWithText(TextField, 'y (m)'), '0');
-    await tester.enterText(find.widgetWithText(TextField, 'yaw (rad)'), '1.57');
-    await tester.tap(find.text('추가'));
-    await tester.pumpAndSettle();
+    await _addManualWaypoint(tester);
     expect(find.text('저장되지 않은 변경'), findsOneWidget);
     expect(find.byKey(const Key('waypoint-manual-1')), findsOneWidget);
 
@@ -273,5 +311,64 @@ void main() {
     await tester.pumpAndSettle();
     expect(api.saved, 1);
     expect(find.text('저장되지 않은 변경'), findsNothing);
+  });
+
+  testWidgets('imported waypoint drag cannot mutate its visual position', (
+    tester,
+  ) async {
+    await _pumpPage(tester);
+    final handle = find.byKey(
+      const Key('waypoint-ambient_storage_loading_dock_01'),
+    );
+    final before = tester.getTopLeft(handle);
+
+    await tester.drag(handle, const Offset(60, 25));
+    await tester.pumpAndSettle();
+
+    expect(tester.getTopLeft(handle), before);
+    expect(find.text('저장되지 않은 변경'), findsNothing);
+  });
+
+  testWidgets('project switch uses Cancel and Discard without silent loss', (
+    tester,
+  ) async {
+    final api = await _pumpPage(tester);
+    await _addManualWaypoint(tester);
+
+    await tester.tap(find.text('second_project'));
+    await tester.pumpAndSettle();
+    expect(find.text('저장되지 않은 변경'), findsNWidgets(2));
+    await tester.tap(find.text('취소'));
+    await tester.pumpAndSettle();
+    expect(api.opened, ['trihouse_test_01']);
+    expect(find.byKey(const Key('waypoint-manual-1')), findsOneWidget);
+
+    await tester.tap(find.text('second_project'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('버리기'));
+    await tester.pumpAndSettle();
+    expect(api.opened, ['trihouse_test_01', 'second_project']);
+    expect(find.text('저장되지 않은 변경'), findsNothing);
+    expect(find.byKey(const Key('waypoint-manual-1')), findsNothing);
+  });
+
+  testWidgets('browser pop Cancel stays and Discard actually pops', (
+    tester,
+  ) async {
+    await _pumpNavigablePage(tester);
+    await _addManualWaypoint(tester);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('취소'));
+    await tester.pumpAndSettle();
+    expect(find.byType(MapProjectPage), findsOneWidget);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('버리기'));
+    await tester.pumpAndSettle();
+    expect(find.byType(MapProjectPage), findsNothing);
+    expect(find.text('underlying route'), findsOneWidget);
   });
 }

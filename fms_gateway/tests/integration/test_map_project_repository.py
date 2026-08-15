@@ -1,13 +1,15 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 import uuid
 
 import pytest
 
-from fms_gateway.app.config import get_settings
+from fms_gateway.app.config import Settings, get_settings
 from fms_gateway.app.database import Database
 from fms_gateway.app.repositories import (
+    MapDraftRevisionConflict,
     MapProjectSourceValidationError,
     MySqlFmsRepository,
 )
@@ -27,6 +29,23 @@ PHYSICAL_JSONL = (
 def _repository() -> MySqlFmsRepository:
     get_settings.cache_clear()
     return MySqlFmsRepository(Database(get_settings()))
+
+
+def _race_repository() -> MySqlFmsRepository:
+    return MySqlFmsRepository(
+        Database(
+            Settings(
+                host=os.environ.get("FMS_DB_HOST", "127.0.0.1"),
+                port=int(os.environ.get("FMS_DB_PORT", "3307")),
+                user=os.environ.get("FMS_DB_USER", "fms_gateway"),
+                password=os.environ.get(
+                    "FMS_DB_PASSWORD", "test_gateway_password"
+                ),
+                database="trihouse_fms",
+                pool_size=2,
+            )
+        )
+    )
 
 
 def _cyclic_metadata() -> dict[str, object]:
@@ -415,15 +434,18 @@ def test_mysql_active_delete_restores_manifest_draft_and_preserves_projection(
     sources = [
         _source(
             "slam_yaml",
-            b"image: floor.pgm\nresolution: 0.05\norigin: [0, 0, 0]\n",
+            (
+                b"image: floor.pgm\nresolution: 0.05\norigin: [0, 0, 0]\n"
+                b"negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n"
+            ),
             "application/x-yaml",
-            "renamed-map.data",
+            "floor.yaml",
         ),
         _source(
             "slam_image",
             b"P5\n1 1\n255\n\x00",
             "image/x-portable-graymap",
-            "renamed-image.data",
+            "floor.pgm",
         ),
         _source(
             "physical_features_import",
@@ -445,6 +467,11 @@ def test_mysql_active_delete_restores_manifest_draft_and_preserves_projection(
     assert coordinator.validate(staged) == ()
     published = coordinator.activate(staged, "W-OP-01")
     assert published["draft_revision"] == 1
+    repeated_stage = coordinator.stage("trihouse_test_01", saved["draft_revision"])
+    repeated = coordinator.activate(repeated_stage, "W-OP-01")
+    assert repeated["map_revision"] == published["map_revision"]
+    assert repeated["published_at"] == published["published_at"]
+    assert mysql_db.one("SELECT COUNT(*) AS count FROM map_revisions")["count"] == 1
     active_pointer = json.loads(
         (tmp_path / "active" / "trihouse_test_01.json").read_text(
             encoding="utf-8"
@@ -494,3 +521,83 @@ def test_mysql_active_delete_restores_manifest_draft_and_preserves_projection(
     assert mysql_db.one("SELECT COUNT(*) AS count FROM map_project_sources")[
         "count"
     ] == 3
+
+
+def test_mysql_publish_fence_rejects_committed_save_after_validation(
+    mysql_db, tmp_path: Path, monkeypatch
+):
+    from fms_gateway.app.map_deployment import MapDeploymentCoordinator
+    from fms_gateway.app.runtime_profiles import RuntimeProfileProvider
+
+    repository = _race_repository()
+    profiles = RuntimeProfileProvider(ROOT)
+    profile_hash = profiles.load()["profile_hash"]
+    waypoints, features = _public_records()
+    sources = [
+        _source(
+            "slam_yaml",
+            (
+                b"image: floor.pgm\nresolution: 0.05\norigin: [0, 0, 0]\n"
+                b"negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n"
+            ),
+            "application/x-yaml",
+            "floor.yaml",
+        ),
+        _source(
+            "slam_image",
+            b"P5\n1 1\n255\n\x00",
+            "image/x-portable-graymap",
+            "floor.pgm",
+        ),
+        _source(
+            "physical_features_import",
+            PHYSICAL_JSONL.read_bytes(),
+            "application/x-ndjson",
+            "physical.jsonl",
+            metadata={"waypoints": waypoints, "features": features},
+        ),
+    ]
+    source_uuids = {source["source_type"]: source["source_uuid"] for source in sources}
+    saved = repository.save_public_map_draft(
+        "trihouse_test_01",
+        _public_draft(profile_hash, source_uuids),
+        expected_revision=0,
+        staged_sources=sources,
+    )
+    coordinator = MapDeploymentCoordinator(repository, tmp_path, profiles)
+    staged = coordinator.stage("trihouse_test_01", saved["draft_revision"])
+    assert coordinator.validate(staged) == ()
+    original_publish = repository.publish_map_project
+
+    def save_then_publish(map_name: str, publication: dict):
+        concurrent_repository = _race_repository()
+        concurrent_repository.save_public_map_draft(
+            map_name,
+            _public_draft(
+                profile_hash,
+                source_uuids,
+                extra_waypoints=[
+                    {
+                        "code": "manual-race",
+                        "display_name": "Manual race",
+                        "x": 9.0,
+                        "y": 9.0,
+                        "yaw": 0.0,
+                        "origin": "manual",
+                    }
+                ],
+            ),
+            expected_revision=1,
+            staged_sources=[],
+        )
+        return original_publish(map_name, publication)
+
+    monkeypatch.setattr(repository, "publish_map_project", save_then_publish)
+
+    with pytest.raises(MapDraftRevisionConflict):
+        coordinator.activate(staged, "W-OP-01")
+    assert mysql_db.one("SELECT draft_revision FROM map_projects")[
+        "draft_revision"
+    ] == 2
+    assert mysql_db.one("SELECT COUNT(*) AS count FROM map_revisions")["count"] == 0
+    assert not staged.staging_dir.exists()

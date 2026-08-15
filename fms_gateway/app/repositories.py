@@ -7,6 +7,7 @@ from datetime import datetime
 import hashlib
 import json
 import math
+import threading
 from typing import Any, Protocol
 import uuid
 from zoneinfo import ZoneInfo
@@ -301,6 +302,90 @@ PROJECT1_LOCATION_CODES = {
 }
 
 
+def _publication_identity(
+    map_name: str, publication: dict[str, Any]
+) -> dict[str, Any]:
+    manifest = publication.get("manifest")
+    revision_identity = (
+        manifest.get("revision_identity") if isinstance(manifest, dict) else None
+    )
+    return {
+        "map_name": map_name,
+        "building_sha256": publication["building_sha256"],
+        "nav_graph_sha256": publication["nav_graph_sha256"],
+        "world_sha256": publication["world_sha256"],
+        "revision_identity": (
+            revision_identity if revision_identity is not None else manifest or {}
+        ),
+    }
+
+
+def _canonical_public_json(value: object) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _assert_publication_expectations(
+    current_draft: dict[str, Any],
+    publication: dict[str, Any],
+    source_lookup,
+) -> None:
+    expected = publication.get("expected_draft")
+    if expected is None:
+        return
+    if not isinstance(expected, dict):
+        raise MapDraftRevisionConflict
+    snapshot = expected.get("draft_snapshot")
+    source_manifest = expected.get("source_manifest")
+    try:
+        expected_hash = hashlib.sha256(_canonical_public_json(snapshot)).hexdigest()
+        current_hash = hashlib.sha256(
+            _canonical_public_json(current_draft)
+        ).hexdigest()
+    except (TypeError, ValueError):
+        raise MapDraftRevisionConflict from None
+    if (
+        not isinstance(snapshot, dict)
+        or not isinstance(source_manifest, list)
+        or current_draft.get("draft_revision") != expected.get("draft_revision")
+        or current_draft != snapshot
+        or expected_hash != expected.get("snapshot_sha256")
+        or current_hash != expected.get("snapshot_sha256")
+        or current_draft.get("runtime_profile_hash")
+        != expected.get("runtime_profile_hash")
+    ):
+        raise MapDraftRevisionConflict
+    expected_source_uuids: dict[str, object] = {}
+    for entry in source_manifest:
+        if not isinstance(entry, dict) or not isinstance(entry.get("source_type"), str):
+            raise MapDraftRevisionConflict
+        source_type = entry["source_type"]
+        if source_type in expected_source_uuids:
+            raise MapDraftRevisionConflict
+        expected_source_uuids[source_type] = entry.get("source_uuid")
+        source = source_lookup(source_type, entry.get("source_uuid"))
+        content = source.get("content_bytes") if isinstance(source, dict) else None
+        if not isinstance(content, (bytes, bytearray)):
+            raise MapDraftRevisionConflict
+        raw = bytes(content)
+        if (
+            source.get("source_type") != source_type
+            or source.get("source_uuid") != entry.get("source_uuid")
+            or source.get("file_name") != entry.get("file_name")
+            or source.get("mime_type") != entry.get("mime_type")
+            or hashlib.sha256(raw).hexdigest() != entry.get("sha256")
+            or len(raw) != entry.get("byte_size")
+        ):
+            raise MapDraftRevisionConflict
+    if current_draft.get("source_uuids") != expected_source_uuids:
+        raise MapDraftRevisionConflict
+
+
 def _same_point(left: object, right: object) -> bool:
     if not isinstance(left, list) or not isinstance(right, list):
         return False
@@ -572,7 +657,11 @@ def _validate_publication_artifacts(
         actual = hashlib.sha256(content.encode("utf-8")).hexdigest()
         if actual != publication[hash_key]:
             errors.append(f"{hash_key}: artifact 내용과 SHA-256이 다릅니다")
-    hash_identity = {
+    manifest = publication.get("manifest")
+    revision_identity = (
+        manifest.get("revision_identity") if isinstance(manifest, dict) else None
+    )
+    hash_identity = revision_identity or {
         key: publication[key]
         for key in ("building_sha256", "nav_graph_sha256", "world_sha256")
     }
@@ -1351,6 +1440,23 @@ class MySqlFmsRepository:
                 project = self._load_map_project(connection, map_name)
                 if project is None:
                     raise MapProjectNotFound
+                def locked_source(source_type: str, source_uuid: object):
+                    cursor.execute(
+                        """
+                        SELECT source_uuid, source_type, file_name, mime_type,
+                               content_bytes
+                        FROM map_project_sources
+                        WHERE project_id = %s AND source_uuid = %s
+                        FOR UPDATE
+                        """,
+                        (project_id, source_uuid),
+                    )
+                    source = cursor.fetchone()
+                    return dict(source) if source is not None else None
+
+                _assert_publication_expectations(
+                    _public_draft_from_project(project), publication, locked_source
+                )
                 errors = _validate_map_draft(project)
                 if errors:
                     raise MapProjectValidationError(errors)
@@ -1360,21 +1466,15 @@ class MySqlFmsRepository:
                 )
                 existing = cursor.fetchone()
                 if existing:
-                    immutable_identity = {
-                        "map_name": map_name,
-                        "source_project_id": project_id,
-                        "draft_revision": int(row["draft_revision"]),
-                        "building_sha256": publication["building_sha256"],
-                        "nav_graph_sha256": publication["nav_graph_sha256"],
-                        "world_sha256": publication["world_sha256"],
-                        "manifest": publication.get("manifest", {}),
-                        "published_by": publication["published_by"],
-                    }
-                    existing_identity = {
-                        **{key: existing[key] for key in immutable_identity if key != "manifest"},
+                    existing_publication = {
+                        **dict(existing),
                         "manifest": _json(existing["manifest"]),
                     }
-                    if existing_identity != immutable_identity:
+                    if (
+                        int(existing["source_project_id"]) != project_id
+                        or _publication_identity(map_name, existing_publication)
+                        != _publication_identity(map_name, publication)
+                    ):
                         raise MapRevisionContentConflict
                     connection.rollback()
                     result = dict(existing)
@@ -2617,6 +2717,7 @@ class InMemoryFmsRepository:
         self._device_states: dict[str, dict[str, Any]] = {}
         self._task_events: dict[str, dict[str, Any]] = {}
         self._map_projects: dict[str, dict[str, Any]] = {}
+        self._map_publish_lock = threading.RLock()
         self._map_project_sources: dict[str, dict[str, dict[str, Any]]] = {}
         self._map_publications: dict[str, dict[str, Any]] = {}
         self._map_publications_by_revision: dict[str, dict[str, Any]] = {}
@@ -2660,6 +2761,18 @@ class InMemoryFmsRepository:
         return _public_draft_from_project(project)
 
     def save_public_map_draft(
+        self,
+        map_name: str,
+        draft: dict[str, Any],
+        expected_revision: int,
+        staged_sources: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        with self._map_publish_lock:
+            return self._save_public_map_draft_locked(
+                map_name, draft, expected_revision, staged_sources
+            )
+
+    def _save_public_map_draft_locked(
         self,
         map_name: str,
         draft: dict[str, Any],
@@ -2815,9 +2928,35 @@ class InMemoryFmsRepository:
     def publish_map_project(
         self, map_name: str, publication: dict[str, Any]
     ) -> dict[str, Any]:
+        with self._map_publish_lock:
+            snapshots = (
+                deepcopy(self._map_publications),
+                deepcopy(self._map_publications_by_revision),
+                deepcopy(self._map_features),
+            )
+            try:
+                return self._publish_map_project_locked(map_name, publication)
+            except Exception:
+                (
+                    self._map_publications,
+                    self._map_publications_by_revision,
+                    self._map_features,
+                ) = snapshots
+                raise
+
+    def _publish_map_project_locked(
+        self, map_name: str, publication: dict[str, Any]
+    ) -> dict[str, Any]:
         project = self._map_projects.get(map_name)
         if project is None:
             raise MapProjectNotFound
+        _assert_publication_expectations(
+            _public_draft_from_project(self.get_map_project(map_name)),
+            publication,
+            lambda source_type, source_uuid: self._map_project_sources.get(
+                map_name, {}
+            ).get(str(source_uuid)),
+        )
         errors = _validate_map_draft(project)
         if errors:
             raise MapProjectValidationError(errors)
@@ -2826,13 +2965,10 @@ class InMemoryFmsRepository:
         existing_by_revision = self._map_publications_by_revision.get(
             publication["map_revision"]
         )
-        identity = {
-            **deepcopy(publication),
-            "map_name": map_name,
-            "draft_revision": project["draft_revision"],
-        }
         if existing_by_revision:
-            if any(existing_by_revision.get(key) != value for key, value in identity.items()):
+            if _publication_identity(
+                existing_by_revision["map_name"], existing_by_revision
+            ) != _publication_identity(map_name, publication):
                 raise MapRevisionContentConflict
             return deepcopy(existing_by_revision)
         errors = _validate_publication_artifacts(project, publication)

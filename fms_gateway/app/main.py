@@ -16,6 +16,7 @@ from .ingestion import RepositoryIngestion
 from .map_deployment import (
     MapDeploymentCoordinator,
     MapSourceStaging,
+    MapWorkflowConflict,
     MapWorkflowError,
 )
 from .models import (
@@ -137,6 +138,8 @@ def create_app(
     app = FastAPI(
         title="Trihouse FMS Gateway", version="0.1.0", lifespan=lifespan
     )
+    app.state.map_source_staging = source_staging
+    app.state.map_deployments = deployments
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -358,6 +361,12 @@ def create_app(
             )
             source_staging.discard_claims(claims)
             return saved
+        except MapWorkflowConflict as error:
+            source_staging.restore_claims(claims)
+            raise HTTPException(
+                status_code=409,
+                detail={"code": error.code, "message": error.detail},
+            ) from error
         except MapWorkflowError as error:
             source_staging.restore_claims(claims)
             raise HTTPException(
@@ -435,6 +444,30 @@ def create_app(
             )
         try:
             return deployments.activate(staged, publication.published_by)
+        except MapDraftRevisionConflict as error:
+            shutil.rmtree(staged.staging_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "DRAFT_REVISION_CHANGED",
+                    "message": "map draft changed after deployment validation",
+                },
+            ) from error
+        except MapRevisionContentConflict as error:
+            shutil.rmtree(staged.staging_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "MAP_REVISION_CONTENT_CONFLICT",
+                    "message": "map revision identity conflicts with stored content",
+                },
+            ) from error
+        except MapWorkflowError as error:
+            shutil.rmtree(staged.staging_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=422,
+                detail={"code": error.code, "message": error.detail},
+            ) from error
         except MapProjectValidationError as error:
             shutil.rmtree(staged.staging_dir, ignore_errors=True)
             raise HTTPException(
