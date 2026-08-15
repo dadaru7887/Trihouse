@@ -226,8 +226,21 @@ class FmsApiClient implements FmsApi {
     return httpUri.replace(scheme: httpUri.scheme == 'https' ? 'wss' : 'ws');
   }
 
+  String _validatedMapName(String mapName) {
+    if (mapName == '.' || mapName == '..') {
+      throw FmsApiException(
+        kind: FmsApiErrorKind.invalidRequest,
+        operation: 'build map project request',
+        diagnosticDetail:
+            'Map name must not be an HTTP path dot segment: $mapName',
+      );
+    }
+    return mapName;
+  }
+
   String _mapPath(String mapName, [String suffix = '']) =>
-      '/api/v1/map-projects/${Uri.encodeComponent(mapName)}$suffix';
+      '/api/v1/map-projects/'
+      '${Uri.encodeComponent(_validatedMapName(mapName))}$suffix';
 
   FmsApiException _invalidResponse(String operation, Uri uri, Object error) =>
       FmsApiException(
@@ -371,6 +384,7 @@ class FmsApiClient implements FmsApi {
   @override
   Future<MapProjectOpenDto> openMapProject(String mapName) async {
     const operation = 'POST open map project';
+    _validatedMapName(mapName);
     final response = await _sendJson(
       'POST',
       '/api/v1/map-projects',
@@ -396,8 +410,9 @@ class FmsApiClient implements FmsApi {
   ) async {
     final uri = _uri(_mapPath(mapName, '/sources/stage'));
     const operation = 'POST stage map source';
+    late http.MultipartRequest request;
     try {
-      final request = http.MultipartRequest('POST', uri)
+      request = http.MultipartRequest('POST', uri)
         ..fields['source_type'] = source.sourceType
         ..files.add(
           http.MultipartFile.fromBytes(
@@ -407,12 +422,6 @@ class FmsApiClient implements FmsApi {
             contentType: MediaType.parse(source.mimeType),
           ),
         );
-      final streamed = await _httpClient.send(request);
-      final response = await http.Response.fromStream(streamed);
-      _requireSuccess('POST', uri, response);
-      return StagedMapSourceDto.fromJson(_object(response, operation));
-    } on FmsApiException {
-      rethrow;
     } on FormatException catch (error) {
       throw FmsApiException(
         kind: FmsApiErrorKind.invalidRequest,
@@ -421,8 +430,25 @@ class FmsApiClient implements FmsApi {
         diagnosticDetail: '$error',
         cause: error,
       );
+    }
+
+    late http.Response response;
+    try {
+      final streamed = await _httpClient.send(request);
+      response = await http.Response.fromStream(streamed);
+      _requireSuccess('POST', uri, response);
+    } on FmsApiException {
+      rethrow;
     } catch (error) {
       throw _networkFailure(operation, uri, error);
+    }
+
+    try {
+      return StagedMapSourceDto.fromJson(_object(response, operation));
+    } on FmsApiException {
+      rethrow;
+    } catch (error) {
+      throw _invalidResponse(operation, uri, error);
     }
   }
 

@@ -173,6 +173,38 @@ void main() {
   });
 
   test(
+    'successful staging decode and DTO schema failures are invalid responses',
+    () async {
+      for (final responseBody in ['{not-json', '{}']) {
+        final client = FmsApiClient(
+          baseUri: Uri.parse('https://gateway.example'),
+          httpClient: MockClient((_) async => http.Response(responseBody, 200)),
+        );
+
+        await expectLater(
+          client.stageMapSource(
+            'trihouse_test_01',
+            MapSourceUploadDto(
+              sourceType: 'slam_image',
+              fileName: 'map.pgm',
+              mimeType: 'image/x-portable-graymap',
+              bytes: Uint8List.fromList([1, 2, 3]),
+            ),
+          ),
+          throwsA(
+            isA<FmsApiException>().having(
+              (error) => error.kind,
+              'kind',
+              FmsApiErrorKind.invalidResponse,
+            ),
+          ),
+          reason: responseBody,
+        );
+      }
+    },
+  );
+
+  test(
     'WebSocket connection and event decode errors use stable kinds',
     () async {
       final connectionFailure = FmsApiClient(

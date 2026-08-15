@@ -341,6 +341,76 @@ void main() {
     },
   );
 
+  test('dot-segment map names fail before every map route transport', () async {
+    var sends = 0;
+    final client = FmsApiClient(
+      baseUri: Uri.parse('https://gateway.example'),
+      httpClient: MockClient((request) async {
+        sends++;
+        return http.Response('{}', 200);
+      }),
+    );
+    final operations = <Future<void> Function(String)>[
+      (mapName) async {
+        await client.openMapProject(mapName);
+      },
+      (mapName) async {
+        await client.stageMapSource(
+          mapName,
+          MapSourceUploadDto(
+            sourceType: 'slam_image',
+            fileName: 'map.pgm',
+            mimeType: 'image/x-portable-graymap',
+            bytes: Uint8List.fromList([1, 2, 3]),
+          ),
+        );
+      },
+      (mapName) async {
+        await client.saveMapDraft(
+          MapProjectDraftDto(
+            mapName: mapName,
+            formatVersion: 1,
+            draftRevision: 4,
+            sourceUuids: const {},
+            stagedSourceTokens: const {},
+            waypoints: const [],
+            features: const [],
+            runtimeProfileHash: 'profile-sha',
+          ),
+          expectedRevision: 4,
+        );
+      },
+      (mapName) async => client.deleteMapDraft(mapName),
+      (mapName) async {
+        await client.validateMapDraft(mapName);
+      },
+      (mapName) async {
+        await client.publishMapDraft(
+          mapName,
+          const PublishMapDto(expectedDraftRevision: 4, publishedBy: 'W-OP-01'),
+        );
+      },
+    ];
+
+    for (final mapName in ['.', '..']) {
+      for (final operation in operations) {
+        await expectLater(
+          operation(mapName),
+          throwsA(
+            isA<FmsApiException>().having(
+              (error) => error.kind,
+              'kind',
+              FmsApiErrorKind.invalidRequest,
+            ),
+          ),
+          reason: mapName,
+        );
+      }
+    }
+
+    expect(sends, 0);
+  });
+
   test(
     'operationsEvents connects to the public secure WebSocket route',
     () async {
