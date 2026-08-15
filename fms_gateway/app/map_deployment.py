@@ -1,7 +1,9 @@
 """Secure source staging and stage/validate/activate map deployment workflow."""
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
 import math
@@ -11,6 +13,7 @@ import re
 import secrets
 import shutil
 import struct
+import threading
 import time
 from typing import Any, Iterable
 import uuid
@@ -47,6 +50,8 @@ UPLOAD_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 RUNTIME_ARTIFACT_KEYS = frozenset(
     {"building_yaml", "nav_graph_yaml", "world_sdf"}
 )
+_PUBLICATION_LOCKS_GUARD = threading.Lock()
+_PUBLICATION_LOCKS: dict[tuple[str, str], threading.RLock] = {}
 
 
 class MapWorkflowError(ValueError):
@@ -664,7 +669,32 @@ class MapDeploymentCoordinator:
         self.runtime_root = runtime_root.resolve()
         self.staging_root = self.runtime_root / "staging"
         self.active_root = self.runtime_root / "active"
+        self.lock_root = self.runtime_root / "locks" / "map-publication"
         self.runtime_profiles = runtime_profiles
+
+    @contextmanager
+    def _publication_lock(self, map_name: str):
+        lock_key = (str(self.runtime_root), map_name)
+        with _PUBLICATION_LOCKS_GUARD:
+            thread_lock = _PUBLICATION_LOCKS.setdefault(
+                lock_key, threading.RLock()
+            )
+        lock_file_name = (
+            hashlib.sha256(map_name.encode("utf-8")).hexdigest() + ".lock"
+        )
+        with thread_lock:
+            self.lock_root.mkdir(parents=True, exist_ok=True)
+            lock_path = self.lock_root / lock_file_name
+            flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+            lock_fd = os.open(lock_path, flags, 0o600)
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_fd)
 
     def stage(self, map_name: str, draft_revision: int) -> StagedDeployment:
         draft = self.repository.get_public_map_draft(map_name)
@@ -907,6 +937,12 @@ class MapDeploymentCoordinator:
         return tuple(sorted(errors))
 
     def activate(self, staged: StagedDeployment, published_by: str) -> dict[str, Any]:
+        with self._publication_lock(staged.map_name):
+            return self._activate_locked(staged, published_by)
+
+    def _activate_locked(
+        self, staged: StagedDeployment, published_by: str
+    ) -> dict[str, Any]:
         errors = self.validate(staged)
         if errors:
             shutil.rmtree(staged.staging_dir, ignore_errors=True)
@@ -953,12 +989,92 @@ class MapDeploymentCoordinator:
         ):
             shutil.rmtree(staged.staging_dir, ignore_errors=True)
             raise
-        active_manifest = published.get("manifest")
-        if not isinstance(active_manifest, dict):
-            active_manifest = publication_manifest
-        self._write_active_manifest(active_manifest, published)
+        current_active = self.repository.get_published_map(staged.map_name)
+        active_manifest = self._validated_active_manifest(
+            current_active, expected_map_name=staged.map_name
+        )
+        self._write_active_manifest(active_manifest, current_active)
         shutil.rmtree(staged.staging_dir, ignore_errors=True)
         return published
+
+    @staticmethod
+    def _validated_active_manifest(
+        published: object,
+        *,
+        expected_map_name: str,
+        expected_deployment_uuid: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            if not isinstance(published, dict):
+                raise TypeError
+            map_name = published["map_name"]
+            map_revision = published["map_revision"]
+            manifest = published["manifest"]
+            if (
+                map_name != expected_map_name
+                or not isinstance(map_revision, str)
+                or not isinstance(manifest, dict)
+                or published.get("state") != "published"
+                or manifest.get("map_name") != map_name
+                or manifest.get("map_revision") != map_revision
+            ):
+                raise ValueError
+            deployment_uuid = manifest.get("deployment_uuid")
+            if not isinstance(deployment_uuid, str):
+                raise ValueError
+            uuid.UUID(deployment_uuid)
+            if (
+                expected_deployment_uuid is not None
+                and deployment_uuid != expected_deployment_uuid
+            ):
+                raise ValueError
+            snapshot = manifest["draft_snapshot"]
+            if (
+                not isinstance(snapshot, dict)
+                or hashlib.sha256(_canonical_json(snapshot)).hexdigest()
+                != manifest.get("snapshot_sha256")
+            ):
+                raise ValueError
+            artifacts = manifest["artifacts"]
+            if (
+                not isinstance(artifacts, dict)
+                or set(artifacts) != RUNTIME_ARTIFACT_KEYS
+            ):
+                raise ValueError
+            hash_keys = {
+                "building_yaml": "building_sha256",
+                "nav_graph_yaml": "nav_graph_sha256",
+                "world_sdf": "world_sha256",
+            }
+            for artifact_name, published_hash_key in hash_keys.items():
+                artifact = artifacts[artifact_name]
+                if (
+                    not isinstance(artifact, dict)
+                    or set(artifact) != {"content", "sha256"}
+                    or not isinstance(artifact.get("content"), str)
+                    or hashlib.sha256(
+                        artifact["content"].encode("utf-8")
+                    ).hexdigest()
+                    != artifact.get("sha256")
+                    or published.get(published_hash_key) != artifact.get("sha256")
+                ):
+                    raise ValueError
+            revision_identity = _revision_identity(manifest)
+            expected_revision = (
+                f"{map_name}:"
+                + hashlib.sha256(_canonical_json(revision_identity)).hexdigest()
+            )
+            if (
+                manifest.get("revision_identity") != revision_identity
+                or map_revision != expected_revision
+            ):
+                raise ValueError
+        except (KeyError, TypeError, ValueError):
+            raise MapWorkflowError(
+                "ACTIVE_PUBLICATION_INVALID",
+                "repository Active publication failed immutable identity validation",
+            ) from None
+        return manifest
 
     def _write_active_manifest(
         self, manifest: dict[str, Any], published: dict[str, Any]
@@ -969,17 +1085,10 @@ class MapDeploymentCoordinator:
         revision_dir = self.active_root / map_name / revision_suffix
         revision_dir.mkdir(parents=True, exist_ok=True)
         active_manifest = revision_dir / "manifest.json"
-        temporary_manifest = revision_dir / ".manifest.tmp"
-        self._atomic_json_write(
-            active_manifest, temporary_manifest, _canonical_json(manifest)
-        )
+        self._atomic_json_write(active_manifest, _canonical_json(manifest))
         pointer = self.active_root / f"{map_name}.json"
-        temporary_pointer = (
-            self.active_root / f".{map_name}.{manifest['deployment_uuid']}.tmp"
-        )
         self._atomic_json_write(
             pointer,
-            temporary_pointer,
             _canonical_json(
                 {
                     "deployment_uuid": manifest["deployment_uuid"],
@@ -991,19 +1100,28 @@ class MapDeploymentCoordinator:
         )
 
     @staticmethod
-    def _atomic_json_write(destination: Path, temporary: Path, content: bytes) -> None:
+    def _atomic_json_write(destination: Path, content: bytes) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with temporary.open("wb") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, destination)
-        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        directory_fd = os.open(destination.parent, flags)
+        temporary = destination.parent / (
+            f".{destination.name}.{uuid.uuid4().hex}.tmp"
+        )
         try:
-            os.fsync(directory_fd)
+            with temporary.open("xb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, destination)
+            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            directory_fd = os.open(destination.parent, flags)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         finally:
-            os.close(directory_fd)
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
     def reconcile_startup(self) -> tuple[str, ...]:
         reconciled: list[str] = []
@@ -1017,18 +1135,39 @@ class MapDeploymentCoordinator:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 deployment_uuid = str(manifest["deployment_uuid"])
                 map_name = str(manifest["map_name"])
-            except (OSError, KeyError, TypeError, json.JSONDecodeError):
+                if deployment_uuid != directory.name:
+                    raise ValueError
+            except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
                 deployment_uuid = directory.name
                 shutil.rmtree(directory, ignore_errors=True)
                 reconciled.append(deployment_uuid)
                 continue
-            active = self.repository.get_published_map(map_name)
-            if (
-                active is not None
-                and active.get("manifest", {}).get("deployment_uuid")
-                == deployment_uuid
-            ):
-                self._write_active_manifest(manifest, active)
-            shutil.rmtree(directory, ignore_errors=True)
-            reconciled.append(deployment_uuid)
+            with self._publication_lock(map_name):
+                try:
+                    locked_manifest = json.loads(
+                        manifest_path.read_text(encoding="utf-8")
+                    )
+                    if (
+                        locked_manifest.get("deployment_uuid") != deployment_uuid
+                        or locked_manifest.get("map_name") != map_name
+                    ):
+                        raise ValueError
+                except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                    shutil.rmtree(directory, ignore_errors=True)
+                    reconciled.append(deployment_uuid)
+                    continue
+                active = self.repository.get_published_map(map_name)
+                if (
+                    active is not None
+                    and isinstance(active.get("manifest"), dict)
+                    and active["manifest"].get("deployment_uuid") == deployment_uuid
+                ):
+                    active_manifest = self._validated_active_manifest(
+                        active,
+                        expected_map_name=map_name,
+                        expected_deployment_uuid=deployment_uuid,
+                    )
+                    self._write_active_manifest(active_manifest, active)
+                shutil.rmtree(directory, ignore_errors=True)
+                reconciled.append(deployment_uuid)
         return tuple(reconciled)

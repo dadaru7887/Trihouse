@@ -493,6 +493,212 @@ def test_active_manifest_and_pointer_are_fsynced_in_safe_order(
     assert manifest_replace < pointer_replace
 
 
+def test_reconcile_installs_only_the_committed_active_manifest_after_stage_tamper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    repository = _repository()
+    profiles = RuntimeProfileProvider(repository_root=ROOT)
+    draft = _saved_deployable_project(repository, profiles.load()["profile_hash"])
+    coordinator = MapDeploymentCoordinator(repository, tmp_path, profiles)
+    staged = coordinator.stage("trihouse_test_01", draft["draft_revision"])
+
+    def fail_after_database_commit(_manifest: dict, _published: dict) -> None:
+        raise OSError("simulated active filesystem failure")
+
+    monkeypatch.setattr(
+        coordinator, "_write_active_manifest", fail_after_database_commit
+    )
+    with pytest.raises(OSError, match="simulated active filesystem failure"):
+        coordinator.activate(staged, "W-OP-01")
+
+    committed = repository.get_published_map("trihouse_test_01")
+    retained = json.loads(staged.manifest_path.read_text(encoding="utf-8"))
+    retained["artifacts"]["world_sdf"]["content"] = "CORRUPTED AFTER COMMIT"
+    staged.manifest_path.write_text(json.dumps(retained), encoding="utf-8")
+
+    recovered = MapDeploymentCoordinator(repository, tmp_path, profiles)
+    assert recovered.reconcile_startup() == (staged.deployment_uuid,)
+
+    pointer = json.loads(
+        (recovered.active_root / "trihouse_test_01.json").read_text(encoding="utf-8")
+    )
+    installed_path = Path(pointer["manifest_path"])
+    expected_bytes = json.dumps(
+        committed["manifest"],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    assert installed_path.read_bytes() == expected_bytes
+    assert json.loads(expected_bytes)["artifacts"]["world_sdf"]["content"] != (
+        "CORRUPTED AFTER COMMIT"
+    )
+    assert pointer["map_revision"] == committed["map_revision"]
+    assert not staged.staging_dir.exists()
+
+
+def test_older_delayed_publish_cannot_regress_active_files_after_newer_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    repository = _repository()
+    profiles = RuntimeProfileProvider(repository_root=ROOT)
+    draft = _saved_deployable_project(repository, profiles.load()["profile_hash"])
+    coordinator = MapDeploymentCoordinator(repository, tmp_path, profiles)
+    older_stage = coordinator.stage("trihouse_test_01", draft["draft_revision"])
+    older_write_started = threading.Event()
+    release_older_write = threading.Event()
+    newer_write_finished = threading.Event()
+    original_write = coordinator._write_active_manifest
+
+    def controlled_write(manifest: dict, published: dict) -> None:
+        if manifest["deployment_uuid"] == older_stage.deployment_uuid:
+            older_write_started.set()
+            assert release_older_write.wait(timeout=5)
+        original_write(manifest, published)
+        if manifest["deployment_uuid"] != older_stage.deployment_uuid:
+            newer_write_finished.set()
+
+    monkeypatch.setattr(coordinator, "_write_active_manifest", controlled_write)
+    outcomes: list[object] = []
+
+    def activate(stage) -> None:
+        try:
+            outcomes.append(coordinator.activate(stage, "W-OP-01"))
+        except Exception as error:
+            outcomes.append(error)
+
+    older_thread = threading.Thread(target=activate, args=(older_stage,))
+    older_thread.start()
+    assert older_write_started.wait(timeout=5)
+
+    current = repository.get_public_map_draft("trihouse_test_01")
+    revised = repository.save_public_map_draft(
+        "trihouse_test_01",
+        {
+            **current,
+            "waypoints": current["waypoints"]
+            + [
+                {
+                    "code": "manual-newer",
+                    "display_name": "Manual newer",
+                    "x": 9.0,
+                    "y": 9.0,
+                    "yaw": 0.0,
+                    "origin": "manual",
+                }
+            ],
+        },
+        expected_revision=current["draft_revision"],
+        staged_sources=[],
+    )
+    newer_stage = coordinator.stage(
+        "trihouse_test_01", revised["draft_revision"]
+    )
+    newer_thread = threading.Thread(target=activate, args=(newer_stage,))
+    newer_thread.start()
+
+    newer_write_finished.wait(timeout=1)
+    release_older_write.set()
+    older_thread.join(timeout=5)
+    newer_thread.join(timeout=5)
+
+    assert not older_thread.is_alive()
+    assert not newer_thread.is_alive()
+    assert len(outcomes) == 2
+    assert all(isinstance(value, dict) for value in outcomes)
+    current_active = repository.get_published_map("trihouse_test_01")
+    pointer = json.loads(
+        (coordinator.active_root / "trihouse_test_01.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    installed = json.loads(
+        Path(pointer["manifest_path"]).read_text(encoding="utf-8")
+    )
+    assert pointer["map_revision"] == current_active["map_revision"]
+    assert installed == current_active["manifest"]
+    assert not older_stage.staging_dir.exists()
+    assert not newer_stage.staging_dir.exists()
+
+
+def test_concurrent_unchanged_publish_is_idempotent_and_leaves_no_temp_or_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    repository = _repository()
+    profiles = RuntimeProfileProvider(repository_root=ROOT)
+    draft = _saved_deployable_project(repository, profiles.load()["profile_hash"])
+    coordinator = MapDeploymentCoordinator(repository, tmp_path, profiles)
+    stages = [
+        coordinator.stage("trihouse_test_01", draft["draft_revision"])
+        for _ in range(2)
+    ]
+    manifest_replace_barrier = threading.Barrier(2)
+    original_replace = os.replace
+
+    def synchronized_replace(source, destination) -> None:
+        if Path(destination).name == "manifest.json":
+            try:
+                manifest_replace_barrier.wait(timeout=1)
+            except threading.BrokenBarrierError:
+                pass
+        original_replace(source, destination)
+
+    monkeypatch.setattr(
+        "fms_gateway.app.map_deployment.os.replace", synchronized_replace
+    )
+    outcomes: list[object] = []
+
+    def activate(stage) -> None:
+        try:
+            outcomes.append(coordinator.activate(stage, "W-OP-01"))
+        except Exception as error:
+            outcomes.append(error)
+
+    threads = [threading.Thread(target=activate, args=(stage,)) for stage in stages]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=6)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(outcomes) == 2
+    assert all(isinstance(value, dict) for value in outcomes)
+    assert len({value["map_revision"] for value in outcomes}) == 1
+    assert len({value["published_at"] for value in outcomes}) == 1
+    assert all(not stage.staging_dir.exists() for stage in stages)
+    assert list(coordinator.active_root.rglob("*.tmp")) == []
+
+
+def test_failed_atomic_active_replace_cleans_unique_temp_and_retains_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    repository = _repository()
+    profiles = RuntimeProfileProvider(repository_root=ROOT)
+    draft = _saved_deployable_project(repository, profiles.load()["profile_hash"])
+    coordinator = MapDeploymentCoordinator(repository, tmp_path, profiles)
+    staged = coordinator.stage("trihouse_test_01", draft["draft_revision"])
+    original_replace = os.replace
+
+    def fail_replace(_source, _destination) -> None:
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr("fms_gateway.app.map_deployment.os.replace", fail_replace)
+    with pytest.raises(OSError, match="simulated replace failure"):
+        coordinator.activate(staged, "W-OP-01")
+
+    assert repository.active_revision("trihouse_test_01") is not None
+    assert staged.staging_dir.exists()
+    assert list(coordinator.active_root.rglob("*.tmp")) == []
+
+    monkeypatch.setattr(
+        "fms_gateway.app.map_deployment.os.replace", original_replace
+    )
+    recovered = MapDeploymentCoordinator(repository, tmp_path, profiles)
+    assert recovered.reconcile_startup() == (staged.deployment_uuid,)
+    assert not staged.staging_dir.exists()
+
+
 def test_concurrent_source_claim_loser_gets_stable_consumed_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
