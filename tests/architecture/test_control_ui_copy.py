@@ -44,7 +44,11 @@ def _git_output(*args: str) -> str:
 
 
 def _gitlink(*args: str) -> str:
-    return _git_output(*args).split()[1]
+    return next(
+        field
+        for field in _git_output(*args).split()
+        if len(field) == 40 and all(character in "0123456789abcdef" for character in field)
+    )
 
 
 def test_control_ui_is_full_source_copy_without_nested_git():
