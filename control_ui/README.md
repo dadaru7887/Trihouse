@@ -4,6 +4,11 @@ Trihouse의 브라우저 전용 관제 화면입니다. 실행 가능한 애플�
 [`rmf_control_ui/`](rmf_control_ui/) 하나이며, 모든 운영 데이터와 명령은 FMS
 Gateway의 공개 `/api/v1/*` HTTP/WebSocket 계약을 통해 오갑니다.
 
+브라우저 인증은 Gateway가 발급한 Secure HttpOnly 세션 쿠키를 사용합니다. 기본
+배포는 same-origin이며, 별도 Gateway origin은 명시적인 credentialed-CORS 설정과
+HTTPS, `SameSite=None; Secure`, 정확한 allowed-origin 정책이 필요합니다. 장기
+토큰은 Flutter 코드나 WebSocket URL에 전달하지 않습니다.
+
 이 디렉터리는 데이터베이스 스키마·마이그레이션, ROS/Open-RMF 프로세스 실행,
 로봇 소켓 서버, 로컬 프로젝트 파일 저장을 소유하지 않습니다. 해당 책임은 루트
 프로젝트의 `fms_gateway`, `control_tower`, `trihouse_rmf_bridge`에 있습니다.

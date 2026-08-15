@@ -22,6 +22,30 @@ flutter run -d chrome \
 
 `FMS_GATEWAY_BASE_URL`을 생략하면 현재 페이지 origin을 사용합니다.
 
+## 브라우저 인증
+
+Control UI는 장기 토큰을 JavaScript, local storage, 요청 URL 또는 WebSocket
+query에 보관하지 않습니다. 공개 Gateway가 발급한 `Secure`, `HttpOnly` 세션 쿠키를
+HTTP와 WebSocket 인증에 함께 사용합니다.
+
+- 기본값은 같은 origin입니다. 브라우저의 `same-origin` credential 정책으로
+  세션 쿠키가 자동 전송됩니다.
+- Gateway가 다른 origin이면 HTTPS 주소와
+  `--dart-define=FMS_GATEWAY_CROSS_ORIGIN_CREDENTIALS=true`를 모두 명시해야 합니다.
+  이때 HTTP client는 credentialed CORS 요청을 사용합니다.
+- Cross-origin 배포의 Gateway는 정확한 Control UI origin을 허용하고
+  `Access-Control-Allow-Credentials: true`를 반환해야 합니다. 세션 쿠키는
+  `SameSite=None; Secure; HttpOnly`로 발급해야 합니다.
+- 브라우저 WebSocket은 별도 Authorization header를 설정할 수 없으므로 같은 보안
+  세션 쿠키와 Gateway의 allowed-origin 검사를 사용합니다. 토큰을 WebSocket URL에
+  넣지 않습니다.
+
+```bash
+flutter run -d chrome \
+  --dart-define=FMS_GATEWAY_BASE_URL=https://gateway.example \
+  --dart-define=FMS_GATEWAY_CROSS_ORIGIN_CREDENTIALS=true
+```
+
 ## 검증
 
 ```bash

@@ -2,11 +2,22 @@ import 'dart:typed_data';
 
 typedef JsonObject = Map<String, Object?>;
 
-Map<String, Object?> _immutableJsonObject(Object? value) => Map.unmodifiable(
-  (value as Map<Object?, Object?>).map(
-    (key, item) => MapEntry(key as String, item),
-  ),
-);
+Object? _immutableJsonValue(Object? value) {
+  if (value is Map<Object?, Object?>) {
+    return Map<String, Object?>.unmodifiable(
+      value.map(
+        (key, item) => MapEntry(key as String, _immutableJsonValue(item)),
+      ),
+    );
+  }
+  if (value is List<Object?>) {
+    return List<Object?>.unmodifiable(value.map(_immutableJsonValue));
+  }
+  return value;
+}
+
+Map<String, Object?> _immutableJsonObject(Object? value) =>
+    _immutableJsonValue(value) as Map<String, Object?>;
 
 List<Map<String, Object?>> _immutableJsonObjects(Object? value) =>
     List.unmodifiable(
@@ -95,12 +106,14 @@ class MapSourceUploadDto {
     required this.fileName,
     required this.mimeType,
     required Uint8List bytes,
-  }) : bytes = Uint8List.fromList(bytes);
+  }) : _bytes = Uint8List.fromList(bytes).asUnmodifiableView();
 
   final String sourceType;
   final String fileName;
   final String mimeType;
-  final Uint8List bytes;
+  final Uint8List _bytes;
+
+  Uint8List get bytes => _bytes;
 }
 
 class StagedMapSourceDto {
@@ -154,16 +167,16 @@ class MapProjectDraftDto {
     required this.formatVersion,
     required this.draftRevision,
     required Map<String, String> sourceUuids,
+    required Map<String, String> stagedSourceTokens,
     required List<JsonObject> waypoints,
     required List<JsonObject> features,
     required this.runtimeProfileHash,
   }) : sourceUuids = Map<String, String>.unmodifiable(sourceUuids),
-       waypoints = List<JsonObject>.unmodifiable(
-         waypoints.map(Map<String, Object?>.unmodifiable),
+       stagedSourceTokens = Map<String, String>.unmodifiable(
+         stagedSourceTokens,
        ),
-       features = List<JsonObject>.unmodifiable(
-         features.map(Map<String, Object?>.unmodifiable),
-       );
+       waypoints = _immutableJsonObjects(waypoints),
+       features = _immutableJsonObjects(features);
 
   factory MapProjectDraftDto.fromJson(JsonObject json) => MapProjectDraftDto(
     mapName: json['map_name'] as String,
@@ -171,6 +184,9 @@ class MapProjectDraftDto {
     draftRevision: json['draft_revision'] as int,
     sourceUuids: (json['source_uuids'] as Map<Object?, Object?>? ?? const {})
         .map((key, value) => MapEntry(key as String, value as String)),
+    stagedSourceTokens:
+        (json['staged_source_tokens'] as Map<Object?, Object?>? ?? const {})
+            .map((key, value) => MapEntry(key as String, value as String)),
     waypoints: _immutableJsonObjects(json['waypoints']),
     features: _immutableJsonObjects(json['features']),
     runtimeProfileHash: json['runtime_profile_hash'] as String,
@@ -180,6 +196,7 @@ class MapProjectDraftDto {
   final int formatVersion;
   final int draftRevision;
   final Map<String, String> sourceUuids;
+  final Map<String, String> stagedSourceTokens;
   final List<JsonObject> waypoints;
   final List<JsonObject> features;
   final String runtimeProfileHash;
@@ -189,6 +206,7 @@ class MapProjectDraftDto {
     'format_version': formatVersion,
     'draft_revision': draftRevision,
     'source_uuids': sourceUuids,
+    'staged_source_tokens': stagedSourceTokens,
     'waypoints': waypoints,
     'features': features,
     'runtime_profile_hash': runtimeProfileHash,
@@ -251,7 +269,7 @@ class PublishedMapDto {
     required this.mapRevision,
     required this.draftRevision,
     required JsonObject manifest,
-  }) : manifest = Map.unmodifiable(manifest);
+  }) : manifest = _immutableJsonObject(manifest);
 
   factory PublishedMapDto.fromJson(JsonObject json) => PublishedMapDto(
     mapName: json['map_name'] as String,
@@ -347,10 +365,8 @@ class JobDetailDto {
     required JsonObject context,
     required this.createdAt,
     required List<JsonObject> steps,
-  }) : context = Map<String, Object?>.unmodifiable(context),
-       steps = List<JsonObject>.unmodifiable(
-         steps.map(Map<String, Object?>.unmodifiable),
-       );
+  }) : context = _immutableJsonObject(context),
+       steps = _immutableJsonObjects(steps);
 
   factory JobDetailDto.fromJson(JsonObject json) => JobDetailDto(
     jobId: json['job_id'] as int,
@@ -416,7 +432,7 @@ class OperationsEventDto {
     required this.eventType,
     required this.message,
     required JsonObject? payload,
-  }) : payload = payload == null ? null : Map.unmodifiable(payload);
+  }) : payload = payload == null ? null : _immutableJsonObject(payload);
 
   factory OperationsEventDto.fromJson(JsonObject json) => OperationsEventDto(
     eventId: json['event_id'] as int,

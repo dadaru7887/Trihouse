@@ -31,15 +31,6 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # @visibleForTesting 을 쓰려고 넣었다. 실행기가 테스트에서만 뿌리 경로를
-  # 바꿔 끼울 수 있게 하려는 것이다.
-  meta: ^1.15.0
-
-  # The following adds the Cupertino Icons font to your application.
-  # Use with the CupertinoIcons class for iOS style icons.
-  cupertino_icons: ^1.0.8
-  file_picker: ^10.3.10
-  archive: ^3.6.1
   http: ^1.5.0
   http_parser: ^4.1.2
   web_socket_channel: ^3.0.3

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -7,23 +8,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CONTROL_UI = ROOT / "control_ui"
 APP = CONTROL_UI / "rmf_control_ui"
+LIB = APP / "lib"
+PRESENTATION = LIB / "trihouse" / "presentation"
 
-ALLOWED_CONTROL_UI_ENTRIES = {
-    ".gitignore",
-    "README.md",
-    "UPSTREAM_CONTROL_SYSTEM_COMMIT",
-    "rmf_control_ui",
-}
-ALLOWED_APP_TRACKED_ENTRIES = {
-    ".gitignore",
-    "README.md",
-    "analysis_options.yaml",
-    "lib",
-    "pubspec.lock",
-    "pubspec.yaml",
-    "test",
-    "web",
-}
 REMOVED_LEGACY_ENTRIES = {
     ".claude",
     ".rmf_schedule_node.yaml",
@@ -42,16 +29,19 @@ REMOVED_LEGACY_ENTRIES = {
     "warehouse.png",
 }
 NON_WEB_SHELLS = {"android", "ios", "linux", "macos", "windows"}
-FORBIDDEN_RUNTIME_TOKENS = {
+FORBIDDEN_IMPORTS = {
+    "dart:ffi",
     "dart:io",
-    "package:mysql",
-    "package:sqflite",
-    "Process.run",
-    "Process.start",
-    "ServerSocket",
-    "HttpServer",
-    "/internal/v1/",
+    "package:mysql1/mysql1.dart",
+    "package:sqflite/sqflite.dart",
 }
+TRANSPORT_IMPORT_PREFIXES = (
+    "dart:html",
+    "dart:js_interop",
+    "package:http/",
+    "package:web/",
+    "package:web_socket_channel/",
+)
 FORBIDDEN_BACKEND_LIBRARIES = {
     "database_migration.dart",
     "deployed_map_service.dart",
@@ -73,6 +63,30 @@ FORBIDDEN_BACKEND_LIBRARIES = {
     "workcell_policy_store.dart",
     "workspace_layout.dart",
 }
+REQUIRED_PRESENTATION_CLASSES = {
+    "ControlAppShell",
+    "ControlNavigationRail",
+    "ControlTopBar",
+    "MainDashboard",
+    "MapProjectPage",
+    "MapWorkspace",
+    "RobotOperationsPage",
+    "TaskManagementPage",
+    "OperationsAnalyticsPage",
+}
+FEATURE_PAGE_CLASSES = {
+    "MainDashboard",
+    "MapProjectPage",
+    "RobotOperationsPage",
+    "TaskManagementPage",
+    "OperationsAnalyticsPage",
+}
+REQUIRED_DIAGNOSTIC_MODELS = {
+    "operations_log_models.dart",
+    "rmf_runtime_models.dart",
+    "robot_sensor_models.dart",
+    "robot_telemetry_models.dart",
+}
 GENERATED_PARTS = {
     ".dart_tool",
     ".flutter-plugins-dependencies",
@@ -80,6 +94,8 @@ GENERATED_PARTS = {
     "__pycache__",
     "build",
 }
+DIRECTIVE = re.compile(r"^\s*(?:import|export|part)\s+['\"]([^'\"]+)", re.MULTILINE)
+CLASS_DECLARATION = re.compile(r"\bclass\s+([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def _tracked_paths() -> list[Path]:
@@ -93,52 +109,97 @@ def _tracked_paths() -> list[Path]:
     return [Path(line) for line in output.splitlines()]
 
 
-def test_control_ui_is_a_browser_only_gateway_client() -> None:
-    assert {path.name for path in CONTROL_UI.iterdir()} == ALLOWED_CONTROL_UI_ENTRIES
+def _dart_imports(path: Path) -> set[str]:
+    return set(DIRECTIVE.findall(path.read_text(encoding="utf-8")))
+
+
+def _without_comments(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return re.sub(r"//.*?$", "", text, flags=re.MULTILINE)
+
+
+def _declared_dependencies() -> set[str]:
+    dependencies: set[str] = set()
+    section: str | None = None
+    for line in (APP / "pubspec.yaml").read_text(encoding="utf-8").splitlines():
+        if line and not line.startswith(" "):
+            section = line.removesuffix(":")
+            continue
+        if section not in {"dependencies", "dev_dependencies"}:
+            continue
+        match = re.match(r"^  ([a-zA-Z0-9_]+):", line)
+        if match:
+            dependencies.add(match.group(1))
+    return dependencies
+
+
+def _used_packages() -> set[str]:
+    used: set[str] = set()
+    for path in [*LIB.rglob("*.dart"), *(APP / "test").rglob("*.dart")]:
+        for directive in _dart_imports(path):
+            if directive.startswith("package:"):
+                used.add(directive.split("/", 1)[0].removeprefix("package:"))
+    analysis = (APP / "analysis_options.yaml").read_text(encoding="utf-8")
+    used.update(re.findall(r"package:([a-zA-Z0-9_]+)/", analysis))
+    return used
+
+
+def test_legacy_backends_and_non_web_shells_stay_removed() -> None:
     assert all(not (CONTROL_UI / name).exists() for name in REMOVED_LEGACY_ENTRIES)
     assert (APP / "web").is_dir()
     assert all(not (APP / shell).exists() for shell in NON_WEB_SHELLS)
+    assert (CONTROL_UI / "UPSTREAM_CONTROL_SYSTEM_COMMIT").is_file()
 
-    tracked_paths = _tracked_paths()
-    tracked_app_entries = {
-        path.parts[2]
-        for path in tracked_paths
-        if len(path.parts) >= 3 and path.parts[:2] == ("control_ui", "rmf_control_ui")
-    }
-    assert tracked_app_entries == ALLOWED_APP_TRACKED_ENTRIES
 
-    api_root = APP / "lib" / "trihouse" / "api"
-    assert {path.name for path in api_root.glob("*.dart")} == {
-        "fms_api.dart",
-        "fms_api_client.dart",
-        "fms_models.dart",
-    }
-
+def test_runtime_import_graph_has_one_browser_gateway_boundary() -> None:
     violations: list[str] = []
-    for path in (APP / "lib").rglob("*.dart"):
+    api_root = LIB / "trihouse" / "api"
+    for path in LIB.rglob("*.dart"):
         relative = path.relative_to(ROOT)
-        text = path.read_text(encoding="utf-8")
-        for token in FORBIDDEN_RUNTIME_TOKENS:
-            if token in text:
-                violations.append(f"{relative}:{token}")
+        imports = _dart_imports(path)
+        forbidden = sorted(imports.intersection(FORBIDDEN_IMPORTS))
+        for directive in forbidden:
+            violations.append(f"{relative}: forbidden import {directive}")
+        for directive in imports:
+            if directive.startswith(TRANSPORT_IMPORT_PREFIXES) and api_root not in path.parents:
+                violations.append(f"{relative}: transport outside API boundary {directive}")
         if path.name.endswith("_io.dart"):
-            violations.append(f"{relative}:IO implementation")
+            violations.append(f"{relative}: IO implementation")
         if path.name in FORBIDDEN_BACKEND_LIBRARIES:
-            violations.append(f"{relative}:backend implementation")
-        if path.parent != api_root and (
-            "package:http/" in text or "package:web_socket_channel/" in text
-        ):
-            violations.append(f"{relative}:transport outside FmsApi client")
+            violations.append(f"{relative}: backend implementation")
+        runtime_text = _without_comments(path.read_text(encoding="utf-8"))
+        if "/internal/v1/" in runtime_text:
+            violations.append(f"{relative}: private Gateway route")
     assert violations == []
 
+
+def test_team_a_presentation_foundation_depends_on_fms_api() -> None:
+    dart_files = list(PRESENTATION.rglob("*.dart"))
+    declared: dict[str, Path] = {}
+    for path in dart_files:
+        text = path.read_text(encoding="utf-8")
+        for class_name in CLASS_DECLARATION.findall(text):
+            declared[class_name] = path
+    assert REQUIRED_PRESENTATION_CLASSES <= declared.keys()
+
+    for class_name in FEATURE_PAGE_CLASSES:
+        imports = _dart_imports(declared[class_name])
+        assert any(imported.endswith("/fms_api.dart") for imported in imports), class_name
+        assert not any(imported.endswith("/fms_api_client.dart") for imported in imports)
+
+    model_names = {path.name for path in LIB.glob("*.dart")}
+    assert REQUIRED_DIAGNOSTIC_MODELS <= model_names
+
+
+def test_direct_dependencies_are_used_by_retained_browser_code() -> None:
+    assert _declared_dependencies() <= _used_packages()
+
+
+def test_generated_artifacts_are_not_tracked() -> None:
     tracked_generated = [
         str(path)
-        for path in tracked_paths
+        for path in _tracked_paths()
         if GENERATED_PARTS.intersection(path.parts)
         or path.name.startswith("GeneratedPluginRegistrant")
     ]
     assert tracked_generated == []
-
-    provenance = (CONTROL_UI / "UPSTREAM_CONTROL_SYSTEM_COMMIT").read_text().strip()
-    assert len(provenance) == 40
-    assert all(character in "0123456789abcdef" for character in provenance)

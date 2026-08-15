@@ -23,6 +23,7 @@ Map<String, Object?> _draftJson() => {
   'format_version': 1,
   'draft_revision': 4,
   'source_uuids': {'slam_yaml': 'source-1'},
+  'staged_source_tokens': {'slam_image': 'upload-1'},
   'waypoints': [
     {'code': 'PACKING-01-DOCK-01', 'x': 0.351, 'y': -0.490},
   ],
@@ -230,6 +231,116 @@ void main() {
     expect(requests[10].headers['Idempotency-Key'], 'incident-6');
   });
 
+  test('stage token is carried into the exact draft save body', () async {
+    late http.Request saveRequest;
+    final client = FmsApiClient(
+      baseUri: Uri.parse('https://gateway.example'),
+      httpClient: MockClient((request) async {
+        if (request.url.path.endsWith('/sources/stage')) {
+          return http.Response(
+            jsonEncode({
+              'upload_token': 'upload-1',
+              'source_type': 'slam_image',
+              'sha256': 'a' * 64,
+              'byte_size': 3,
+            }),
+            200,
+          );
+        }
+        saveRequest = request;
+        return http.Response(jsonEncode(_draftJson()), 200);
+      }),
+    );
+
+    final staged = await client.stageMapSource(
+      'trihouse_test_01',
+      MapSourceUploadDto(
+        sourceType: 'slam_image',
+        fileName: 'map.pgm',
+        mimeType: 'image/x-portable-graymap',
+        bytes: Uint8List.fromList([1, 2, 3]),
+      ),
+    );
+    final draft = MapProjectDraftDto(
+      mapName: 'trihouse_test_01',
+      formatVersion: 1,
+      draftRevision: 4,
+      sourceUuids: const {'slam_yaml': 'source-1'},
+      stagedSourceTokens: {'slam_image': staged.uploadToken},
+      waypoints: const [],
+      features: const [],
+      runtimeProfileHash: 'profile-sha',
+    );
+
+    await client.saveMapDraft(draft, expectedRevision: 4);
+
+    expect(jsonDecode(saveRequest.body), {
+      'map_name': 'trihouse_test_01',
+      'format_version': 1,
+      'draft_revision': 4,
+      'source_uuids': {'slam_yaml': 'source-1'},
+      'staged_source_tokens': {'slam_image': 'upload-1'},
+      'waypoints': <Object?>[],
+      'features': <Object?>[],
+      'runtime_profile_hash': 'profile-sha',
+    });
+  });
+
+  test(
+    'multipart staging preserves fields filename MIME bytes and URI escaping',
+    () async {
+      late http.BaseRequest stagedRequest;
+      late List<int> stagedBody;
+      final client = FmsApiClient(
+        baseUri: Uri.parse('https://gateway.example'),
+        httpClient: MockClient.streaming((request, bodyStream) async {
+          stagedRequest = request;
+          stagedBody = await bodyStream.toBytes();
+          return http.StreamedResponse(
+            Stream.value(
+              utf8.encode(
+                jsonEncode({
+                  'upload_token': 'upload-1',
+                  'source_type': 'slam_image',
+                  'sha256': 'a' * 64,
+                  'byte_size': 3,
+                }),
+              ),
+            ),
+            200,
+          );
+        }),
+      );
+
+      await client.stageMapSource(
+        'floor/a b',
+        MapSourceUploadDto(
+          sourceType: 'slam_image',
+          fileName: 'map.pgm',
+          mimeType: 'image/x-portable-graymap',
+          bytes: Uint8List.fromList([0, 255, 10]),
+        ),
+      );
+
+      final printable = latin1.decode(stagedBody, allowInvalid: true);
+      expect(
+        stagedRequest.url.toString(),
+        'https://gateway.example/api/v1/map-projects/floor%2Fa%20b/sources/stage',
+      );
+      expect(
+        stagedRequest.headers['content-type'],
+        startsWith('multipart/form-data; boundary='),
+      );
+      expect(printable, contains('name="source_type"\r\n\r\nslam_image'));
+      expect(printable, contains('name="source"; filename="map.pgm"'));
+      expect(
+        printable.toLowerCase(),
+        contains('content-type: image/x-portable-graymap'),
+      );
+      expect(_containsBytes(stagedBody, const [0, 255, 10]), isTrue);
+    },
+  );
+
   test(
     'operationsEvents connects to the public secure WebSocket route',
     () async {
@@ -272,4 +383,123 @@ void main() {
       expect(event.payload, {'x': 1.2, 'y': 0.4});
     },
   );
+
+  test(
+    'state-changing JSON bodies match the public Gateway wire contract',
+    () async {
+      final bodies = <String, Object?>{};
+      final client = FmsApiClient(
+        baseUri: Uri.parse('https://gateway.example'),
+        httpClient: MockClient((request) async {
+          bodies[request.url.path] = request.body.isEmpty
+              ? null
+              : jsonDecode(request.body);
+          final body = switch (request.url.path) {
+            '/api/v1/map-projects' => {
+              'draft': _draftJson(),
+              'open_existing': false,
+              'active_revision': null,
+            },
+            '/api/v1/map-projects/trihouse_test_01/publish' => {
+              'map_name': 'trihouse_test_01',
+              'map_revision': 'map-sha',
+              'draft_revision': 4,
+              'manifest': <String, Object?>{},
+            },
+            '/api/v1/orders' => {
+              'job_id': 42,
+              'job_code': 'OUT-42',
+              'external_reference': 'ORDER-42',
+              'state': 'queued',
+              'requested_quantity': 2,
+              'fulfillable_quantity': 2,
+              'outstanding_quantity': 0,
+            },
+            '/api/v1/jobs/42/worker-completion' => _jobJson(),
+            '/api/v1/incidents/6/decision' => null,
+            _ => throw StateError(request.url.path),
+          };
+          return http.Response(
+            body == null ? '' : jsonEncode(body),
+            body == null ? 204 : 200,
+          );
+        }),
+      );
+
+      await client.openMapProject('trihouse_test_01');
+      await client.publishMapDraft(
+        'trihouse_test_01',
+        const PublishMapDto(expectedDraftRevision: 4, publishedBy: 'W-OP-01'),
+      );
+      await client.createOutboundOrder(
+        OutboundOrderRequestDto(
+          externalReference: 'ORDER-42',
+          requester: 'W-OP-01',
+          priority: 'high',
+          allowPartialFulfillment: false,
+          lines: const [
+            OutboundOrderLineDto(productCode: 'MILK-1L', quantity: 2),
+          ],
+        ),
+        idempotencyKey: 'order-42',
+      );
+      await client.completeJob(
+        42,
+        WorkerCompletionDto(
+          workerId: 'W-OP-01',
+          completionNote: 'packed',
+          acknowledgedManualItemIds: const [3, 4],
+        ),
+        idempotencyKey: 'complete-42',
+      );
+      await client.decideEmergency(
+        6,
+        const EmergencyDecisionDto(
+          workerId: 'W-OP-01',
+          decision: EmergencyDecision.raiseAlarm,
+          reason: 'unsafe aisle',
+        ),
+        idempotencyKey: 'incident-6',
+      );
+
+      expect(bodies['/api/v1/map-projects'], {'map_name': 'trihouse_test_01'});
+      expect(bodies['/api/v1/map-projects/trihouse_test_01/publish'], {
+        'expected_draft_revision': 4,
+        'published_by': 'W-OP-01',
+      });
+      expect(bodies['/api/v1/orders'], {
+        'external_reference': 'ORDER-42',
+        'requested_by': 'W-OP-01',
+        'priority': 'high',
+        'allow_partial_fulfillment': false,
+        'items': [
+          {'product_code': 'MILK-1L', 'quantity': 2},
+        ],
+      });
+      expect(bodies['/api/v1/jobs/42/worker-completion'], {
+        'worker_id': 'W-OP-01',
+        'completion_note': 'packed',
+        'acknowledged_manual_item_ids': [3, 4],
+      });
+      expect(bodies['/api/v1/incidents/6/decision'], {
+        'worker_id': 'W-OP-01',
+        'decision': 'RAISE_ALARM',
+        'reason': 'unsafe aisle',
+      });
+    },
+  );
+}
+
+bool _containsBytes(List<int> haystack, List<int> needle) {
+  for (var start = 0; start <= haystack.length - needle.length; start++) {
+    var matches = true;
+    for (var index = 0; index < needle.length; index++) {
+      if (haystack[start + index] != needle[index]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return true;
+  }
+  return false;
 }
