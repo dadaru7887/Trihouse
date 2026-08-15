@@ -205,16 +205,35 @@ Control Tower는 다음 순서로 작업을 만든다.
 3. lot의 slot에서 parent warehouse와 온도 구역을 찾는다.
 4. warehouse에 연결된 Loading Dock Waypoint와 yaw를 조회한다.
 5. 물품을 `ambient → chilled → frozen` 순서로 그룹화하고 빈 구역은 생략한다.
-6. 같은 구역 안의 여러 pickup은 현재 위치와 Nav2 path cost가 짧은 순서로 정렬한다.
+6. 같은 온도 구역의 모든 품목을 하나의 Loading Dock 방문 묶음으로 합친다. 구역 안의
+   선반별 이동은 OMX 작업이며 Pinky의 주행 경로를 추가하지 않는다.
 7. Pinky와 해당 시설에 사용 가능한 OMX를 배정한다.
-8. 구역별 navigate → verify/pick → load Step을 만든다.
-9. 마지막에 Packing Station Dock으로 이동해 unload/handover하고 작업자 완료를 기다린다.
-10. 작업자 완료 요청이 성공한 transaction에서만 최종 재고를 반영한다.
-11. 배터리 정책에 따라 Charging Station 또는 Parking/Waiting Point로 복귀한다.
+8. Nav2/RMF ETA에서 준비 여유시간을 뺀 `prepare_at`에 OMX 선행 파지를 시작한다.
+9. 구역별 prepare/pick → navigate → verify/load Step을 만든다. Pinky는 OMX 준비 전에도
+   Dock에 진입해 대기할 수 있지만, 같은 Job/Step assignment revision의 `PINKY_READY`와
+   `OMX_READY`가 모두 확인되기 전에는 바구니 적재를 시작하지 않는다.
+10. 마지막에 Packing Station Dock으로 이동해 unload/handover하고 작업자 완료를 기다린다.
+11. 작업자가 Control UI의 `작업 완료` 버튼을 눌러 성공한 transaction에서만 최종
+    재고를 반영한다.
+12. 배터리 정책에 따라 Charging Station 또는 Parking/Waiting Point로 복귀한다.
 
 작업자 완료 API는 `Idempotency-Key`가 필수다. 완료 전에는 inventory physical quantity를
 바꾸지 않는다. 완료가 없으면 로봇과 포장대 reservation을 유지하고 관리자의 취소·복구
 workflow만 허용한다.
+
+UI의 우선순위 label `긴급`은 DB canonical 값 `critical`로 저장한다. `critical` Job은
+아직 시작하지 않은 일반 Job보다 먼저 배차하되, 운반 중인 Job을 임의 중단하지 않고
+안전한 Step 경계에서만 재정렬한다.
+
+부분 출고는 주문의 `allow_partial_fulfillment=true`일 때만 허용한다. 허용된 주문은
+가용 수량을 예약해 Job을 만들고 부족 수량은 `job_items.metadata`에 outstanding으로
+남긴다. 모든 품목의 가용 수량이 0이면 부분 출고 허용 여부와 관계없이 거절한다.
+
+각 논리 Step과 재시도는 `job_steps`와 append-only `job_step_attempts`에 저장한다.
+시도에는 성공 기준, 관측값, 시간·거리·ETA 오차 같은 metric, 실패 domain/reason,
+정책·VLM/RL model lineage, 이미지·영상·ROS bag artifact 참조를 포함한다. 성공 판정은
+구조화된 기준이 모두 통과한 경우에만 `succeeded`가 되며, 누락된 관측은 성공으로
+간주하지 않는다.
 
 ## 7. Seed 기반 주문 예시
 
@@ -305,6 +324,63 @@ return_home
 현재 Orange 가용 수량은 1이므로 Job/Step과 reservation을 만들지 않고 전체 주문을
 거절한다. 부분 출고는 별도 명시 옵션이 없는 한 허용하지 않는다.
 
+### 주문 D: 긴급 우선순위
+
+```json
+{
+  "external_reference": "DEMO-ORDER-CRITICAL-001",
+  "priority": "critical",
+  "allow_partial_fulfillment": false,
+  "requested_by": "W-OP-01",
+  "items": [
+    {"product_code": "SKU-STRAWBERRY", "quantity": 1},
+    {"product_code": "SKU-PORKBELLY", "quantity": 1}
+  ]
+}
+```
+
+UI에는 `긴급`으로 표시한다. 대기 중인 normal/high Job보다 먼저 PK/OMX를 배정하고
+상온 Dock → 냉동 Dock → 포장대 Dock 순으로 수행한다.
+
+### 주문 E: 부분 출고 허용
+
+```json
+{
+  "external_reference": "DEMO-ORDER-PARTIAL-001",
+  "priority": "normal",
+  "allow_partial_fulfillment": true,
+  "requested_by": "W-OP-01",
+  "items": [
+    {"product_code": "SKU-SANDWICH", "quantity": 3},
+    {"product_code": "SKU-ICEBAR", "quantity": 1}
+  ]
+}
+```
+
+현재 Sandwich 수량 2와 Ice bar 수량 1을 예약해 냉장 Dock → 냉동 Dock → 포장대
+Dock을 수행하고 Sandwich 1은 outstanding으로 기록한다. UI는 출고 가능 3/요청 4를
+작업 시작 전에 명확히 표시한다.
+
+### 주문 F: 같은 구역 다품목과 단일 Dock
+
+```json
+{
+  "external_reference": "DEMO-ORDER-AMBIENT-BUNDLE-001",
+  "priority": "high",
+  "allow_partial_fulfillment": false,
+  "requested_by": "W-OP-01",
+  "items": [
+    {"product_code": "SKU-ORANGE", "quantity": 1},
+    {"product_code": "SKU-MANDARIN", "quantity": 1}
+  ]
+}
+```
+
+두 품목의 선반 위치가 달라도 Pinky는 상온 Loading Dock을 한 번만 방문한다. OMX는
+Pinky ETA 전에 두 품목을 순서대로 준비한다. Pinky가 먼저 도착해도 양측 준비 신호가
+모인 뒤 하나의 load 묶음으로 인계한다. 여섯 주문 예시는 각각 fresh seed에서 독립
+실행한다.
+
 ## 8. 비상상황
 
 Vision의 작업자 쓰러짐 후보가 들어오면 affected Zone의 로봇을 즉시 hold하고 해당
@@ -330,6 +406,10 @@ Raw YAML 대신 schema 기반 form을 제공한다.
 
 필드마다 단위, 허용 범위, 권장 기본값, 기존 값과 diff를 표시한다. Simulation과 Real
 profile은 분리하고 배포 시 profile hash를 map revision manifest에 고정한다.
+기본값은 `pinky_pro/pinky_navigation/params/nav2_params.yaml`의 controller, planner,
+AMCL, global/local costmap 설정과 `pinky_pro/pinky_bringup/config/pinky_params.yaml`의
+wheel radius/separation에서 읽는다. UI가 원본 파일을 직접 덮어쓰지 않고 Gateway가
+검증한 revision별 profile을 생성해 Nav2 launch에 전달한다.
 
 ## 10. 실시간 관제 화면
 
@@ -347,6 +427,10 @@ profile은 분리하고 배포 시 profile hash를 map revision manifest에 고�
 로봇 pose와 path는 WebSocket으로 전달한다. Camera는 MediaMTX WebRTC/HLS로 재생하고,
 UI 재생 여부와 무관하게 녹화한다.
 
+카메라 inventory는 고정 카메라 2대, OMX 손목 카메라 2대, Pinky 카메라 2대의 총
+6 stream이다. 운영 UI는 6개 상태와 recording 상태를 모두 표시하되, 기본 재생은
+선택한 한 stream만 수행하고 incident 시 관련 stream만 자동 재생한다.
+
 ## 11. 영상 저장과 장비 용량
 
 ### 현재 접속 장비
@@ -361,6 +445,9 @@ UI 재생 여부와 무관하게 녹화한다.
 이 장비는 Flutter Web, 개발 DB, Gateway, H.264 copy recording에는 사용할 수 있다.
 NVIDIA 추론, 여러 로봇 Gazebo GUI, VLM과 전체 stack의 동시 실행 장비로는 사용하지
 않는다. 메모리 여유를 위해 개발 시 Gazebo는 headless, AI는 원격 5080을 사용한다.
+6개 실제 camera 동시 입력은 이 장비의 확정 성능 기준으로 간주하지 않는다. 개발
+profile은 synthetic/recorded fixture 6개를 등록하되 최대 2개만 720p 5 FPS로 decode하고,
+나머지는 연결 상태와 pre-recorded event만 검증한다.
 
 H.264 고정 bitrate 기준 저장량은 다음과 같다.
 
@@ -393,19 +480,27 @@ lsblk -o NAME,MODEL,TRAN,SIZE,FSTYPE,MOUNTPOINTS
 df -h
 ```
 
-확정 전 보수적 운영 목표는 다음과 같다.
+OMEN 5080과 4060 관제 PC의 동시 처리량 및 저장 일수는 **미정**이다. 아래 명령의 실제
+결과와 6 stream soak test가 없으면 production profile을 승인하거나 보존 일수를
+표시하지 않는다.
+
+확정 전 보수적 검증 목표는 다음과 같다.
 
 - H.264 1080p 입력 최대 4개 수신
 - YOLO small/medium 계열은 camera별 5 FPS 목표로 round-robin/batch 추론
-- QR/ArUco는 OpenCV 전용 처리
+- QR/ArUco는 4060 관제 PC에서 OpenCV로 처리
 - VLM은 모든 frame이 아니라 event/실패 snapshot에만 실행
 - 모델과 녹화를 같은 SSD에 두지 않음
 - 추론 FPS는 실제 model, resolution, precision별 benchmark로 확정
 
-OMEN이 1 TB SSD라면 OS/model/cache 250 GB를 남기고 녹화 750 GB를 사용할 때
-4 camera × 2 Mbps를 약 8.7일 보존할 수 있다. 그러나 모델 서버와 녹화 서버의
-장애 범위를 분리하기 위해 장기적으로 4060 측 USB SSD 또는 별도 NAS/NFS/SMB를
-권장한다.
+고정 2 + OMX 손목 2 + Pinky 2 camera에 대해 stream별 실제 codec, resolution,
+bitrate, source FPS를 기록한 다음 QR/ArUco latency·CPU/GPU·RAM·drop rate와 MediaMTX
+저장량을 함께 30분 이상 측정한다. `nvidia-smi`, `free -h`, `lsblk`, `df -h` 원문과
+benchmark JSON을 배포 승인 artifact로 보존한다.
+
+장기 녹화는 모델 서버와 장애 범위를 분리해 4060 측 전용 SSD 또는 별도 NAS/NFS/SMB를
+사용한다. 실제 6 stream bitrate와 확보 가능한 전용 저장 공간이 측정되기 전까지
+UI의 예상 보존 일수는 숫자 대신 `UNMEASURED`로 표시한다.
 
 ## 12. 한 명령 통합 기동
 
@@ -429,6 +524,11 @@ OMEN이 1 TB SSD라면 OS/model/cache 250 GB를 남기고 녹화 750 GB를 사�
 8. Nav2/map server와 Pinky/OMX simulation adapters
 9. Control System Flutter Web
 
+최신 `control_system` source는 root의 `control_ui/`로 복사하되 nested `.git`, build,
+cache 산출물은 제외한다. 이후 제품 source의 기준 경로와 표시 명칭은 `control_ui`다.
+첫 통합에서는 내부 Flutter package 이름을 일괄 변경하지 않아 upstream 비교 가능성을
+유지한다.
+
 기본은 Gazebo headless다. `--gazebo-gui`, `--rviz`를 명시한 경우에만 진단 창을
 띄운다. `compose.ai_5080.yaml`과 모델 weight는 이 명령에 포함하지 않는다. Control
 stack은 원격 AI health와 model version만 확인하며 simulation mode에서는 fixture
@@ -438,7 +538,7 @@ Vision event를 사용할 수 있다.
 
 - 사용자 UI에 Lane 작성 기능이 없다.
 - 상품/수량만으로 상온 → 냉장 → 냉동 → 포장대 sequence가 생성된다.
-- 빈 온도 구역은 생략되고 같은 구역은 Nav2 path cost로 정렬된다.
+- 빈 온도 구역은 생략되고 같은 구역 다품목은 단일 Loading Dock 방문으로 묶인다.
 - Waypoint와 yaw는 DB `locations`에서만 결정된다.
 - 작업자 완료 전에는 최종 재고가 변하지 않는다.
 - 편집 폐기와 첫 배포 실패 후 같은 프로젝트 이름을 다시 사용할 수 있다.
@@ -450,3 +550,32 @@ Vision event를 사용할 수 있다.
   감사 이력에 남는다.
 - 한 명령으로 MySQL부터 Open-RMF, Gazebo, Nav2, UI까지 올라오고 `down`으로 정리된다.
 - 최신 A의 OMX/RMF 회귀 테스트와 Trihouse Job/DB 통합 테스트가 모두 통과한다.
+- OMX는 Pinky ETA 기반 `prepare_at`에 시작하고 `PINKY_READY`와 `OMX_READY`가 같은
+  assignment revision에 모이기 전에는 적재 동작을 허용하지 않는다.
+- UI의 `작업 완료` 버튼은 멱등 완료 API 성공 후에만 완료 상태를 표시한다.
+- 긴급 주문과 opt-in 부분 출고가 canonical DB 값으로 저장되고 감사 이력이 남는다.
+- 모든 Step attempt의 성공 기준·관측·metric·evidence·model lineage가 DB에 남는다.
+- 6 camera production profile은 4060/5080 실제 측정 artifact 없이는 활성화되지 않는다.
+
+## 14. 일정과 테스트 범위
+
+### 2026-08-16까지: 시뮬레이션 검증
+
+- 필수: Pinky 2대, Open-RMF, Nav2, Gazebo headless, Control Tower, Gateway, MySQL,
+  Control UI를 한 명령으로 기동한다.
+- 필수: 주문 A~F를 fresh seed에서 실행해 온도 구역 순서, 단일 Dock 묶음, 긴급 배차,
+  부분 출고, 재고 부족, 작업자 완료와 복귀를 검증한다.
+- 필수: 두 Pinky가 동시에 서로 다른 Job을 수행하고 Nav2가 계산한 실제 path와 RMF
+  예상 trajectory가 UI에 표시되는 것을 확인한다.
+- 필수: 6 camera fixture가 등록되고 선택 영상·incident 영상·recording metadata가 UI와
+  DB에 연결되는 것을 확인한다.
+- 가능하면: OMX 2대의 ETA 선행 파지와 load handover를 Gazebo 또는 protocol simulator로
+  검증한다. OMX simulation이 불완전해도 Pinky 2대 필수 gate를 낮추지 않는다.
+
+### 2026-08-17: 통합 검증
+
+- A에서 복사한 `control_ui`, Control Tower, Gateway, canonical MySQL, Open-RMF,
+  Nav2/Gazebo, MediaMTX를 통합한다.
+- 4060 QR/ArUco와 원격 5080 VLM endpoint는 health/model-version 계약으로 연결한다.
+- 실제 장비 처리량과 저장 일수는 4060/5080의 필수 명령 결과와 6 camera soak test가
+  준비된 경우에만 확정한다. 준비되지 않으면 `UNMEASURED` 배포 차단 상태를 유지한다.
