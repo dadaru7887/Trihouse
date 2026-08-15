@@ -1,5 +1,6 @@
 # codex
 .superpowers/
+.worktrees/
 .codex/
 .agents/
 tools/
