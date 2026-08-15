@@ -1,9 +1,19 @@
 """Public FMS API response models."""
 
+from collections.abc import Mapping
 from datetime import date, datetime
+import math
+from types import MappingProxyType
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 
 class DeviceView(BaseModel):
@@ -226,6 +236,30 @@ MapProjectSourceType = Literal[
 ]
 
 
+def _freeze_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        if not all(isinstance(key, str) for key in value):
+            raise ValueError("metadata object keys must be strings")
+        return MappingProxyType(
+            {key: _freeze_json_value(nested) for key, nested in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_json_value(nested) for nested in value)
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    raise ValueError("metadata must contain finite JSON values")
+
+
+def _thaw_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_json_value(nested) for key, nested in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json_value(nested) for nested in value]
+    return value
+
+
 class MapProjectSourceView(BaseModel):
     """Project-scoped immutable source metadata; source bytes stay server-side."""
 
@@ -242,8 +276,18 @@ class MapProjectSourceView(BaseModel):
     mime_type: str = Field(min_length=1, max_length=128)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     byte_size: int = Field(gt=0)
-    metadata: dict[str, Any] | None = None
+    metadata: Mapping[str, Any] | None = None
     created_at: datetime
+
+    @model_validator(mode="after")
+    def freeze_metadata_recursively(self):
+        if self.metadata is not None:
+            object.__setattr__(self, "metadata", _freeze_json_value(self.metadata))
+        return self
+
+    @field_serializer("metadata")
+    def serialize_metadata(self, value: Mapping[str, Any] | None):
+        return _thaw_json_value(value) if value is not None else None
 
 
 class MapProjectFile(BaseModel):

@@ -130,6 +130,10 @@ class MapProjectNotFound(Exception):
     pass
 
 
+class MapProjectSourceValidationError(ValueError):
+    """Stable domain error for invalid immutable map-source input."""
+
+
 class MapDraftRevisionConflict(Exception):
     pass
 
@@ -151,23 +155,98 @@ MAP_PROJECT_SOURCE_TYPES = frozenset(
 )
 
 
+def _canonical_source_metadata(metadata: object) -> dict[str, Any] | None:
+    """Return detached JSON object data or one backend-independent domain error."""
+    if metadata is None:
+        return None
+    if not isinstance(metadata, dict):
+        raise MapProjectSourceValidationError("metadata must be an object or null")
+
+    active_containers: set[int] = set()
+
+    def canonical(value: object, path: str) -> Any:
+        if value is None or isinstance(value, (str, bool)):
+            return value
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise MapProjectSourceValidationError(
+                    f"metadata {path} must contain only finite numbers"
+                )
+            return value
+        if isinstance(value, dict):
+            identity = id(value)
+            if identity in active_containers:
+                raise MapProjectSourceValidationError(
+                    f"metadata {path} must not contain cycles"
+                )
+            active_containers.add(identity)
+            try:
+                result: dict[str, Any] = {}
+                for key, nested in value.items():
+                    if not isinstance(key, str):
+                        raise MapProjectSourceValidationError(
+                            f"metadata {path} must use string object keys"
+                        )
+                    result[key] = canonical(nested, f"{path}.{key}")
+                return result
+            finally:
+                active_containers.remove(identity)
+        if isinstance(value, (list, tuple)):
+            identity = id(value)
+            if identity in active_containers:
+                raise MapProjectSourceValidationError(
+                    f"metadata {path} must not contain cycles"
+                )
+            active_containers.add(identity)
+            try:
+                return [
+                    canonical(nested, f"{path}[{index}]")
+                    for index, nested in enumerate(value)
+                ]
+            finally:
+                active_containers.remove(identity)
+        raise MapProjectSourceValidationError(
+            f"metadata {path} contains a non-JSON value"
+        )
+
+    try:
+        canonical_metadata = canonical(metadata, "$")
+        encoded = json.dumps(
+            canonical_metadata,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+        return json.loads(encoded)
+    except MapProjectSourceValidationError:
+        raise
+    except (OverflowError, RecursionError, TypeError, ValueError) as error:
+        raise MapProjectSourceValidationError(
+            "metadata must be finite JSON-serializable object data"
+        ) from error
+
+
 def _new_map_project_source(source: dict[str, Any]) -> dict[str, Any]:
     """Validate immutable source input and derive its identity metadata from bytes."""
     source_type = source.get("source_type")
     if source_type not in MAP_PROJECT_SOURCE_TYPES:
-        raise ValueError("unsupported map project source_type")
+        raise MapProjectSourceValidationError("unsupported map project source_type")
     file_name = source.get("file_name")
     if not isinstance(file_name, str) or not file_name or len(file_name) > 255:
-        raise ValueError("file_name must be between 1 and 255 characters")
+        raise MapProjectSourceValidationError(
+            "file_name must be between 1 and 255 characters"
+        )
     mime_type = source.get("mime_type")
     if not isinstance(mime_type, str) or not mime_type or len(mime_type) > 128:
-        raise ValueError("mime_type must be between 1 and 128 characters")
+        raise MapProjectSourceValidationError(
+            "mime_type must be between 1 and 128 characters"
+        )
     content = source.get("content_bytes")
     if not isinstance(content, (bytes, bytearray)) or not content:
-        raise ValueError("content_bytes must be non-empty bytes")
-    metadata = source.get("metadata")
-    if metadata is not None and not isinstance(metadata, dict):
-        raise ValueError("metadata must be an object or null")
+        raise MapProjectSourceValidationError("content_bytes must be non-empty bytes")
+    metadata = _canonical_source_metadata(source.get("metadata"))
     content_bytes = bytes(content)
     return {
         "source_uuid": str(uuid.uuid4()),
@@ -177,7 +256,7 @@ def _new_map_project_source(source: dict[str, Any]) -> dict[str, Any]:
         "content_bytes": content_bytes,
         "sha256": hashlib.sha256(content_bytes).hexdigest(),
         "byte_size": len(content_bytes),
-        "metadata": deepcopy(metadata),
+        "metadata": metadata,
     }
 
 
@@ -206,8 +285,10 @@ def _normalize_map_payload(
     payload: dict[str, Any],
     existing: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    """Normalize waypoint identity and discard deprecated user-authored lanes."""
     normalized = deepcopy(payload)
     normalized["mapName"] = map_name
+    normalized.pop("laneDirections", None)
     waypoints = normalized.setdefault("waypoints", [])
     previous_waypoints = (
         existing.get("payload", {}).get("waypoints", []) if existing else []
@@ -242,36 +323,6 @@ def _normalize_map_payload(
             and _same_point(waypoint.get("point"), previous.get("point"))
         ):
             waypoint["mapPose"] = deepcopy(previous["mapPose"])
-    lanes = normalized.setdefault("laneDirections", [])
-    previous_lanes = (
-        existing.get("payload", {}).get("laneDirections", []) if existing else []
-    )
-    for index, lane in enumerate(lanes):
-        previous = previous_lanes[index] if index < len(previous_lanes) else {}
-        lane["laneUuid"] = (
-            lane.get("laneUuid")
-            or (
-                previous.get("laneUuid")
-                if _same_point(lane.get("start"), previous.get("start"))
-                and _same_point(lane.get("end"), previous.get("end"))
-                else None
-            )
-            or str(uuid.uuid4())
-        )
-        for prefix, coordinate_key in (("start", "start"), ("end", "end")):
-            uuid_key = f"{prefix}WaypointUuid"
-            if lane.get(uuid_key):
-                continue
-            endpoint = next(
-                (
-                    waypoint
-                    for waypoint in waypoints
-                    if _same_point(waypoint.get("point"), lane.get(coordinate_key))
-                ),
-                None,
-            )
-            if endpoint is not None:
-                lane[uuid_key] = endpoint["waypointUuid"]
     return normalized
 
 
@@ -279,7 +330,6 @@ def _validate_map_draft(project: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     waypoints = project["payload"].get("waypoints", [])
     waypoint_ids: set[str] = set()
-    lane_ids: set[str] = set()
     names: set[str] = set()
     location_codes: set[str] = set()
     for waypoint in waypoints:
@@ -316,21 +366,6 @@ def _validate_map_draft(project: dict[str, Any]) -> list[str]:
                 )
             ):
                 errors.append(f"{name}: publish용 mapPose(m)가 필요합니다")
-    for lane in project["payload"].get("laneDirections", []):
-        lane_id = lane.get("laneUuid")
-        try:
-            parsed_lane_id = str(uuid.UUID(str(lane_id)))
-        except (ValueError, TypeError, AttributeError):
-            parsed_lane_id = ""
-            errors.append(f"{lane_id}: laneUuid 형식이 잘못됐습니다")
-        if parsed_lane_id in lane_ids:
-            errors.append(f"{lane_id}: laneUuid가 중복됩니다")
-        if parsed_lane_id:
-            lane_ids.add(parsed_lane_id)
-        if lane.get("startWaypointUuid") not in waypoint_ids:
-            errors.append(f"{lane.get('laneUuid')}: 시작 Waypoint가 없습니다")
-        if lane.get("endWaypointUuid") not in waypoint_ids:
-            errors.append(f"{lane.get('laneUuid')}: 끝 Waypoint가 없습니다")
     waypoint_categories = {
         (waypoint.get("rmfWaypointName") or waypoint.get("name")): waypoint.get("category")
         for waypoint in waypoints
@@ -475,7 +510,7 @@ class MySqlFmsRepository:
             "drawing_name": row["drawing_name"],
             "format_version": int(row["format_version"]),
             "waypoint_count": int(row["waypoint_count"]),
-            "lane_count": int(row["lane_count"]),
+            "lane_count": 0,
             "draft_revision": int(row["draft_revision"]),
             "has_building_yaml": bool(row["has_building_yaml"]),
             "updated_at": row["updated_at"],
@@ -484,7 +519,7 @@ class MySqlFmsRepository:
     def list_map_projects(self) -> list[dict[str, Any]]:
         rows = self._all(
             """
-            SELECT map_name, drawing_name, format_version, waypoint_count, lane_count,
+            SELECT map_name, drawing_name, format_version, waypoint_count,
                    draft_revision, building_yaml IS NOT NULL AS has_building_yaml,
                    updated_at
             FROM map_projects
@@ -501,7 +536,7 @@ class MySqlFmsRepository:
                 """
                 SELECT project_id, map_name, drawing_name, format_version, payload,
                        building_yaml, building_yaml_name, waypoint_count,
-                       lane_count, draft_revision,
+                       draft_revision,
                        building_yaml IS NOT NULL AS has_building_yaml, updated_at
                 FROM map_projects WHERE map_name = %s
                 """,
@@ -561,7 +596,7 @@ class MySqlFmsRepository:
                 "building_yaml": row["building_yaml"],
                 "building_yaml_name": row["building_yaml_name"],
                 "waypoint_count": int(row["waypoint_count"]),
-                "lane_count": int(row["lane_count"]),
+                "lane_count": 0,
                 "draft_revision": int(row["draft_revision"]),
                 "has_building_yaml": bool(row["has_building_yaml"]),
                 "updated_at": _seoul_datetimes({"value": row["updated_at"]})["value"],
@@ -679,7 +714,6 @@ class MySqlFmsRepository:
                     base64.b64decode(drawing_bytes) if isinstance(drawing_bytes, str) else None
                 )
                 waypoint_count = len(payload.get("waypoints", []))
-                lane_count = len(payload.get("laneDirections", []))
                 if current is None:
                     cursor.execute(
                         """
@@ -687,9 +721,9 @@ class MySqlFmsRepository:
                           (map_name, format_version, payload, drawing_name,
                            drawing_extension, drawing_bytes, drawing_width,
                            drawing_height, building_yaml, building_yaml_name,
-                           waypoint_count, lane_count, draft_revision)
+                           waypoint_count, draft_revision)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s,
-                                %s, %s, %s, %s, 1)
+                                %s, %s, %s, 1)
                         """,
                         (
                             map_name, project["format_version"],
@@ -697,7 +731,7 @@ class MySqlFmsRepository:
                             drawing.get("extension"), decoded_drawing,
                             drawing.get("pixelWidth"), drawing.get("pixelHeight"),
                             project.get("building_yaml"),
-                            project.get("building_yaml_name"), waypoint_count, lane_count,
+                            project.get("building_yaml_name"), waypoint_count,
                         ),
                     )
                     project_id = int(cursor.lastrowid)
@@ -710,7 +744,7 @@ class MySqlFmsRepository:
                             drawing_extension = %s, drawing_bytes = %s,
                             drawing_width = %s, drawing_height = %s,
                             building_yaml = %s, building_yaml_name = %s,
-                            waypoint_count = %s, lane_count = %s,
+                            waypoint_count = %s,
                             draft_revision = draft_revision + 1
                         WHERE project_id = %s
                         """,
@@ -720,12 +754,11 @@ class MySqlFmsRepository:
                             drawing.get("extension"), decoded_drawing,
                             drawing.get("pixelWidth"), drawing.get("pixelHeight"),
                             project.get("building_yaml"),
-                            project.get("building_yaml_name"), waypoint_count, lane_count,
+                            project.get("building_yaml_name"), waypoint_count,
                             project_id,
                         ),
                     )
                 cursor.execute("DELETE FROM map_project_robots WHERE project_id = %s", (project_id,))
-                cursor.execute("DELETE FROM map_project_lanes WHERE project_id = %s", (project_id,))
                 cursor.execute("DELETE FROM map_project_waypoints WHERE project_id = %s", (project_id,))
                 waypoint_by_name: dict[str, str] = {}
                 for seq, waypoint in enumerate(payload.get("waypoints", []), start=1):
@@ -750,22 +783,6 @@ class MySqlFmsRepository:
                             (waypoint.get("mapPose") or [None, None])[1],
                             (waypoint.get("mapPose") or [None, None, None])[2]
                             if len(waypoint.get("mapPose") or []) >= 3 else None,
-                        ),
-                    )
-                for seq, lane in enumerate(payload.get("laneDirections", []), start=1):
-                    cursor.execute(
-                        """
-                        INSERT INTO map_project_lanes
-                          (lane_uuid, project_id, seq, start_waypoint_uuid,
-                           end_waypoint_uuid, direction, speed_limit,
-                           orientation, mutex_group, active)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
-                        """,
-                        (
-                            lane["laneUuid"], project_id, seq,
-                            lane.get("startWaypointUuid"), lane.get("endWaypointUuid"),
-                            lane.get("direction", "양방향"), lane.get("speedLimit"),
-                            lane.get("orientation"), lane.get("mutex"),
                         ),
                     )
                 cursor.execute("DELETE FROM map_project_files WHERE project_id = %s", (project_id,))
@@ -2120,7 +2137,7 @@ class InMemoryFmsRepository:
             "drawing_name": drawing.get("name"),
             "format_version": project["format_version"],
             "waypoint_count": len(project["payload"].get("waypoints", [])),
-            "lane_count": len(project["payload"].get("laneDirections", [])),
+            "lane_count": 0,
             "draft_revision": project["draft_revision"],
             "has_building_yaml": project.get("building_yaml") is not None,
             "updated_at": project["updated_at"],
@@ -2186,6 +2203,7 @@ class InMemoryFmsRepository:
         if map_name in self._map_publications:
             raise PublishedMapProjectDeleteConflict
         del self._map_projects[map_name]
+        self._map_project_sources.pop(map_name, None)
 
     def validate_map_project(self, map_name: str) -> dict[str, Any]:
         project = self._map_projects.get(map_name)

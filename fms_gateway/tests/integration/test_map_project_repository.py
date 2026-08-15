@@ -1,9 +1,25 @@
 import hashlib
 import json
 
+import pytest
+
 from fms_gateway.app.config import get_settings
 from fms_gateway.app.database import Database
-from fms_gateway.app.repositories import MySqlFmsRepository
+from fms_gateway.app.repositories import (
+    MapProjectSourceValidationError,
+    MySqlFmsRepository,
+)
+
+
+def _repository() -> MySqlFmsRepository:
+    get_settings.cache_clear()
+    return MySqlFmsRepository(Database(get_settings()))
+
+
+def _cyclic_metadata() -> dict[str, object]:
+    metadata: dict[str, object] = {}
+    metadata["cycle"] = metadata
+    return metadata
 
 
 def _project() -> dict:
@@ -98,3 +114,88 @@ def test_mysql_project_publish_updates_authoring_and_operational_projection(
     )["location_id"]
     assert robot["current_location_id"] is None
     assert robot["control_mode"] == "automatic"
+
+
+def test_mysql_draft_discards_legacy_lanes_without_using_compatibility_table(
+    mysql_db,
+):
+    repository = _repository()
+
+    saved = repository.save_map_project("project1", _project(), None)
+
+    assert "laneDirections" not in saved["payload"]
+    assert saved["lane_count"] == 0
+    assert mysql_db.one("SELECT lane_count FROM map_projects")["lane_count"] == 0
+    assert mysql_db.one("SELECT COUNT(*) AS count FROM map_project_lanes")["count"] == 0
+
+
+def test_mysql_project_sources_match_in_memory_scope_and_lifecycle(mysql_db):
+    repository = _repository()
+    for map_name in ("source_project_a", "source_project_b"):
+        repository.save_map_project(map_name, _project(), None)
+    source = {
+        "source_type": "physical_features_import",
+        "file_name": "physical.jsonl",
+        "mime_type": "application/x-ndjson",
+        "content_bytes": b"same-content",
+        "metadata": {
+            "schema_version": 1,
+            "nested": {"value": "original"},
+            "items": [1, 2],
+        },
+    }
+
+    first = repository.store_map_project_source("source_project_a", source)
+    second = repository.store_map_project_source("source_project_b", source)
+
+    assert first["source_uuid"] != second["source_uuid"]
+    assert first["sha256"] == second["sha256"]
+    first["metadata"]["nested"]["value"] = "caller-mutation"
+    stored = repository.get_map_project_source(
+        "source_project_a", first["source_uuid"]
+    )
+    assert stored is not None
+    assert stored["metadata"]["nested"]["value"] == "original"
+    assert (
+        repository.get_map_project_source("source_project_b", first["source_uuid"])
+        is None
+    )
+
+    repository.delete_map_project("source_project_a")
+    repository.save_map_project("source_project_a", _project(), None)
+    assert (
+        repository.get_map_project_source("source_project_a", first["source_uuid"])
+        is None
+    )
+    assert mysql_db.one(
+        "SELECT COUNT(*) AS count FROM map_project_sources WHERE source_uuid = %s",
+        (first["source_uuid"],),
+    )["count"] == 0
+
+
+@pytest.mark.parametrize(
+    "metadata_factory",
+    [
+        lambda: {"bad": object()},
+        lambda: {"bad": float("nan")},
+        lambda: {1: "non-string-key"},
+        _cyclic_metadata,
+    ],
+)
+def test_mysql_project_source_metadata_uses_stable_domain_errors(
+    mysql_db, metadata_factory
+):
+    repository = _repository()
+    repository.save_map_project("source_project", _project(), None)
+
+    with pytest.raises(MapProjectSourceValidationError, match="metadata"):
+        repository.store_map_project_source(
+            "source_project",
+            {
+                "source_type": "physical_features_import",
+                "file_name": "physical.jsonl",
+                "mime_type": "application/x-ndjson",
+                "content_bytes": b"content",
+                "metadata": metadata_factory(),
+            },
+        )

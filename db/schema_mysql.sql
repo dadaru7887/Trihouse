@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS map_projects (
   building_yaml       LONGTEXT NULL COMMENT 'Generated Open-RMF building YAML.',
   building_yaml_name  VARCHAR(255) NULL COMMENT 'Generated building YAML file name.',
   waypoint_count      INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Number of active draft waypoints.',
-  lane_count          INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Number of active draft lanes.',
+  lane_count          INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Deprecated compatibility counter; new drafts do not use lanes.',
   draft_revision      BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT 'Optimistic draft version.',
   created_at          DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'Timestamp when the map project was created.',
   updated_at          DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS map_project_lanes (
   speed_limit          DOUBLE NULL COMMENT 'Optional lane speed limit in meters per second.',
   orientation          VARCHAR(16) NULL COMMENT 'Optional robot orientation constraint for the lane.',
   mutex_group          VARCHAR(64) NULL COMMENT 'Optional mutual-exclusion group used by the lane.',
-  active               TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'Indicates whether the lane belongs to the active draft.',
+  active               TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Dormant compatibility flag; new drafts never activate lanes.',
   PRIMARY KEY (project_id, seq),
   UNIQUE KEY uq_map_lanes_uuid (lane_uuid),
   CONSTRAINT fk_map_lanes_project FOREIGN KEY (project_id)
@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS map_project_lanes (
   CONSTRAINT chk_map_lanes_endpoints CHECK (start_waypoint_uuid <> end_waypoint_uuid),
   CONSTRAINT chk_map_lanes_direction CHECK
     (direction IN ('양방향','정방향','역방향'))
-) ENGINE=InnoDB COMMENT='Stores lane topology by stable waypoint UUID instead of floating-point coordinates.';
+) ENGINE=InnoDB COMMENT='Dormant compatibility storage for legacy lane topology; new drafts never read or write it.';
 
 CREATE TABLE IF NOT EXISTS map_project_files (
   project_id    BIGINT UNSIGNED NOT NULL COMMENT 'Identifier of the parent map project.',

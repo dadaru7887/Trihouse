@@ -74,3 +74,11 @@ def test_map_features_accepts_only_the_planned_feature_types_and_revision_width(
         "camera",
     ):
         assert f"'{feature_type}'" in features
+
+
+def test_legacy_lane_table_is_documented_as_dormant_compatibility_ddl() -> None:
+    schema = SCHEMA_PATH.read_text(encoding="utf-8")
+    lanes = _table(schema, "map_project_lanes")
+
+    assert "dormant compatibility" in lanes.lower()
+    assert "active draft" not in lanes.lower()

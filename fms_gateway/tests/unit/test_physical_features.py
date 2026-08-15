@@ -37,54 +37,53 @@ def _write_records(path: Path, records: list[dict[str, object]]) -> Path:
     return path
 
 
+def _cyclic_metadata() -> dict[str, object]:
+    metadata: dict[str, object] = {}
+    metadata["cycle"] = metadata
+    return metadata
+
+
 def test_physical_fixture_is_the_only_pose_source() -> None:
+    from fms_gateway.app.physical_features import MapPose
+
+    records = _records()
     result = _importer().parse(PHYSICAL_JSONL)
 
     assert result.map_name == "trihouse_test_01"
     assert len(result.waypoints) == 8
     assert len(result.bottlenecks) == 2
     assert len(result.fiducials) == 3
-    assert result.bottlenecks[0].radius_m == 0.1
-    assert result.bottlenecks[0].source_diameter_m == 0.2
+    assert all(feature.radius_m == 0.1 for feature in result.bottlenecks)
+    assert all(feature.source_diameter_m == 0.2 for feature in result.bottlenecks)
+    assert all(
+        feature.radius_m == feature.source_diameter_m / 2
+        for feature in result.bottlenecks
+    )
+    assert {binding.target_location_code for binding in result.fiducials} == {
+        "WH-AMB-01-DOCK-01",
+        "WH-CHL-01-DOCK-01",
+        "WH-FRZ-01-DOCK-01",
+    }
     assert result.waypoint("WH-FRZ-01-DOCK-01").pose != result.marker(0).recognition_pose
 
-    assert {
-        waypoint.location_code: (waypoint.pose.x, waypoint.pose.y, waypoint.pose.yaw)
-        for waypoint in result.waypoints
-    } == {
-        "WH-AMB-01-DOCK-01": (1.234, 0.743, 2.255),
-        "WH-CHL-01-DOCK-01": (1.26, 0.193, -2.258),
-        "WH-FRZ-01-DOCK-01": (1.201, -0.799, -1.408),
-        "PACKING-01-DOCK-01": (0.351, -0.49, 0.231),
-        "PACKING-01-DOCK-02": (0.351, -1.017, 0.231),
-        "TRIHOUSE-TEST-01-SAFETY-01": (0.613, -1.249, 0.0),
-        "TRIHOUSE-TEST-01-CHG-01": (0.065, 0.227, -0.005),
-        "TRIHOUSE-TEST-01-CHG-02": (0.076, -0.013, 0.239),
-    }
-    assert {
-        bottleneck.feature_code: (
-            bottleneck.pose.x,
-            bottleneck.pose.y,
-            bottleneck.radius_m,
-            bottleneck.source_diameter_m,
-        )
-        for bottleneck in result.bottlenecks
-    } == {
-        "TRIHOUSE-TEST-01-BOTTLENECK-01": (0.841, -0.111, 0.1, 0.2),
-        "TRIHOUSE-TEST-01-BOTTLENECK-02": (0.367, -0.762, 0.1, 0.2),
-    }
-    assert {
-        binding.marker_id: (
-            binding.recognition_pose.x,
-            binding.recognition_pose.y,
-            binding.recognition_pose.yaw,
-        )
-        for binding in result.fiducials
-    } == {
-        2: (1.234, 0.743, 2.255),
-        1: (1.26, 0.193, -2.258),
-        0: (1.37, -0.233, 1.772),
-    }
+    for record in records:
+        if record["record_type"] == "waypoint":
+            assert result.waypoint(record["location_code"]).pose == MapPose(
+                **record["map_pose"]
+            )
+        elif record["record_type"] == "bottleneck":
+            imported = next(
+                feature
+                for feature in result.bottlenecks
+                if feature.feature_code == record["feature_code"]
+            )
+            assert imported.pose == MapPose(**record["map_pose"])
+            assert imported.radius_m == record["radius_m"]
+            assert imported.source_diameter_m == record["source_diameter_m"]
+        else:
+            assert result.marker(record["marker_id"]).recognition_pose == MapPose(
+                **record["recognition_pose"]
+            )
 
 
 def test_import_is_independent_of_upload_filename_and_project_filename(tmp_path: Path) -> None:
@@ -94,7 +93,14 @@ def test_import_is_independent_of_upload_filename_and_project_filename(tmp_path:
     result = _importer().parse(renamed_upload)
 
     assert result.map_name == "trihouse_test_01"
-    assert result.waypoint("TRIHOUSE-TEST-01-CHG-01").pose.x == 0.065
+    raw_charger = next(
+        record
+        for record in _records()
+        if record.get("location_code") == "TRIHOUSE-TEST-01-CHG-01"
+    )
+    assert result.waypoint("TRIHOUSE-TEST-01-CHG-01").pose.x == raw_charger[
+        "map_pose"
+    ]["x"]
 
     bytes_result = _importer().parse(PHYSICAL_JSONL.read_bytes())
     assert bytes_result == result
@@ -155,6 +161,167 @@ def test_import_rejects_records_from_multiple_target_maps(tmp_path: Path) -> Non
         _importer().parse(mixed)
 
 
+@pytest.mark.parametrize(
+    ("mutate", "field"),
+    [
+        (lambda rows: rows[0].__setitem__("schema_version", True), "schema_version"),
+        (lambda rows: rows[0].pop("source_map_name"), "source_map_name"),
+        (lambda rows: rows[0].pop("source_labels"), "source_labels"),
+        (lambda rows: rows[0].pop("source_measurements"), "source_measurements"),
+        (lambda rows: rows[0].pop("yaw_source"), "yaw_source"),
+        (lambda rows: rows[0].__setitem__("source_id", " padded"), "source_id"),
+        (
+            lambda rows: rows[0].__setitem__("parent_location_code", "WH AMB 01"),
+            "parent_location_code",
+        ),
+        (
+            lambda rows: rows[0].__setitem__(
+                "target_map_name", rows[0]["target_map_name"] + " "
+            ),
+            "target_map_name",
+        ),
+        (lambda rows: rows[0].__setitem__("radius_m", 0.1), "radius_m"),
+        (lambda rows: rows[0].__setitem__("invented", "field"), "invented"),
+    ],
+)
+def test_import_rejects_incomplete_mixed_or_noncanonical_record_schema(
+    tmp_path: Path, mutate, field: str
+) -> None:
+    from fms_gateway.app.physical_features import PhysicalFeatureImportError
+
+    records = _records()
+    mutate(records)
+
+    with pytest.raises(PhysicalFeatureImportError, match=rf"line 1:.*{field}"):
+        _importer().parse(_write_records(tmp_path / "invalid-schema.jsonl", records))
+
+
+def test_import_rejects_cross_type_business_code_duplicates(tmp_path: Path) -> None:
+    from fms_gateway.app.physical_features import PhysicalFeatureImportError
+
+    records = _records()
+    records[8]["feature_code"] = records[0]["location_code"]
+
+    with pytest.raises(
+        PhysicalFeatureImportError,
+        match=r"line 9:.*duplicate feature_code",
+    ):
+        _importer().parse(_write_records(tmp_path / "duplicate-code.jsonl", records))
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        lambda rows: rows[10]["target_location_code"],
+        lambda rows: rows[3]["location_code"],
+    ],
+)
+def test_canonical_import_requires_one_binding_for_each_warehouse_dock(
+    tmp_path: Path, replacement
+) -> None:
+    from fms_gateway.app.physical_features import PhysicalFeatureImportError
+
+    records = _records()
+    records[12]["target_location_code"] = replacement(records)
+
+    with pytest.raises(PhysicalFeatureImportError, match="fiducial.*target_location_code"):
+        _importer().parse(_write_records(tmp_path / "duplicate-binding.jsonl", records))
+
+
+@pytest.mark.parametrize(
+    ("mutate", "field"),
+    [
+        (lambda rows: rows[0].__setitem__("source_measurements", None), "source_measurements"),
+        (lambda rows: rows[0].__setitem__("source_measurements", []), "source_measurements"),
+        (
+            lambda rows: rows[0]["source_measurements"][0].pop("timestamp"),
+            r"source_measurements\[0\]\.timestamp",
+        ),
+        (
+            lambda rows: rows[0]["source_measurements"][0].__setitem__(
+                "unknown", "field"
+            ),
+            r"source_measurements\[0\]\.unknown",
+        ),
+        (
+            lambda rows: rows[0]["source_measurements"][0].__setitem__("map_x", "1"),
+            r"source_measurements\[0\]\.map_x",
+        ),
+        (
+            lambda rows: rows[0]["source_measurements"][0].__setitem__("note", None),
+            r"source_measurements\[0\]\.note",
+        ),
+    ],
+)
+def test_import_rejects_malformed_source_measurements(
+    tmp_path: Path, mutate, field: str
+) -> None:
+    from fms_gateway.app.physical_features import PhysicalFeatureImportError
+
+    records = _records()
+    mutate(records)
+
+    with pytest.raises(PhysicalFeatureImportError, match=rf"line 1:.*{field}"):
+        _importer().parse(_write_records(tmp_path / "bad-measurement.jsonl", records))
+
+
+@pytest.mark.parametrize(
+    ("mutate", "line_number"),
+    [
+        (
+            lambda rows: rows[0]["source_measurements"][0].__setitem__(
+                "map_x", rows[0]["map_pose"]["x"] + 1
+            ),
+            1,
+        ),
+        (
+            lambda rows: rows[8]["source_measurements"][0].__setitem__(
+                "source_diameter_m", rows[8]["source_diameter_m"] + 1
+            ),
+            9,
+        ),
+        (
+            lambda rows: rows[10]["source_measurements"][0].__setitem__(
+                "marker_id", rows[10]["marker_id"] + 1
+            ),
+            11,
+        ),
+    ],
+)
+def test_source_measurements_must_support_selected_record_values(
+    tmp_path: Path, mutate, line_number: int
+) -> None:
+    from fms_gateway.app.physical_features import PhysicalFeatureImportError
+
+    records = _records()
+    mutate(records)
+
+    with pytest.raises(
+        PhysicalFeatureImportError,
+        match=rf"line {line_number}: source_measurements",
+    ):
+        _importer().parse(_write_records(tmp_path / "inconsistent-source.jsonl", records))
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [True, "1.0", None, float("inf"), float("nan"), 10**400],
+)
+def test_numeric_failures_are_contextual_import_errors(
+    tmp_path: Path, bad_value: object
+) -> None:
+    from fms_gateway.app.physical_features import PhysicalFeatureImportError
+
+    records = _records()
+    records[0]["map_pose"]["x"] = bad_value
+
+    with pytest.raises(
+        PhysicalFeatureImportError,
+        match=r"line 1: map_pose\.x must be a finite number",
+    ):
+        _importer().parse(_write_records(tmp_path / "bad-number.jsonl", records))
+
+
 def test_project_source_storage_is_immutable_and_project_scoped() -> None:
     from fms_gateway.app.repositories import InMemoryFmsRepository
 
@@ -173,7 +340,11 @@ def test_project_source_storage_is_immutable_and_project_scoped() -> None:
         "file_name": "physical.jsonl",
         "mime_type": "application/x-ndjson",
         "content_bytes": b"same-content",
-        "metadata": {"schema_version": 1},
+        "metadata": {
+            "schema_version": 1,
+            "nested": {"value": "original"},
+            "items": [1, 2],
+        },
     }
 
     first = repository.store_map_project_source("source_project_a", source)
@@ -182,16 +353,71 @@ def test_project_source_storage_is_immutable_and_project_scoped() -> None:
     assert first["source_uuid"] != second["source_uuid"]
     assert first["sha256"] == second["sha256"]
     first["content_bytes"] = b"caller-mutation"
+    first["metadata"]["nested"]["value"] = "caller-mutation"
     stored = repository.get_map_project_source(
         "source_project_a", first["source_uuid"]
     )
     assert stored is not None
     assert stored["content_bytes"] == b"same-content"
+    assert stored["metadata"]["nested"]["value"] == "original"
+    assert (
+        repository.get_map_project_source("source_project_b", first["source_uuid"])
+        is None
+    )
+
+    repository.delete_map_project("source_project_a")
+    repository.save_map_project("source_project_a", project, None)
+    assert (
+        repository.get_map_project_source("source_project_a", first["source_uuid"])
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "metadata_factory",
+    [
+        lambda: {"bad": object()},
+        lambda: {"bad": float("nan")},
+        lambda: {1: "non-string-key"},
+        _cyclic_metadata,
+    ],
+)
+def test_in_memory_source_metadata_rejects_non_json_values(metadata_factory) -> None:
+    from fms_gateway.app.repositories import (
+        InMemoryFmsRepository,
+        MapProjectSourceValidationError,
+    )
+
+    repository = InMemoryFmsRepository()
+    repository.save_map_project(
+        "source_project",
+        {
+            "format_version": 1,
+            "payload": {"version": 1},
+            "files": [],
+            "fleet": None,
+            "robots": [],
+        },
+        None,
+    )
+
+    with pytest.raises(MapProjectSourceValidationError, match="metadata"):
+        repository.store_map_project_source(
+            "source_project",
+            {
+                "source_type": "physical_features_import",
+                "file_name": "physical.jsonl",
+                "mime_type": "application/x-ndjson",
+                "content_bytes": b"content",
+                "metadata": metadata_factory(),
+            },
+        )
 
 
 def test_project_source_view_is_frozen_and_type_constrained() -> None:
     from fms_gateway.app.models import MapProjectSourceView
 
+    input_metadata = {"nested": {"value": 1}, "items": [1, 2]}
     source = MapProjectSourceView(
         source_uuid="00000000-0000-0000-0000-000000000701",
         source_type="physical_features_import",
@@ -199,12 +425,23 @@ def test_project_source_view_is_frozen_and_type_constrained() -> None:
         mime_type="application/x-ndjson",
         sha256="a" * 64,
         byte_size=3,
-        metadata={"schema_version": 1},
+        metadata=input_metadata,
         created_at="2026-08-16T12:00:00+09:00",
     )
 
     with pytest.raises(ValidationError):
         source.file_name = "changed.jsonl"
+    input_metadata["nested"]["value"] = 2
+    assert source.metadata is not None
+    assert source.metadata["nested"]["value"] == 1
+    with pytest.raises(TypeError):
+        source.metadata["nested"]["value"] = 3
+    with pytest.raises(TypeError):
+        source.metadata["items"][0] = 3
+    assert source.model_dump()["metadata"] == {
+        "nested": {"value": 1},
+        "items": [1, 2],
+    }
     with pytest.raises(ValidationError):
         MapProjectSourceView(
             **{

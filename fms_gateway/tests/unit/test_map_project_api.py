@@ -102,8 +102,8 @@ def test_draft_save_assigns_stable_ids_and_project1_location_codes():
     assert waypoints[0]["locationCode"] == "CHG-01"
     assert waypoints[1]["locationCode"] == "IN-WAIT-01"
     assert len(waypoints[0]["waypointUuid"]) == 36
-    assert len(body["payload"]["laneDirections"][0]["laneUuid"]) == 36
-    assert body["payload"]["laneDirections"][0]["startWaypointUuid"] == waypoints[0]["waypointUuid"]
+    assert "laneDirections" not in body["payload"]
+    assert body["lane_count"] == 0
 
     second = client.put(
         "/internal/v1/map-projects/project1",
@@ -113,6 +113,8 @@ def test_draft_save_assigns_stable_ids_and_project1_location_codes():
     assert second.status_code == 200
     assert second.json()["draft_revision"] == 2
     assert second.json()["payload"]["waypoints"][0]["waypointUuid"] == waypoints[0]["waypointUuid"]
+    assert "laneDirections" not in second.json()["payload"]
+    assert second.json()["lane_count"] == 0
 
 
 def test_draft_list_get_and_revision_conflict_are_explicit():
@@ -125,7 +127,7 @@ def test_draft_list_get_and_revision_conflict_are_explicit():
     assert summaries[0]["drawing_name"] == "project1.png"
     assert summaries[0]["format_version"] == 2
     assert summaries[0]["waypoint_count"] == 2
-    assert summaries[0]["lane_count"] == 1
+    assert summaries[0]["lane_count"] == 0
     assert summaries[0]["draft_revision"] == 1
     assert summaries[0]["has_building_yaml"] is True
     assert summaries[0]["updated_at"].endswith("+09:00")
