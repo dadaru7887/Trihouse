@@ -266,7 +266,10 @@ hash도 포함한다. `locations`는 현재 Active 운영 projection이고, 과�
 - 외부 영상·모델·dataset: `artifacts`
 
 `map_features.feature_type` check에는 `facility_footprint`, `safety_zone`,
-`speed_zone`을 추가한다. `bottleneck`, `no_go_zone`, `fiducial`은 기존 값을 사용한다.
+`speed_zone`, `camera`를 추가한다. `bottleneck`, `no_go_zone`, `fiducial`은 기존 값을
+사용한다. P0의 카메라 6대는 실측 map pose가 없으므로 임의 Point를 만들지 않고
+`map_revisions.manifest.cameras`에 ID, 역할, 연결 장비, fixture stream path만
+등록한다. P1에서 실측·보정된 카메라만 `camera` Point feature로 투영한다.
 `map_project_lanes`는 신규 배포 경로에서 읽거나 쓰지 않는다. 호환성 요구가 없으므로
 최종 schema 정리 단계에서 삭제할 수 있지만, 첫 PR에서는 수동 Lane 제거와 무관한
 DDL 변경을 줄이기 위해 deprecated 상태로 둔다.
