@@ -1,0 +1,30 @@
+# Runtime deployment logs written by openrmf/scripts/deploy_map.sh.
+# 최근 3개만 남고 하루 지난 것은 스크립트가 스스로 지운다.
+/log/
+
+# 벤더 ROS 패키지. 각 상위 저장소에서 받는다.
+# rmf_control_ui/docs/PINKY_FLEET_INTEGRATION.md 참고.
+/robot_model/
+# 이전 실행 스크립트와 외부 문서를 위한 호환 링크.
+/pinky_pro
+/open_manipulator
+
+# 맵 배포 산출물. 앱의 `배포하기`로 다시 만든다.
+/rmf_maps/*/nav_graphs/
+/rmf_maps/*/generated_models/
+# 맵 재배포 전 자동 백업. Policy ZIP 등 대용량 로컬 운영 파일이 포함된다.
+/rmf_maps/.backups/
+
+# 전역 WorkCell Policy 보관함. Hugging Face/ZIP 원본은 로컬에서 관리한다.
+/workcell_policies/
+
+# 프로젝트별 WorkCell Policy 연결과 레거시 모델·ZIP 배포본.
+# 프로젝트 삭제·재생성과 관계없이 모두 로컬 운영 데이터로 취급한다.
+/rmf_maps/*/policy_bindings.json
+/rmf_maps/*/policies/
+
+# 실행 중 남는 PID·로그
+/openrmf/.runtime/
+
+# 로컬 Open-RMF 빌드 워크스페이스. 의존성·빌드 산출물이 크고 환경마다 다르다.
+/rmf_ws/

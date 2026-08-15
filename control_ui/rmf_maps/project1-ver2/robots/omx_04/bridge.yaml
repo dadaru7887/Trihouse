@@ -1,0 +1,12 @@
+# omx_04 한 대의 토픽 목록.
+# 실행에는 프로젝트 전체를 묶은 <맵이름>_gz_bridge.yaml 을 쓴다.
+# clock 과 tf 는 월드에 하나뿐이라 여기 넣지 않았다.
+#
+# 이름을 양쪽 다 절대 경로로 적는다. 로봇이 여러 대일 때
+# 상대 이름을 쓰면 전부 같은 토픽으로 겹친다.
+
+# omx_04 · OMX-04 (설치 로봇)
+#   다리 없음. gz_ros2_control 이 ROS 2 로 직접 주고받는다.
+#   관절 상태: joint_state_broadcaster 가 /omx_04/joint_states 로 낸다.
+#   팔 명령: /omx_04/arm_controller · /omx_04/gripper_controller 액션.
+

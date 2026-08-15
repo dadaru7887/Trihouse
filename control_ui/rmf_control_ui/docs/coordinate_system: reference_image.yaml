@@ -1,0 +1,92 @@
+coordinate_system: reference_image
+graphs: {}
+reference_level_name: L1
+levels:
+  L1:
+    drawing:
+      filename: "robosapiens.png"
+    elevation: 0.0
+    floors:
+      - parameters: {ceiling_scale: [3, 1], ceiling_texture: [1, blue_linoleum], indoor: [2, 0], texture_name: [1, blue_linoleum], texture_rotation: [3, 0], texture_scale: [3, 1]}
+        vertices: [2, 4, 6, 8, 9, 11, 13]
+    layers: {}
+    lanes:
+      - [15, 16, {is_bidirectional: [4, true]}]
+      - [16, 17, {is_bidirectional: [4, true]}]
+      - [17, 18, {is_bidirectional: [4, true]}]
+      - [18, 19, {is_bidirectional: [4, true]}]
+      - [19, 20, {is_bidirectional: [4, true]}]
+      - [21, 22, {is_bidirectional: [4, true]}]
+      - [22, 23, {is_bidirectional: [4, true]}]
+      - [23, 24, {is_bidirectional: [4, true]}]
+      - [24, 25, {is_bidirectional: [4, true]}]
+      - [25, 26, {is_bidirectional: [4, true]}]
+      - [26, 27, {is_bidirectional: [4, true]}]
+      - [27, 28, {is_bidirectional: [4, true]}]
+      - [28, 29, {is_bidirectional: [4, true]}]
+      - [22, 30, {is_bidirectional: [4, true]}]
+      - [30, 31, {is_bidirectional: [4, true]}]
+      - [31, 32, {is_bidirectional: [4, true]}]
+      - [32, 33, {is_bidirectional: [4, true]}]
+      - [33, 34, {is_bidirectional: [4, true]}]
+      - [34, 35, {is_bidirectional: [4, true]}]
+      - [35, 27, {is_bidirectional: [4, true]}]
+      - [20, 15, {is_bidirectional: [4, true]}]
+      - [20, 29, {is_bidirectional: [4, true]}]
+      - [36, 37, {is_bidirectional: [4, true]}]
+      - [38, 27, {is_bidirectional: [4, true]}]
+    measurements:
+      - [0, 1, {distance: [3, 2.1100]}]
+    vertices:
+      - [90.227, 26.895, 0.0, "measurement_start"]
+      - [1907.302, 26.895, 0.0, "measurement_end"]
+      - [55.000, 1210.000, 0.0, ""]
+      - [753.500, 1210.000, 0.0, ""]
+      - [71.500, 93.500, 0.0, ""]
+      - [753.500, 418.000, 0.0, ""]
+      - [1925.000, 93.500, 0.0, ""]
+      - [1392.446, 1183.600, 0.0, ""]
+      - [1947.000, 1183.600, 0.0, ""]
+      - [1925.000, 1666.500, 0.0, ""]
+      - [1287.000, 1666.500, 0.0, ""]
+      - [1287.000, 2326.500, 0.0, ""]
+      - [753.500, 2013.000, 0.0, ""]
+      - [71.500, 2326.500, 0.0, ""]
+      - [753.500, 1573.000, 0.0, ""]
+      - [1684.113, 220.055, 0.0, "대기1", {is_parking_spot: [4, true]}]
+      - [249.297, 217.311, 0.0, "대기2", {is_parking_spot: [4, true]}]
+      - [243.651, 828.794, 0.0, "픽업1"]
+      - [466.317, 829.681, 0.0, "대기3", {is_parking_spot: [4, true]}]
+      - [467.456, 327.704, 0.0, "대기4", {is_parking_spot: [4, true]}]
+      - [1687.226, 327.941, 0.0, "드랍오프1"]
+      - [889.260, 220.851, 0.0, "대기5", {is_parking_spot: [4, true]}]
+      - [884.873, 1326.584, 0.0, "대기6", {is_parking_spot: [4, true]}]
+      - [302.443, 1326.937, 0.0, "대기7", {is_parking_spot: [4, true]}]
+      - [297.715, 1712.114, 0.0, "픽업2"]
+      - [469.380, 1717.394, 0.0, "대기8", {is_parking_spot: [4, true]}]
+      - [475.624, 1455.262, 0.0, "대기9", {is_parking_spot: [4, true]}]
+      - [1095.557, 1454.188, 0.0, "대기10", {is_parking_spot: [4, true]}]
+      - [1097.343, 467.951, 0.0, "대기11", {is_parking_spot: [4, true]}]
+      - [1685.767, 463.992, 0.0, "드랍오프2"]
+      - [885.534, 2112.289, 0.0, "대기12", {is_parking_spot: [4, true]}]
+      - [478.712, 2116.002, 0.0, "대기13", {is_parking_spot: [4, true]}]
+      - [476.990, 1944.464, 0.0, "대기14", {is_parking_spot: [4, true]}]
+      - [300.068, 1941.643, 0.0, "픽업3"]
+      - [302.675, 2220.957, 0.0, "대기15", {is_parking_spot: [4, true]}]
+      - [1097.487, 2229.326, 0.0, "대기16", {is_parking_spot: [4, true]}]
+      - [1093.294, 1272.136, 0.0, "대기17", {is_parking_spot: [4, true]}]
+      - [1785.349, 1279.661, 0.0, "충전1", {is_charger: [4, true]}]
+      - [1784.389, 1457.655, 0.0, "충전2", {is_charger: [4, true]}]
+    walls:
+      - [4, 13, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [4, 6, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [6, 9, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [7, 8, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [13, 11, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [5, 3, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [2, 3, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [10, 11, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [10, 9, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [14, 12, {alpha: [3, 1], texture_height: [3, 2.5], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+lifts: {}
+name: "robosapiens"

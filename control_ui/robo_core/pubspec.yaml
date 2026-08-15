@@ -1,0 +1,20 @@
+name: robo_core
+description: >
+  RoboSapiens 물류 플랫폼 공용 계층. 도메인 모델과 저장소 인터페이스·구현을
+  담아 관제센터(robo_control)와 소비자 주문 앱(roboapp)이 함께 사용한다.
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  path: ^1.9.1
+  sqlite3: ^3.5.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0

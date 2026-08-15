@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>robo_pinky_description</name>
+  <version>1.0.0</version>
+  <description>관제센터 연동용 Pinky 로봇 URDF(xacro). 다중 스폰을 위해 링크·토픽이 robot_name으로 분리된다.</description>
+  <maintainer email="gwanghee@gmail.com">Gwanghee Yi</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>urdf</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

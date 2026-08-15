@@ -1,0 +1,17 @@
+<?xml version='1.0' encoding='utf-8'?>
+<sdf version="1.7">
+  <model name="navgraph_0">
+    <static>true</static>
+    <link name="navgraph_0">
+      <visual name="navgraph_0">
+        <geometry>
+          <mesh>
+            <uri>meshes/navgraph_0.obj</uri>
+          </mesh>
+        </geometry>
+        <transparency>0.5</transparency>
+      </visual>
+      <pose>0 0 0 0 0 0</pose>
+    </link>
+  </model>
+</sdf>

@@ -1,0 +1,10 @@
+# rmf_control_ui 가 project1-ver2 도면에서 만들었다. 손으로 고치면 다음 내보내기 때 덮어써진다.
+# 좌표는 RMF 월드 — 원점은 도면 왼쪽 위, 건물 안은 y 가 음수다.
+# 벽 두께는 RMF 와 같은 0.1m 다.
+image: project1-ver2.pgm
+mode: trinary
+resolution: 0.005994
+origin: [-1.238644, -3.241447, 0.000000]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196

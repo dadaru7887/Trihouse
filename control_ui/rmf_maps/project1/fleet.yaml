@@ -1,0 +1,56 @@
+# project1 프로젝트에 띄울 로봇 목록.
+# rmf_control_ui 가 맵 프로젝트에서 생성했다.
+#
+# spawn_x / spawn_y 는 맵 Waypoint 좌표다. zones 는 이 로봇이
+# 진입 가능한 3온도 구획으로 관제 배차의 입찰 자격이 된다.
+robots:
+  - id: pinky_01
+    name: PK-01
+    kind: mobile # 이동 로봇
+    model: PINKY-GZ
+    gz_name: pinky_01
+    zones: [ambient, chilled, frozen]
+    home_charger: 충전1
+    spawn_x: 1.612
+    spawn_y: -0.717
+    spawn_heading: 0.000
+  - id: pinky_02
+    name: PK-02
+    kind: mobile # 이동 로봇
+    model: PINKY-GZ
+    gz_name: pinky_02
+    zones: [ambient, chilled, frozen]
+    home_charger: 충전2
+    spawn_x: 1.613
+    spawn_y: -1.088
+    spawn_heading: 0.000
+  - id: omx_01
+    name: OMX-01
+    kind: workcell # 설치 로봇
+    model: open_manipulator_x
+    gz_name: omx_01
+    zones: []
+    station: 설비1
+    spawn_x: 0.448
+    spawn_y: -1.138
+    spawn_heading: 0.000
+  - id: omx_02
+    name: OMX-02
+    kind: workcell # 설치 로봇
+    model: open_manipulator_x
+    gz_name: omx_02
+    zones: []
+    station: 설비2
+    spawn_x: 0.409
+    spawn_y: -2.187
+    spawn_heading: 0.000
+  - id: omx_03
+    name: OMX-03
+    kind: workcell # 설치 로봇
+    model: open_manipulator_x
+    gz_name: omx_03
+    zones: []
+    station: 설비3
+    spawn_x: 1.158
+    spawn_y: -2.253
+    spawn_heading: 0.000

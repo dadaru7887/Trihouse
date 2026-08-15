@@ -1,0 +1,398 @@
+<title>스마트 팩토리 이기종 군집로봇 관제 시스템 — 이광희</title>
+<style>
+/*FONTS*/
+
+:root{
+  --ground:#080D1A;
+  --plate:#0E1526;
+  --plate2:#121B30;
+  --rule:#1D2942;
+  --ink:#E9EEF9;
+  --dim:#B6C1D8;
+  --muted:#7F8DAB;
+  --rmf:#4C8DFF;
+  --signal:#F5B23D;
+  --live:#33D69F;
+
+  --disp:"NanumSquare","Nanum Square",sans-serif;
+  --body:"NanumBarunGothic","Nanum Barun Gothic",sans-serif;
+  --mono:"NanumGothicCoding","Nanum Gothic Coding",ui-monospace,monospace;
+}
+
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  background:var(--ground);
+  color:var(--ink);
+  font-family:var(--body);
+  -webkit-font-smoothing:antialiased;
+  display:flex;
+  justify-content:center;
+  align-items:flex-start;
+  min-height:100vh;
+}
+
+/* ── 판 : 1170×2532 (@3x) 세로 배경화면 비율 ───────────────── */
+.plate{
+  position:relative;
+  width:390px;
+  height:844px;
+  flex:none;
+  overflow:hidden;
+  background:
+    radial-gradient(115% 62% at 50% -8%, #16233F 0%, rgba(22,35,63,0) 58%),
+    radial-gradient(85% 45% at 50% 108%, #101B33 0%, rgba(16,27,51,0) 60%),
+    var(--plate);
+  display:flex;
+  flex-direction:column;
+  padding:0 22px;
+  isolation:isolate;
+}
+
+.ambient{position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none}
+
+.plate > *:not(.ambient){position:relative;z-index:1}
+
+/* ── 표제 ──────────────────────────────────────────────────── */
+header{padding-top:56px}
+
+.eyebrow{
+  font-family:var(--mono);
+  font-size:8px;
+  font-weight:700;
+  letter-spacing:.19em;
+  color:var(--muted);
+  display:flex;
+  align-items:center;
+  gap:7px;
+}
+.eyebrow .dot{
+  width:5px;height:5px;flex:none;border-radius:50%;
+  background:var(--live);
+  box-shadow:0 0 0 2.5px rgba(51,214,159,.16);
+}
+.eyebrow .sep{color:var(--rule)}
+
+h1{
+  font-family:var(--disp);
+  font-weight:700;
+  font-size:33px;
+  line-height:1.14;
+  letter-spacing:-.028em;
+  margin:16px 0 0;
+  text-wrap:balance;
+  color:#FBFCFF;
+}
+h1 em{font-style:normal;color:var(--rmf)}
+
+.en{
+  font-family:var(--mono);
+  font-size:9px;
+  line-height:1.62;
+  letter-spacing:.055em;
+  color:var(--muted);
+  margin:13px 0 0;
+  padding-top:11px;
+  border-top:1px solid var(--rule);
+}
+
+.by{
+  margin:11px 0 0;
+  font-size:11px;
+  letter-spacing:.01em;
+  color:var(--dim);
+  display:flex;
+  align-items:baseline;
+  gap:7px;
+}
+.by b{font-family:var(--disp);font-weight:700;font-size:14px;color:var(--ink);letter-spacing:-.01em}
+.by span{font-family:var(--mono);font-size:8.5px;letter-spacing:.13em;color:var(--muted)}
+
+/* ── 관제 경로 : 판을 종으로 관통하는 척추 ─────────────────── */
+.chain{
+  margin-top:24px;
+  flex:1;
+  display:flex;
+  flex-direction:column;
+}
+
+/* 계층마다 같은 높이의 띠 — 도면의 칸처럼 */
+.layer{
+  flex:1;
+  display:grid;
+  grid-template-columns:108px 1fr;
+  align-content:start;
+  gap:12px;
+  padding:14px 0;
+  border-top:1px solid var(--rule);
+  position:relative;
+}
+.layer:first-child{border-top:none}
+
+/* 척추선 — 계층 사이를 잇는 lane. 파랑에서 앰버로 넘어가는 자리가
+   안전·보안이 시작되는 계층이다. */
+.layer::before{
+  content:"";
+  position:absolute;
+  left:5px;
+  top:0;bottom:0;
+  width:1px;
+  background:rgba(76,141,255,.34);
+}
+.layer.hot::before{background:rgba(245,178,61,.26)}
+.layer:first-child::before{top:18px}
+.layer:last-child::before{bottom:auto;height:24px}
+
+.node{padding-left:19px;position:relative}
+
+/* waypoint 표식 */
+.node::before{
+  content:"";
+  position:absolute;
+  left:0;top:4px;
+  width:11px;height:11px;
+  border-radius:50%;
+  border:1.5px solid var(--rmf);
+  background:var(--plate);
+}
+.node::after{
+  content:"";
+  position:absolute;
+  left:3.5px;top:7.5px;
+  width:4px;height:4px;
+  border-radius:50%;
+  background:var(--rmf);
+}
+.layer.robot .node::before{border-color:var(--signal)}
+.layer.robot .node::after{background:var(--signal)}
+
+/* 모노는 표제란·수치에만 남긴다 — CJK 를 섞으면 자간이 벌어져
+   "관제 앱" 이 두 낱말로 읽힌다. */
+.node .name{
+  font-family:var(--disp);
+  font-size:11.5px;
+  font-weight:700;
+  letter-spacing:-.012em;
+  color:var(--ink);
+  line-height:1.3;
+}
+.node .role{
+  margin-top:4px;
+  font-size:9px;
+  line-height:1.45;
+  color:var(--muted);
+  letter-spacing:.005em;
+}
+
+.note .head{
+  font-family:var(--disp);
+  font-weight:700;
+  font-size:14px;
+  letter-spacing:-.015em;
+  color:var(--rmf);
+  line-height:1.25;
+}
+.layer.hot .note .head{color:var(--signal)}
+
+.note p{
+  margin:6px 0 0;
+  font-size:10px;
+  line-height:1.66;
+  color:var(--dim);
+  letter-spacing:.002em;
+}
+.note code{
+  font-family:var(--mono);
+  font-size:9px;
+  color:var(--ink);
+  background:rgba(76,141,255,.10);
+  border-radius:2px;
+  padding:0 2.5px;
+}
+.layer.hot .note code{background:rgba(245,178,61,.11)}
+
+/* ── 도면 표제란 ───────────────────────────────────────────── */
+footer{
+  margin-top:auto;
+  padding:12px 0 30px;
+  border-top:1px solid var(--rule);
+}
+
+.stack{
+  font-family:var(--mono);
+  font-size:8.5px;
+  line-height:1.75;
+  letter-spacing:.055em;
+  color:var(--dim);
+}
+.stack i{font-style:normal;color:var(--rule);padding:0 2px}
+
+.figures{
+  margin-top:10px;
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:1px;
+  background:var(--rule);
+  border:1px solid var(--rule);
+  border-radius:3px;
+  overflow:hidden;
+}
+.fig{
+  background:var(--plate2);
+  padding:7px 6px 6px;
+  text-align:center;
+}
+.fig .v{
+  font-family:var(--mono);
+  font-size:13px;
+  font-weight:700;
+  letter-spacing:-.01em;
+  color:var(--ink);
+  font-variant-numeric:tabular-nums;
+  line-height:1;
+}
+.fig .k{
+  margin-top:4px;
+  font-size:7.5px;
+  letter-spacing:.045em;
+  color:var(--muted);
+  line-height:1.2;
+}
+
+/* ── 화면 밖 : 아티팩트로 볼 때의 액자 ─────────────────────── */
+.stage{
+  padding:34px 18px 44px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:16px;
+}
+.frame{
+  border-radius:12px;
+  overflow:hidden;
+  box-shadow:0 22px 60px -18px rgba(0,0,0,.85), 0 0 0 1px var(--rule);
+}
+.caption{
+  font-family:var(--mono);
+  font-size:10px;
+  letter-spacing:.1em;
+  color:var(--muted);
+  text-align:center;
+  max-width:390px;
+  line-height:1.7;
+}
+
+/* PNG 로 굽는 판 : 액자와 여백을 지운다 */
+body.bake{display:block;padding:0}
+body.bake .stage{padding:0;gap:0}
+body.bake .frame{border-radius:0;box-shadow:none}
+body.bake .caption{display:none}
+</style>
+
+<div class="stage">
+<div class="frame">
+<div class="plate">
+
+  <svg class="ambient" viewBox="0 0 390 844" preserveAspectRatio="none" aria-hidden="true">
+    <defs>
+      <pattern id="grid" width="26" height="26" patternUnits="userSpaceOnUse">
+        <path d="M26 0H0V26" fill="none" stroke="#4C8DFF" stroke-width=".5" opacity=".085"/>
+      </pattern>
+    </defs>
+    <rect width="390" height="844" fill="url(#grid)"/>
+    <!-- 창고 lane graph : 이 앱이 실제로 그리는 것 -->
+    <g fill="none" stroke="#4C8DFF" stroke-width="1" opacity=".13">
+      <path d="M46 140H228V236H332"/>
+      <path d="M228 140V78"/>
+      <path d="M46 140V330H150V420"/>
+      <path d="M332 236V430H236"/>
+      <path d="M150 420H236V560"/>
+      <path d="M46 330V596H150"/>
+      <path d="M236 560H332V700"/>
+      <path d="M150 596V700H332"/>
+    </g>
+    <g fill="#080D1A" stroke="#4C8DFF" stroke-width="1.2" opacity=".2">
+      <circle cx="46" cy="140" r="3.4"/><circle cx="228" cy="140" r="3.4"/>
+      <circle cx="228" cy="236" r="3.4"/><circle cx="332" cy="236" r="3.4"/>
+      <circle cx="46" cy="330" r="3.4"/><circle cx="150" cy="420" r="3.4"/>
+      <circle cx="332" cy="430" r="3.4"/><circle cx="236" cy="560" r="3.4"/>
+      <circle cx="150" cy="596" r="3.4"/><circle cx="332" cy="700" r="3.4"/>
+      <circle cx="150" cy="700" r="3.4"/><circle cx="228" cy="78" r="3.4"/>
+    </g>
+  </svg>
+
+  <header>
+    <div class="eyebrow">
+      <span class="dot"></span>ROBOSAPIENS<span class="sep">/</span>FLEET CONTROL<span class="sep">/</span>2026
+    </div>
+    <h1>스마트 팩토리를 위한<br>이기종 군집로봇<br><em>관제 시스템</em> 개발</h1>
+    <p class="en">HETEROGENEOUS MULTI-ROBOT FLEET<br>CONTROL SYSTEM FOR SMART FACTORY</p>
+    <p class="by">개발자 <b>이광희</b> <span>GWANGHEE YI</span></p>
+  </header>
+
+  <div class="chain">
+
+    <div class="layer">
+      <div class="node">
+        <div class="name">관제 앱</div>
+        <div class="role">Flutter 데스크톱<br>맵 작성 · 작업 지시</div>
+      </div>
+      <div class="note">
+        <div class="head">비전문가도 쓴다</div>
+        <p>도면을 올려 축척을 잡고 Waypoint를 찍으면 <code>building.yaml</code>· nav graph · launch 를 앱이 만든다. 배포는 버튼 하나, 어디서 끊겼는지 짚어 주고 그 자리만 다시 잇는다.</p>
+      </div>
+    </div>
+
+    <div class="layer">
+      <div class="node">
+        <div class="name">Open-RMF</div>
+        <div class="role">배차 · 교통 정리<br>기종을 가리지 않음</div>
+      </div>
+      <div class="note">
+        <div class="head">이기종을 한 화면에서</div>
+        <p>AMR <code>Pinky</code>와 로봇팔 <code>OMX</code>가 같은 작업 지시를 받는다. 값을 Mock · Gazebo · 실물 중 무엇에서 볼지는 로봇마다 따로 정해, 두 대는 현장에서 한 대는 시뮬레이션에서 돌린다.</p>
+      </div>
+    </div>
+
+    <div class="layer hot">
+      <div class="node">
+        <div class="name">Nav2 어댑터</div>
+        <div class="role">목적지 실행 · 되알림<br>로봇 링크 게이트웨이</div>
+      </div>
+      <div class="note">
+        <div class="head">보안 — 최소 권한만 내린다</div>
+        <p>로봇은 위치·배터리를 스스로 보고하고, 관제가 내리는 것은 경로·정지·속도 상한뿐이다. 자격 증명은 환경 변수로 분리하고, 프로젝트 밖의 벤더 파일은 읽기만 한다.</p>
+      </div>
+    </div>
+
+    <div class="layer hot robot">
+      <div class="node">
+        <div class="name">로봇</div>
+        <div class="role">Gazebo · 실장비<br>Nav2 · AMCL · 라이다</div>
+      </div>
+      <div class="note">
+        <div class="head">안전이 맨 앞이다</div>
+        <p>Nav2가 실패한 것을 도착이라고 알리지 않는다. 벤더의 속도·가속 한계를 RMF와 어긋나지 않게 맞추고, 최소보다 작은 도착 반경은 저장할 때 한 번 더 묻는다.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <footer>
+    <div class="stack">
+      ROS 2 JAZZY<i>·</i>OPEN-RMF<i>·</i>GAZEBO HARMONIC<i>·</i>NAV2<br>
+      FLUTTER<i>·</i>DART<i>·</i>PYTHON<i>·</i>SQLITE<i>·</i>WEBRTC
+    </div>
+    <div class="figures">
+      <div class="fig"><div class="v">56K</div><div class="k">DART 줄</div></div>
+      <div class="fig"><div class="v">5.3K</div><div class="k">PYTHON 줄</div></div>
+      <div class="fig"><div class="v">16</div><div class="k">설계 문서</div></div>
+      <div class="fig"><div class="v">3</div><div class="k">MOCK·SIM·실물</div></div>
+    </div>
+  </footer>
+
+</div>
+</div>
+<p class="caption">1170 × 2532 · 세로 배경화면 한 장</p>
+</div>

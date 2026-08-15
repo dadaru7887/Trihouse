@@ -1,0 +1,194 @@
+# project1-ver2 프로젝트 RViz 설정.
+# rmf_control_ui 가 맵 프로젝트에서 생성했다. 손으로 고치면
+# 다음 저장 때 덮어써진다.
+#
+# 카메라는 이 맵의 가운데(1.158, -1.399)를 본다.
+# RMF 가 주는 rmf.rviz 는 office 데모 자리를 보고 있어 이 도면이
+# 화면 밖이었다. 바닥 그림 토픽 이름도 거기서는 어긋나 있다.
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded: ~
+      Splitter Ratio: 0.5
+    Tree Height: 600
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: 격자 (1m)
+      Enabled: true
+      Alpha: 0.35
+      Cell Size: 1
+      Color: 130; 130; 130
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Normal Cell Count: 0
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Plane: XY
+      Plane Cell Count: 10
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Class: rviz_default_plugins/Map
+      Name: 도면 (RMF 바닥 그림)
+      Enabled: true
+      Alpha: 0.9
+      Color Scheme: map
+      Draw Behind: true
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /floorplan
+      Use Timestamp: false
+      Value: true
+    - Class: rviz_default_plugins/Map
+      Name: Nav2 지도 (도면과 견줄 때 켜세요)
+      Enabled: false
+      Alpha: 0.7
+      Color Scheme: map
+      Draw Behind: true
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /nav2_map
+      Use Timestamp: false
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Nav graph (Lane·Waypoint)
+      Enabled: true
+      Namespaces:
+        {}
+      Topic:
+        Depth: 10
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /map_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Name: 로봇 (RMF fleet)
+      Enabled: true
+      Namespaces:
+        {}
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /fleet_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Name: 예약 경로
+      Enabled: true
+      Namespaces:
+        {}
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /schedule_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Name: 문·리프트
+      Enabled: true
+      Namespaces:
+        {}
+      Topic:
+        Depth: 10
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /building_systems_markers
+      Value: true
+    - Class: rviz_default_plugins/LaserScan
+      Name: 라이다 pinky_01
+      Enabled: true
+      Alpha: 1
+      Color: 255; 85; 0
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Position Transformer: XYZ
+      Size (m): 0.03
+      Style: Points
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /pinky_01/scan
+      Value: true
+    - Class: rviz_default_plugins/LaserScan
+      Name: 라이다 pinky_02
+      Enabled: true
+      Alpha: 1
+      Color: 255; 85; 0
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Position Transformer: XYZ
+      Size (m): 0.03
+      Style: Points
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /pinky_02/scan
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Name: TF (필요할 때 켜세요)
+      Enabled: false
+      Marker Scale: 0.4
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Current View
+      Angle: 0
+      Near Clip Distance: 0.01
+      Scale: 288.402
+      Target Frame: <Fixed Frame>
+      X: 1.158
+      Y: -1.399
+      Value: TopDownOrtho (rviz_default_plugins)
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Hide Left Dock: false
+  Hide Right Dock: true
+  Views:
+    collapsed: true
+  Width: 1600
+  X: 60
+  Y: 60

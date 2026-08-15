@@ -1,0 +1,39 @@
+# Gazebo에 띄울 Pinky 플릿 정의.
+#
+# spawn_x / spawn_y 는 관제센터 좌표계(unit, 좌상단 원점, y↓)다.
+# 통로 교차점 위에 놓아야 첫 경로 계획이 매끄럽다.
+# zones 는 이 로봇이 진입 가능한 3온도 구획 — 관제 스케줄러의 입찰 자격이 된다.
+
+robots:
+  - id: PK-01
+    name: 핑키 1호
+    model: PINKY-GZ-C
+    gz_name: pinky_01
+    body_color: "0.98 0.42 0.65 1.0"
+    zones: [ambient, chilled, frozen]
+    home_charger: CHG-1
+    spawn_x: 50.0
+    spawn_y: 22.0
+    spawn_heading: 0.0
+
+  - id: PK-02
+    name: 핑키 2호
+    model: PINKY-GZ
+    gz_name: pinky_02
+    body_color: "0.35 0.72 0.90 1.0"
+    zones: [ambient, chilled]
+    home_charger: CHG-2
+    spawn_x: 35.0
+    spawn_y: 38.0
+    spawn_heading: 0.0
+
+  - id: PK-03
+    name: 핑키 3호
+    model: PINKY-GZ-C
+    gz_name: pinky_03
+    body_color: "0.96 0.80 0.25 1.0"
+    zones: [ambient, chilled, frozen]
+    home_charger: CHG-3
+    spawn_x: 80.0
+    spawn_y: 54.0
+    spawn_heading: 3.14159

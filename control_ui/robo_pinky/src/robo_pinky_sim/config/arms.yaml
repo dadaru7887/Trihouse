@@ -1,0 +1,46 @@
+# 구획별 적재 스테이션 로봇팔(OpenMANIPULATOR-X).
+#
+# 관제센터는 구획마다 적재 스테이션(LOAD-A/C/F)을 하나씩 두고 있고, 출고 태스크는
+# 랙에서 집품한 뒤 이 자리를 거쳐 도크로 간다. 팔은 그 스테이션 옆에 세운다.
+#
+# 받침대는 실물 장애물이므로 좌표를 아무 데나 잡을 수 없다. 세로 통로에서도,
+# 랙 열 진입선(랙 로케이션의 x)에서도 떨어진 자리여야 지나가는 로봇이 막히지
+# 않는다. 스테이션 좌표는 layout.dart와 반드시 일치해야 한다.
+#
+#   station    관제 스테이션 ID. 관제가 이 ID로 팔을 찾는다
+#   mount_x/y  팔 받침대 설치 위치(관제 좌표 unit)
+#              스테이션 중심에서 랙 쪽으로 2.8 unit(0.28 m) 물러난 자리다.
+#              로봇은 스테이션 중심에 서고, 팔이 그쪽으로 뻗어 적재한다
+#   mount_heading  팔이 바라보는 방향(관제 좌표계 rad).
+#              1.5708 = 관제 화면 아래쪽(+y) = 스테이션 쪽
+
+arms:
+  - id: OMX-A
+    model: OMX-LOADER
+    gz_name: omx_a
+    station: LOAD-A
+    zone: ambient
+    body_color: "0.94 0.94 0.96 1.0"
+    mount_x: 40.3
+    mount_y: 35.2
+    mount_heading: 1.5708
+
+  - id: OMX-C
+    model: OMX-LOADER
+    gz_name: omx_c
+    station: LOAD-C
+    zone: chilled
+    body_color: "0.80 0.90 0.96 1.0"
+    mount_x: 68.3
+    mount_y: 35.2
+    mount_heading: 1.5708
+
+  - id: OMX-F
+    model: OMX-LOADER
+    gz_name: omx_f
+    station: LOAD-F
+    zone: frozen
+    body_color: "0.86 0.93 1.00 1.0"
+    mount_x: 101.9
+    mount_y: 35.2
+    mount_heading: 1.5708

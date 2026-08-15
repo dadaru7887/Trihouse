@@ -1,0 +1,48 @@
+<?xml version='1.0' ?>
+<!--
+  gwanghee 프로젝트의 Nav2.
+  rmf_control_ui 가 맵 프로젝트에서 생성했다.
+
+  건물 지도는 하나만 띄우고 이동 로봇마다 제 Nav2 를 붙인다.
+  로봇들은 map 프레임을 함께 쓰고 <로봇>/odom 만 서로 다르다.
+  그래서 한 TF 트리에 map → pinky_01/odom, map → pinky_02/odom
+  이 나란히 선다.
+
+  지도는 nav2_map/ 에 있다. 도면에서 만든 것이라 원점이 RMF
+  월드에 정확히 맞는다.
+
+  아직 RMF 와 이어지지 않았다. 지금은 Nav2 만 따로 돈다.
+-->
+<launch>
+  <arg name="map_dir" default="$(dirname)"/>
+  <arg name="use_sim_time" default="true"/>
+  <arg name="sensor_dir" default="$(env ROBOSAPIENS_SENSOR_DIR /tmp/robosapiens_sensors)"/>
+
+  <!-- 건물 지도. 로봇들이 함께 본다. -->
+  <node pkg="nav2_map_server" exec="map_server"
+        name="map_server" output="screen">
+    <param name="yaml_filename" value="$(var map_dir)/nav2_map/gwanghee.yaml"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <param name="topic_name" value="nav2_map"/>
+  </node>
+  <node pkg="nav2_lifecycle_manager" exec="lifecycle_manager"
+        name="lifecycle_manager_map" output="screen">
+    <param name="use_sim_time" value="false"/>
+    <param name="autostart" value="true"/>
+    <param name="node_names" value="[map_server]"/>
+  </node>
+
+  <!-- PK_03 · 핑키 3호 -->
+  <include file="$(var map_dir)/robots/PK_03/nav2.launch.xml">
+    <arg name="use_sim_time" value="$(var use_sim_time)"/>
+  </include>
+
+  <!-- RMF 와 Nav2 를 잇는다. 이것이 없으면 RMF 가 배차해도
+       로봇이 안 움직인다. -->
+  <executable output="screen"
+              cmd="python3 $(var map_dir)/gwanghee_nav2_adapter.py -c $(var map_dir)/gwanghee_pinky_config.yaml -n $(var map_dir)/nav_graphs/0.yaml -s"/>
+
+  <!-- 라이다·카메라를 앱이 읽을 수 있게 파일로 내려 준다. -->
+  <executable output="screen"
+              cmd="python3 $(var map_dir)/gwanghee_sensor_relay.py -o $(var sensor_dir)"/>
+</launch>

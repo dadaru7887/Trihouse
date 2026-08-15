@@ -1,0 +1,73 @@
+<?xml version='1.0' ?>
+<!--
+  project1-ver2 프로젝트의 Nav2.
+  rmf_control_ui 가 맵 프로젝트에서 생성했다.
+
+  건물 지도는 하나만 띄우고 이동 로봇마다 제 Nav2 를 붙인다.
+  로봇들은 map 프레임을 함께 쓰고 <로봇>/odom 만 서로 다르다.
+  그래서 한 TF 트리에 map → pinky_01/odom, map → pinky_02/odom
+  이 나란히 선다.
+
+  지도는 nav2_map/project1-ver2.yaml 이다.
+  도면에서 만든 것이라 원점이 RMF 월드에 정확히 맞는다.
+
+  아직 RMF 와 이어지지 않았다. 지금은 Nav2 만 따로 돈다.
+-->
+<launch>
+  <arg name="map_dir" default="$(dirname)"/>
+  <arg name="use_sim_time" default="true"/>
+  <arg name="sensor_dir" default="$(env ROBOSAPIENS_SENSOR_DIR /tmp/robosapiens_sensors)"/>
+
+  <!-- 건물 지도. 로봇들이 함께 본다. -->
+  <node pkg="nav2_map_server" exec="map_server"
+        name="map_server" output="screen">
+    <param name="yaml_filename" value="$(var map_dir)/nav2_map/project1-ver2.yaml"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <param name="topic_name" value="nav2_map"/>
+  </node>
+  <node pkg="nav2_lifecycle_manager" exec="lifecycle_manager"
+        name="lifecycle_manager_map" output="screen">
+    <param name="use_sim_time" value="false"/>
+    <param name="autostart" value="true"/>
+    <param name="node_names" value="[map_server]"/>
+  </node>
+
+  <!-- pinky_01 · PK-01 -->
+  <group>
+    <include file="$(var map_dir)/robots/pinky_01/nav2.launch.xml">
+      <arg name="use_sim_time" value="$(var use_sim_time)"/>
+    </include>
+  </group>
+
+  <!-- pinky_02 · PK-02 -->
+  <group>
+    <include file="$(var map_dir)/robots/pinky_02/nav2.launch.xml">
+      <arg name="use_sim_time" value="$(var use_sim_time)"/>
+    </include>
+  </group>
+
+  <!-- RMF 와 Nav2 를 잇는다. 이것이 없으면 RMF 가 배차해도
+       로봇이 안 움직인다.
+
+       RViz 도 이것에 매달려 있다. 경로(Lane·Waypoint)를 그리는
+       /nav_graphs 와 로봇을 그리는 /fleet_states 를 내는 것이
+       RMF 안에서 이 어댑터(FleetUpdateHandle) 하나뿐이다.
+       이것이 죽으면 RViz 는 도면만 남고 텅 빈다.
+
+       네이티브 RMF 라이브러리 오류나 시작 순서 문제로 종료되더라도
+       계속 다시 띄운다. 실행 스크립트는 프로세스뿐 아니라
+       /fleet_states 의 실제 로봇 등록 상태도 별도로 감시한다. -->
+  <executable output="screen"
+              respawn="true" respawn_delay="5.0"
+              cmd="python3 $(var map_dir)/project1-ver2_nav2_adapter.py -c $(var map_dir)/project1_pinky_config.yaml -n $(var map_dir)/nav_graphs/0.yaml -s"/>
+
+  <!-- 설비 로봇을 RMF 워크셀로 잇는다. 이것이 없으면 로봇이
+       픽업 자리에 닿아도 RMF 가 답을 못 받아 영원히
+       기다린다 — 오류는 안 나고 작업만 멈춘다. -->
+  <executable output="screen"
+              cmd="python3 $(var map_dir)/project1-ver2_workcell.py"/>
+
+  <!-- 라이다·카메라를 앱이 읽을 수 있게 파일로 내려 준다. -->
+  <executable output="screen"
+              cmd="python3 $(var map_dir)/project1-ver2_sensor_relay.py -o $(var sensor_dir)"/>
+</launch>

@@ -1,0 +1,21 @@
+name: openrmf_app
+description: Flutter operator console for the Open-RMF office demo.
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.6.0
+  web_socket_channel: ^3.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

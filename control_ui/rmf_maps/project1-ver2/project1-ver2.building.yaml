@@ -1,0 +1,71 @@
+coordinate_system: reference_image
+graphs: {}
+reference_level_name: L1
+levels:
+  L1:
+    drawing:
+      filename: "gwanghee.png"
+    elevation: 0.0
+    floors:
+      - parameters: {ceiling_scale: [3, 1], ceiling_texture: [1, blue_linoleum], indoor: [2, 0], texture_name: [1, blue_linoleum], texture_rotation: [3, 0], texture_scale: [3, 1]}
+        vertices: [2, 4, 6, 8, 9, 11, 13]
+    layers: {}
+    lanes:
+      - [16, 17, {bidirectional: [4, true], graph_idx: [2, 0]}]
+      - [17, 18, {bidirectional: [4, true], graph_idx: [2, 0]}]
+      - [18, 19, {bidirectional: [4, true], graph_idx: [2, 0]}]
+      - [17, 15, {bidirectional: [4, true], graph_idx: [2, 0]}]
+      - [15, 16, {bidirectional: [4, true], graph_idx: [2, 0]}]
+      - [21, 15, {bidirectional: [4, true], graph_idx: [2, 0]}]
+      - [21, 22, {bidirectional: [4, true], graph_idx: [2, 0]}]
+      - [22, 23, {bidirectional: [4, true], graph_idx: [2, 0]}]
+      - [23, 24, {bidirectional: [4, true], graph_idx: [2, 0]}]
+      - [24, 25, {bidirectional: [4, true], graph_idx: [2, 0]}]
+      - [27, 21, {bidirectional: [4, true], graph_idx: [2, 0]}]
+      - [28, 23, {bidirectional: [4, true], graph_idx: [2, 0]}]
+    measurements:
+      - [0, 1, {distance: [3, 2.1100]}]
+    vertices:
+      - [84.294, 32.128, 0.0, "measurement_start"]
+      - [1908.189, 32.128, 0.0, "measurement_end"]
+      - [55.000, 1210.000, 0.0, ""]
+      - [753.500, 1210.000, 0.0, ""]
+      - [71.500, 93.500, 0.0, ""]
+      - [753.500, 418.000, 0.0, ""]
+      - [1925.000, 93.500, 0.0, ""]
+      - [1390.533, 1183.600, 0.0, ""]
+      - [1947.000, 1183.600, 0.0, ""]
+      - [1925.000, 1666.500, 0.0, ""]
+      - [1287.000, 1666.500, 0.0, ""]
+      - [1287.000, 2326.500, 0.0, ""]
+      - [753.500, 2013.000, 0.0, ""]
+      - [71.500, 2326.500, 0.0, ""]
+      - [753.500, 1573.000, 0.0, ""]
+      - [1393.213, 619.922, 0.0, "충전1", {is_charger: [4, true]}]
+      - [1663.003, 247.162, 0.0, "드랍오프1", {dropoff_ingestor: [1, "드랍오프1"]}]
+      - [1068.712, 244.169, 0.0, "대기1", {is_holding_point: [4, true]}]
+      - [388.760, 247.104, 0.0, "대기2", {is_holding_point: [4, true]}]
+      - [392.751, 750.989, 0.0, "픽업1", {pickup_dispenser: [1, "픽업1"]}]
+      - [387.356, 984.098, 0.0, "설비1", {robosapiens_equipment: [4, true]}]
+      - [1394.524, 940.258, 0.0, "충전2", {is_charger: [4, true]}]
+      - [1024.710, 943.495, 0.0, "대기3", {is_holding_point: [4, true]}]
+      - [1024.014, 1384.967, 0.0, "대기4", {is_holding_point: [4, true]}]
+      - [353.841, 1385.176, 0.0, "대기5", {is_holding_point: [4, true]}]
+      - [350.048, 1698.029, 0.0, "픽업2", {pickup_dispenser: [1, "픽업2"]}]
+      - [353.412, 1890.569, 0.0, "설비2", {robosapiens_equipment: [4, true]}]
+      - [1658.966, 947.021, 0.0, "드랍오프2", {dropoff_ingestor: [1, "드랍오프2"]}]
+      - [1025.696, 1677.020, 0.0, "픽업3", {pickup_dispenser: [1, "픽업3"]}]
+      - [1000.673, 1947.240, 0.0, "설비3", {robosapiens_equipment: [4, true]}]
+    walls:
+      - [4, 13, {alpha: [3, 1], texture_height: [3, 0.300], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [4, 6, {alpha: [3, 1], texture_height: [3, 0.300], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [6, 9, {alpha: [3, 1], texture_height: [3, 0.300], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [7, 8, {alpha: [3, 1], texture_height: [3, 0.300], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [13, 11, {alpha: [3, 1], texture_height: [3, 0.300], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [5, 3, {alpha: [3, 1], texture_height: [3, 0.300], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [2, 3, {alpha: [3, 1], texture_height: [3, 0.300], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [10, 11, {alpha: [3, 1], texture_height: [3, 0.300], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [10, 9, {alpha: [3, 1], texture_height: [3, 0.300], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+      - [14, 12, {alpha: [3, 1], texture_height: [3, 0.300], texture_name: [1, default], texture_scale: [3, 1], texture_width: [3, 1]}]
+lifts: {}
+name: "project1-ver2"

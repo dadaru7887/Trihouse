@@ -1,0 +1,43 @@
+<?xml version='1.0' ?>
+<!--
+  gwanghee 프로젝트 실행 launch.
+  rmf_control_ui 가 맵 프로젝트에서 생성했다. 손으로 고치면
+  다음 저장 때 덮어써진다.
+
+  실행:
+    source /opt/ros/jazzy/setup.bash
+    source /home/gyi/robosapiens/rmf_ws/install/setup.bash
+    ros2 launch /home/gyi/robosapiens/rmf_maps/gwanghee/gwanghee.launch.xml
+-->
+<launch>
+  <arg name="use_sim_time" default="true"/>
+  <arg name="headless" default="true"/>
+  <!-- rmf-web 을 안 씁니다. 주소를 넘기면 dispatcher 가 1초마다
+       영원히 다시 붙으려 하고, 그 여덟 줄이 로그를 채웁니다.
+       띄우실 때 server_uri 를 넣으세요. -->
+  <arg name="server_uri" default=""/>
+  <arg name="map_dir" default="/home/gyi/robosapiens/rmf_maps/gwanghee"/>
+
+  <!-- RMF core. 이것이 먼저 떠야 fleet adapter 가 붙는다. -->
+  <include file="$(find-pkg-share rmf_demos)/common.launch.xml">
+    <arg name="use_sim_time" value="$(var use_sim_time)"/>
+    <arg name="headless" value="$(var headless)"/>
+    <arg name="config_file" value="$(var map_dir)/gwanghee.building.yaml"/>
+    <arg name="server_uri" value="$(var server_uri)"/>
+  </include>
+
+  <!--
+    이 프로젝트의 플릿은 여기 없다.
+
+    rmf_demos_fleet_adapter 는 slotcar 전용이다. Gazebo 안의
+    slotcar 플러그인에게 직접 명령하는 것이라, 토픽으로 도는
+    우리 핑키에게는 상대가 없다. 붙여 놓으면 설정에
+    user·password 가 없다며 죽고, 죽은 줄 모르면 배차만
+    하고 로봇은 가만히 있는다.
+
+    플릿은 gwanghee_nav2.launch.xml 이 띄운다. 거기에
+    Nav2 와 gwanghee_nav2_adapter.py 가 함께 있다.
+    실행 스크립트가 이 launch 다음에 그것을 띄운다 —
+    RMF core 가 먼저 떠야 어댑터가 schedule node 를 찾는다.
+  -->
+</launch>

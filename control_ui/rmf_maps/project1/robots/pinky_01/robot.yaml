@@ -1,0 +1,15 @@
+# pinky_01 · PK-01
+# rmf_control_ui 가 맵 프로젝트에서 생성했다. 손으로 고치면
+# 다음 저장 때 덮어써진다. 고치려면 앱의 로봇 등록에서 고친다.
+id: pinky_01
+name: PK-01
+kind: mobile # 이동 로봇
+data_source: gazebo # Gazebo 시뮬레이션
+model: PINKY-GZ
+gz_name: pinky_01 # 토픽 네임스페이스
+ros_domain_id: # 비었으면 프로젝트 기본값을 쓴다
+zones: [ambient, chilled, frozen]
+charger_waypoint: 충전1 # 충전 자리
+spawn_x: 1.612
+spawn_y: -0.717
+spawn_heading: 0.000

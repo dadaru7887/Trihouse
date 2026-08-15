@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sed -i '10089,10254{/^      const SizedBox\\(width: \\\\\\(8\\\\|10\\\\\\)\\),$/d}' lib/main.dart)",
+      "Bash(awk 'NR>=10070 && NR<=10250 && /^      const SizedBox\\\\\\(width:/' lib/main.dart)",
+      "Bash(awk 'NR>=10070 && NR<=10250 && /const SizedBox\\\\\\(width:/' lib/main.dart)",
+      "Bash(dart format *)",
+      "Bash(mysql --protocol=TCP -h127.0.0.1 -uroot robosapiens --default-character-set=utf8mb4 -e ' *)",
+      "Bash(export RUN_MYSQL_MAP_PROJECT_TEST=1 RUN_MYSQL_INTEGRATION_TEST=1 RUN_MYSQL_READ_TEST=1 \\\\ *)",
+      "Bash(git commit *)"
+    ]
+  }
+}

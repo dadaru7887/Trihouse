@@ -1,0 +1,117 @@
+<?xml version='1.0' ?>
+<!--
+  project1-ver2 프로젝트 실행 launch.
+  rmf_control_ui 가 맵 프로젝트에서 생성했다. 손으로 고치면
+  다음 저장 때 덮어써진다.
+
+  실행:
+    source /opt/ros/jazzy/setup.bash
+    source <robosapiens>/rmf_ws/install/setup.bash
+    ros2 launch /home/gyi/robosapiens/rmf_maps/project1-ver2/project1-ver2.launch.xml
+-->
+<launch>
+  <arg name="use_sim_time" default="true"/>
+  <arg name="headless" default="true"/>
+  <!-- rmf-web 을 안 씁니다. 주소를 넘기면 dispatcher 가 1초마다
+       영원히 다시 붙으려 하고, 그 여덟 줄이 로그를 채웁니다.
+       띄우실 때 server_uri 를 넣으세요. -->
+  <arg name="server_uri" default=""/>
+  <arg name="map_dir" default="/home/gyi/robosapiens/rmf_maps/project1-ver2"/>
+
+  <!--
+    RMF core. 이것이 먼저 떠야 fleet adapter 가 붙는다.
+
+    rmf_demos 의 common.launch.xml 을 `include` 하지 않고 같은
+    내용을 여기 편다. 그 파일이 시각화에 Lane 굵기·글자 크기를
+    넘기지 않기 때문이다 — 인자로도, set_parameter 로도 밖에서
+    못 바꾼다(launch_ros 는 노드에 직접 준 param 이 이기게 한다).
+    기본값 0.5m 는 창고용이라, 2~3m 짜리 도면에서는 Lane 하나가
+    건물 폭의 1/5 이 되어 스무 개가 서로 겹쳐 덩어리로 보였다.
+
+    RMF 가 올라가면 이 부분을 그쪽과 맞춰야 한다. 원본:
+    $(find-pkg-share rmf_demos)/common.launch.xml
+  -->
+  <arg name="initial_map" default="L1"/>
+  <arg name="lane_width" default="0.120"/>
+  <arg name="waypoint_scale" default="1.000"/>
+  <arg name="text_scale" default="0.600"/>
+
+  <node pkg="rmf_traffic_ros2" exec="rmf_traffic_schedule"
+        name="rmf_traffic_schedule_primary" output="both">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+  <node pkg="rmf_traffic_ros2" exec="rmf_traffic_blockade"
+        output="both">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+  <node pkg="rmf_building_map_tools" exec="building_map_server"
+        args="$(var map_dir)/project1-ver2.building.yaml">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <!-- 지도·nav graph·로봇을 마커로 내는 시각화 노드들.
+
+       <group> 으로 감싸야 한다. XML launch 의 <include> 는
+       스스로 범위를 만들지 않아서, 여기 준 <arg> 가 바깥으로
+       샌다. 안 감쌌더니 아래 headless 가 true 로 덮여 RViz 가
+       아예 안 떴다 — 오류는 한 줄도 안 났다. -->
+  <group>
+    <set_parameter name="project1_pinky_radius"
+                   value="0.050"/>
+    <include file="$(find-pkg-share rmf_visualization)/visualization.launch.xml">
+      <arg name="use_sim_time" value="$(var use_sim_time)"/>
+      <arg name="map_name" value="$(var initial_map)"/>
+      <arg name="lane_width" value="$(var lane_width)"/>
+      <arg name="waypoint_scale" value="$(var waypoint_scale)"/>
+      <arg name="text_scale" value="$(var text_scale)"/>
+      <arg name="headless" value="true"/>
+    </include>
+  </group>
+
+  <node pkg="rmf_fleet_adapter" exec="door_supervisor">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+  <node pkg="rmf_fleet_adapter" exec="lift_supervisor">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+  <node pkg="rmf_fleet_adapter" exec="mutex_group_supervisor"/>
+  <node pkg="rmf_task_ros2" exec="rmf_task_dispatcher"
+        output="screen">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <param name="bidding_time_window" value="2.0"/>
+    <param name="use_unique_hex_string_with_task_id"
+           value="true"/>
+    <param name="server_uri" value="$(var server_uri)"/>
+  </node>
+
+  <!--
+    이 맵을 볼 RViz.
+
+    설정은 이 프로젝트의 project1-ver2.rviz 다 — 카메라가 이 도면을
+    보고, 바닥 그림은 /floorplan 에서 받는다.
+
+    use_sim_time 을 반드시 넘긴다. Gazebo 시간으로 찍힌 라이다와
+    TF 를 벽시계로 보면 시각이 안 맞아 아무것도 안 그려진다.
+  -->
+  <group unless="$(var headless)">
+    <node pkg="rviz2" exec="rviz2" name="rviz2" output="both"
+          args="-d $(var map_dir)/project1-ver2.rviz">
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+  </group>
+
+  <!--
+    이 프로젝트의 플릿은 여기 없다.
+
+    rmf_demos_fleet_adapter 는 slotcar 전용이다. Gazebo 안의
+    slotcar 플러그인에게 직접 명령하는 것이라, 토픽으로 도는
+    우리 핑키에게는 상대가 없다. 붙여 놓으면 설정에
+    user·password 가 없다며 죽고, 죽은 줄 모르면 배차만
+    하고 로봇은 가만히 있는다.
+
+    플릿은 project1-ver2_nav2.launch.xml 이 띄운다. 거기에
+    Nav2 와 project1-ver2_nav2_adapter.py 가 함께 있다.
+    실행 스크립트가 이 launch 다음에 그것을 띄운다 —
+    RMF core 가 먼저 떠야 어댑터가 schedule node 를 찾는다.
+  -->
+</launch>
