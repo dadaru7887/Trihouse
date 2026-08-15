@@ -1,5 +1,5 @@
 name: rmf_control_ui
-description: "A new Flutter project."
+description: "Browser-only Trihouse control UI backed by the public FMS Gateway."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -40,6 +40,9 @@ dependencies:
   cupertino_icons: ^1.0.8
   file_picker: ^10.3.10
   archive: ^3.6.1
+  http: ^1.5.0
+  http_parser: ^4.1.2
+  web_socket_channel: ^3.0.3
 
 dev_dependencies:
   flutter_test:

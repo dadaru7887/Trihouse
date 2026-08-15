@@ -1,9 +1,0 @@
-# rmf_control_ui 가 넣은 SLAM 지도. 원점을 사람이 RMF 월드에 맞췄다.
-# 틀리면 로봇이 `픽업1로 가라`는 명령을 받고 엉뚱한 데로 간다.
-image: project1_slam.pgm
-mode: trinary
-resolution: 0.050000
-origin: [-0.214000, -1.523000, 0.000000]
-negate: 0
-occupied_thresh: 0.65
-free_thresh: 0.196

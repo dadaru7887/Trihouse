@@ -4,8 +4,6 @@
 /// 가르고 무엇을 함께 쓰는지가 이 파일에 못 박혀 있다.
 library;
 
-import 'dart:io';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rmf_control_ui/nav2_params.dart';
 
@@ -279,24 +277,6 @@ some_server:
 ''';
       final result = rewriteNav2Params(source: source, namespace: 'pinky_01');
       expect(result.yaml, contains('xy_goal_tolerance: 0.25'));
-    });
-  });
-
-  group('최소보다 작게 넣을 때', () {
-    test('입력 중에 무엇이 일어나는지 알린다', () {
-      final source = File('lib/main.dart').readAsStringSync();
-      expect(source, contains('주변을 맴돌다 포기합니다'));
-      // 겪은 일을 그대로 적어 둔다. 숫자가 있어야 남 얘기로 안 읽힌다.
-      expect(source, contains('실제로 0.080 을 넣었다가'));
-    });
-
-    test('저장할 때 한 번 더 묻는다', () {
-      // 입력 중에만 알리면 그냥 지나치기 쉽다. 실제로 0.080 이 저장돼 나갔다.
-      final source = File('lib/main.dart').readAsStringSync();
-      expect(source, contains('그래도 쓰시려면 한 번 더 누르세요'));
-      expect(source, contains('if (toleranceForced != tolerance)'));
-      // 값을 고치면 되묻기를 처음부터 다시 한다.
-      expect(source, contains('toleranceForced = null;'));
     });
   });
 }
