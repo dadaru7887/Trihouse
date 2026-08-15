@@ -1,5 +1,7 @@
 import hashlib
 import json
+from pathlib import Path
+import uuid
 
 import pytest
 
@@ -8,6 +10,17 @@ from fms_gateway.app.database import Database
 from fms_gateway.app.repositories import (
     MapProjectSourceValidationError,
     MySqlFmsRepository,
+)
+
+
+ROOT = Path(__file__).resolve().parents[3]
+PHYSICAL_JSONL = (
+    ROOT
+    / "control_ui"
+    / "rmf_control_ui"
+    / "data"
+    / "import"
+    / "trihouse_test_01_physical_features.jsonl"
 )
 
 
@@ -253,3 +266,231 @@ def test_mysql_source_metadata_rejects_integers_outside_safe_range_before_sql(
     assert mysql_db.one("SELECT COUNT(*) AS count FROM map_project_sources")[
         "count"
     ] == 0
+
+
+def _public_records() -> tuple[list[dict], list[dict]]:
+    from fms_gateway.app.map_deployment import physical_import_to_public_records
+    from fms_gateway.app.physical_features import PhysicalFeatureImporter
+
+    return physical_import_to_public_records(
+        PhysicalFeatureImporter().parse(PHYSICAL_JSONL.read_bytes())
+    )
+
+
+def _public_draft(
+    profile_hash: str,
+    source_uuids: dict[str, str],
+    *,
+    extra_waypoints: list[dict] | None = None,
+) -> dict:
+    waypoints, features = _public_records()
+    return {
+        "format_version": 1,
+        "source_uuids": source_uuids,
+        "waypoints": waypoints + (extra_waypoints or []),
+        "features": features,
+        "runtime_profile_hash": profile_hash,
+    }
+
+
+def _source(
+    source_type: str,
+    content: bytes,
+    mime_type: str,
+    file_name: str,
+    *,
+    metadata: dict | None = None,
+) -> dict:
+    return {
+        "source_uuid": str(uuid.uuid4()),
+        "source_type": source_type,
+        "file_name": file_name,
+        "mime_type": mime_type,
+        "content_bytes": content,
+        "metadata": metadata,
+    }
+
+
+def test_mysql_public_save_promotes_sources_and_draft_in_one_transaction(mysql_db):
+    from fms_gateway.app.runtime_profiles import RuntimeProfileProvider
+
+    repository = _repository()
+    profile_hash = RuntimeProfileProvider(ROOT).load()["profile_hash"]
+    physical_waypoints, physical_features = _public_records()
+    source = _source(
+        "physical_features_import",
+        PHYSICAL_JSONL.read_bytes(),
+        "application/x-ndjson",
+        "renamed-source.data",
+        metadata={"waypoints": physical_waypoints, "features": physical_features},
+    )
+    saved = repository.save_public_map_draft(
+        "trihouse_test_01",
+        _public_draft(
+            profile_hash,
+            {"physical_features_import": source["source_uuid"]},
+        ),
+        expected_revision=0,
+        staged_sources=[source],
+    )
+    assert saved["draft_revision"] == 1
+    assert saved["source_uuids"]["physical_features_import"] == source["source_uuid"]
+    assert mysql_db.one("SELECT COUNT(*) AS count FROM map_projects")["count"] == 1
+    assert mysql_db.one("SELECT COUNT(*) AS count FROM map_project_sources")[
+        "count"
+    ] == 1
+
+    with pytest.raises(MapProjectSourceValidationError):
+        repository.save_public_map_draft(
+            "another_project",
+            _public_draft(
+                profile_hash,
+                {"physical_features_import": source["source_uuid"]},
+            ),
+            expected_revision=0,
+            staged_sources=[],
+        )
+    assert mysql_db.one(
+        "SELECT COUNT(*) AS count FROM map_projects WHERE map_name = 'another_project'"
+    )["count"] == 0
+
+
+def test_mysql_same_jsonl_two_projects_has_distinct_uuid_and_equal_hash(mysql_db):
+    from fms_gateway.app.runtime_profiles import RuntimeProfileProvider
+
+    repository = _repository()
+    profile_hash = RuntimeProfileProvider(ROOT).load()["profile_hash"]
+    waypoints, features = _public_records()
+    stored = []
+    for map_name in ("trihouse_test_01", "another_project"):
+        source = _source(
+            "physical_features_import",
+            PHYSICAL_JSONL.read_bytes(),
+            "application/x-ndjson",
+            f"{map_name}.jsonl",
+            metadata={"waypoints": waypoints, "features": features},
+        )
+        repository.save_public_map_draft(
+            map_name,
+            _public_draft(
+                profile_hash,
+                {"physical_features_import": source["source_uuid"]},
+            ),
+            expected_revision=0,
+            staged_sources=[source],
+        )
+        stored.append(
+            repository.get_map_project_source(map_name, source["source_uuid"])
+        )
+    assert stored[0]["source_uuid"] != stored[1]["source_uuid"]
+    assert stored[0]["sha256"] == stored[1]["sha256"]
+
+
+def test_mysql_active_delete_restores_manifest_draft_and_preserves_projection(
+    mysql_db, tmp_path: Path
+):
+    from fms_gateway.app.map_deployment import MapDeploymentCoordinator
+    from fms_gateway.app.runtime_profiles import RuntimeProfileProvider
+
+    for code, name, location_type, temperature_zone in (
+        ("WH-AMB-01", "Ambient Storage", "rack", "ambient"),
+        ("WH-CHL-01", "Chilled Storage", "rack", "chilled"),
+        ("WH-FRZ-01", "Frozen Storage", "rack", "frozen"),
+        ("PACKING-01", "Packing Station", "workstation", "ambient"),
+    ):
+        mysql_db.execute(
+            """
+            INSERT INTO locations
+              (location_code, name, location_type, temperature_zone)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (code, name, location_type, temperature_zone),
+        )
+    mysql_db.connection.commit()
+
+    repository = _repository()
+    profiles = RuntimeProfileProvider(ROOT)
+    profile_hash = profiles.load()["profile_hash"]
+    waypoints, features = _public_records()
+    sources = [
+        _source(
+            "slam_yaml",
+            b"image: floor.pgm\nresolution: 0.05\norigin: [0, 0, 0]\n",
+            "application/x-yaml",
+            "renamed-map.data",
+        ),
+        _source(
+            "slam_image",
+            b"P5\n1 1\n255\n\x00",
+            "image/x-portable-graymap",
+            "renamed-image.data",
+        ),
+        _source(
+            "physical_features_import",
+            PHYSICAL_JSONL.read_bytes(),
+            "application/x-ndjson",
+            "renamed-physical.data",
+            metadata={"waypoints": waypoints, "features": features},
+        ),
+    ]
+    source_uuids = {value["source_type"]: value["source_uuid"] for value in sources}
+    saved = repository.save_public_map_draft(
+        "trihouse_test_01",
+        _public_draft(profile_hash, source_uuids),
+        expected_revision=0,
+        staged_sources=sources,
+    )
+    coordinator = MapDeploymentCoordinator(repository, tmp_path, profiles)
+    staged = coordinator.stage("trihouse_test_01", saved["draft_revision"])
+    assert coordinator.validate(staged) == ()
+    published = coordinator.activate(staged, "W-OP-01")
+    assert published["draft_revision"] == 1
+    active_pointer = json.loads(
+        (tmp_path / "active" / "trihouse_test_01.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert Path(active_pointer["manifest_path"]).is_file()
+    assert not staged.staging_dir.exists()
+    projected = repository.list_projected_map_features(published["map_revision"])
+    assert len(projected) == 5
+    fiducials = [value for value in projected if value["feature_type"] == "fiducial"]
+    assert len(fiducials) == 3
+    assert len(
+        {
+            tuple(value["geometry"]["coordinates"])
+            for value in fiducials
+        }
+    ) == 3
+
+    edited = repository.save_public_map_draft(
+        "trihouse_test_01",
+        _public_draft(
+            profile_hash,
+            source_uuids,
+            extra_waypoints=[
+                {
+                    "code": "manual-after-publish",
+                    "display_name": "Manual after publish",
+                    "x": 9.0,
+                    "y": 9.0,
+                    "yaw": 0.0,
+                    "origin": "manual",
+                }
+            ],
+        ),
+        expected_revision=1,
+        staged_sources=[],
+    )
+    assert edited["draft_revision"] == 2
+    repository.delete_public_map_draft("trihouse_test_01")
+
+    restored = repository.get_public_map_draft("trihouse_test_01")
+    assert restored["draft_revision"] == published["draft_revision"]
+    assert all(
+        value["code"] != "manual-after-publish" for value in restored["waypoints"]
+    )
+    assert repository.active_revision("trihouse_test_01") == published["map_revision"]
+    assert mysql_db.one("SELECT COUNT(*) AS count FROM map_project_sources")[
+        "count"
+    ] == 3

@@ -2,11 +2,22 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException
+from datetime import datetime, timezone
+import logging
+from pathlib import Path as FileSystemPath
+import shutil
+from typing import Annotated
 
-from .config import get_settings, get_tcp_settings
+from fastapi import FastAPI, File, Form, Header, HTTPException, Path, UploadFile
+
+from .config import get_map_runtime_settings, get_settings, get_tcp_settings
 from .database import Database
 from .ingestion import RepositoryIngestion
+from .map_deployment import (
+    MapDeploymentCoordinator,
+    MapSourceStaging,
+    MapWorkflowError,
+)
 from .models import (
     CommandClaim,
     CommandClaimed,
@@ -24,13 +35,22 @@ from .models import (
     MapProjectSave,
     MapProjectSummary,
     MapProjectValidation,
+    MapProjectOpenRequest,
+    MapProjectOpenResponse,
+    PublicMapDraft,
+    PublicMapDraftSave,
+    PublicMapPublish,
+    PublicMapValidation,
     PublishedMap,
+    RuntimeProfileView,
+    StagedMapSourceResponse,
     RmfDispatchAcceptance,
     RmfDispatchAccepted,
     RmfDispatchClaim,
     RmfDispatchesClaimed,
     StepDispatch,
 )
+from .runtime_profiles import RuntimeProfileProvider
 from .repositories import (
     CommandClaimConflict,
     DispatchMessageNotFound,
@@ -42,6 +62,7 @@ from .repositories import (
     JobStepNotFound,
     MapDraftRevisionConflict,
     MapProjectNotFound,
+    MapProjectSourceValidationError,
     MapProjectValidationError,
     MapRevisionContentConflict,
     MySqlFmsRepository,
@@ -50,17 +71,53 @@ from .repositories import (
 from .tcp_protocol import TcpIngestionServer
 
 
+logger = logging.getLogger(__name__)
+
+
+MapNamePath = Annotated[
+    str, Path(pattern=r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,94}$")
+]
+
+
 def _default_repository() -> MySqlFmsRepository:
     return MySqlFmsRepository(Database(get_settings()))
 
 
-def create_app(repository: FmsRepository | None = None) -> FastAPI:
+def create_app(
+    repository: FmsRepository | None = None,
+    *,
+    map_runtime_root: FileSystemPath | None = None,
+    map_source_token_ttl_seconds: float | None = None,
+    map_source_max_bytes: int | None = None,
+    runtime_profile_provider: RuntimeProfileProvider | None = None,
+) -> FastAPI:
     owns_runtime = repository is None
     repo = repository or _default_repository()
+    map_settings = get_map_runtime_settings()
+    runtime_root = FileSystemPath(
+        map_runtime_root or map_settings.runtime_root
+    ).resolve()
+    profiles = runtime_profile_provider or RuntimeProfileProvider()
+    source_staging = MapSourceStaging(
+        runtime_root,
+        token_ttl_seconds=(
+            map_source_token_ttl_seconds
+            if map_source_token_ttl_seconds is not None
+            else map_settings.source_token_ttl_seconds
+        ),
+        max_bytes=(
+            map_source_max_bytes
+            if map_source_max_bytes is not None
+            else map_settings.source_max_bytes
+        ),
+    )
+    deployments = MapDeploymentCoordinator(repo, runtime_root, profiles)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         tcp_server = None
+        source_staging.reconcile_startup(repo)
+        deployments.reconcile_startup()
         tcp_settings = get_tcp_settings()
         if owns_runtime and tcp_settings.enabled:
             tcp_server = TcpIngestionServer(
@@ -135,6 +192,258 @@ def create_app(repository: FmsRepository | None = None) -> FastAPI:
     @app.get("/api/v1/jobs", response_model=list[JobView])
     def jobs():
         return repo.list_jobs()
+
+    @app.get(
+        "/api/v1/runtime-profiles/pinky-pro-simulation",
+        response_model=RuntimeProfileView,
+    )
+    def pinky_pro_simulation_runtime_profile():
+        return profiles.load()
+
+    @app.get(
+        "/api/v1/map-projects", response_model=list[MapProjectSummary]
+    )
+    def public_list_map_projects():
+        return repo.list_map_projects()
+
+    @app.post(
+        "/api/v1/map-projects", response_model=MapProjectOpenResponse
+    )
+    def public_open_map_project(request: MapProjectOpenRequest):
+        draft = repo.get_public_map_draft(request.map_name)
+        return {
+            "draft": draft
+            or {
+                "map_name": request.map_name,
+                "format_version": 1,
+                "draft_revision": 0,
+                "source_uuids": {},
+                "staged_source_tokens": {},
+                "waypoints": [],
+                "features": [],
+                "runtime_profile_hash": profiles.load()["profile_hash"],
+            },
+            "open_existing": draft is not None,
+            "active_revision": repo.active_revision(request.map_name),
+        }
+
+    @app.get(
+        "/api/v1/map-projects/{map_name}", response_model=PublicMapDraft
+    )
+    def public_get_map_project(map_name: MapNamePath):
+        draft = repo.get_public_map_draft(map_name)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="map project not found")
+        return draft
+
+    @app.post(
+        "/api/v1/map-projects/{map_name}/sources/stage",
+        response_model=StagedMapSourceResponse,
+        status_code=201,
+    )
+    async def public_stage_map_source(
+        map_name: MapNamePath,
+        source_type: str = Form(),
+        source: UploadFile = File(),
+    ):
+        try:
+            content = await source.read(source_staging.max_bytes + 1)
+            staged = source_staging.stage(
+                map_name,
+                source_type,
+                source.filename or "",
+                source.content_type or "",
+                content,
+            )
+        except MapWorkflowError as error:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": error.code, "message": error.detail},
+            ) from error
+        metadata = staged.metadata or {}
+        return {
+            "upload_token": staged.upload_token,
+            "source_type": staged.source_type,
+            "sha256": staged.sha256,
+            "byte_size": staged.byte_size,
+            "expires_at": datetime.fromtimestamp(staged.expires_at, tz=timezone.utc),
+            "waypoints": metadata.get("waypoints", []),
+            "features": metadata.get("features", []),
+        }
+
+    @app.put(
+        "/api/v1/map-projects/{map_name}", response_model=PublicMapDraft
+    )
+    def public_save_map_project(
+        map_name: MapNamePath,
+        draft: PublicMapDraftSave,
+        if_match: str | None = Header(default=None),
+    ):
+        if if_match is None:
+            raise HTTPException(status_code=428, detail="If-Match is required")
+        try:
+            expected_revision = int(if_match.strip('"'))
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="invalid If-Match revision") from error
+        if draft.map_name != map_name or draft.draft_revision != expected_revision:
+            raise HTTPException(
+                status_code=409, detail="map draft revision conflict"
+            )
+        current_profile_hash = profiles.load()["profile_hash"]
+        if draft.runtime_profile_hash != current_profile_hash:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "RUNTIME_PROFILE_HASH_MISMATCH",
+                    "message": "runtime profile changed; reopen the map project",
+                },
+            )
+        claims = ()
+        try:
+            claims = source_staging.claim_many(
+                map_name, dict(draft.staged_source_tokens)
+            )
+            source_uuids = dict(draft.source_uuids)
+            for claim in claims:
+                source_uuids[claim.source.source_type] = claim.source.source_uuid
+
+            canonical_waypoints = None
+            canonical_features = None
+            physical_uuid = source_uuids.get("physical_features_import")
+            if physical_uuid:
+                physical_source = next(
+                    (
+                        claim.source
+                        for claim in claims
+                        if claim.source.source_uuid == physical_uuid
+                    ),
+                    None,
+                )
+                metadata = (
+                    physical_source.metadata
+                    if physical_source is not None
+                    else (
+                        repo.get_map_project_source(map_name, physical_uuid) or {}
+                    ).get("metadata")
+                )
+                if not isinstance(metadata, dict):
+                    raise MapWorkflowError(
+                        "PHYSICAL_FEATURES_INVALID",
+                        "physical source metadata is missing",
+                    )
+                canonical_waypoints = metadata.get("waypoints")
+                canonical_features = metadata.get("features")
+                if not isinstance(canonical_waypoints, list) or not isinstance(
+                    canonical_features, list
+                ):
+                    raise MapWorkflowError(
+                        "PHYSICAL_FEATURES_INVALID",
+                        "physical source metadata is incomplete",
+                    )
+            requested = draft.model_dump()
+            requested["source_uuids"] = source_uuids
+            requested["staged_source_tokens"] = {}
+            if canonical_waypoints is not None:
+                requested["waypoints"] = canonical_waypoints + [
+                    value
+                    for value in requested["waypoints"]
+                    if value.get("origin") == "manual"
+                ]
+                requested["features"] = canonical_features
+            saved = repo.save_public_map_draft(
+                map_name,
+                requested,
+                expected_revision,
+                [claim.source.repository_source() for claim in claims],
+            )
+            source_staging.discard_claims(claims)
+            return saved
+        except MapWorkflowError as error:
+            source_staging.restore_claims(claims)
+            raise HTTPException(
+                status_code=422,
+                detail={"code": error.code, "message": error.detail},
+            ) from error
+        except MapDraftRevisionConflict as error:
+            source_staging.restore_claims(claims)
+            raise HTTPException(
+                status_code=409, detail="map draft revision conflict"
+            ) from error
+        except MapProjectSourceValidationError as error:
+            source_staging.restore_claims(claims)
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "SOURCE_REFERENCE_INVALID", "message": str(error)},
+            ) from error
+        except Exception:
+            source_staging.restore_claims(claims)
+            raise
+
+    @app.delete("/api/v1/map-projects/{map_name}/draft", status_code=204)
+    def public_delete_map_project(map_name: MapNamePath):
+        try:
+            repo.delete_public_map_draft(map_name)
+        except MapProjectNotFound as error:
+            raise HTTPException(status_code=404, detail="map project not found") from error
+        except PublishedMapProjectDeleteConflict as error:
+            raise HTTPException(
+                status_code=409, detail="active manifest cannot restore its draft"
+            ) from error
+
+    @app.post(
+        "/api/v1/map-projects/{map_name}/validate",
+        response_model=PublicMapValidation,
+    )
+    def public_validate_map_project(map_name: MapNamePath):
+        draft = repo.get_public_map_draft(map_name)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="map project not found")
+        staged = deployments.stage(map_name, draft["draft_revision"])
+        try:
+            errors = deployments.validate(staged)
+            return {"valid": not errors, "error_codes": list(errors)}
+        finally:
+            shutil.rmtree(staged.staging_dir, ignore_errors=True)
+
+    @app.post(
+        "/api/v1/map-projects/{map_name}/publish", response_model=PublishedMap
+    )
+    def public_publish_map_project(
+        map_name: MapNamePath, publication: PublicMapPublish
+    ):
+        draft = repo.get_public_map_draft(map_name)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="map project not found")
+        if draft["draft_revision"] != publication.expected_draft_revision:
+            raise HTTPException(status_code=409, detail="map draft revision conflict")
+        staged = deployments.stage(map_name, publication.expected_draft_revision)
+        errors = deployments.validate(staged)
+        if errors:
+            shutil.rmtree(staged.staging_dir, ignore_errors=True)
+            logger.warning(
+                "map deployment validation failed map_name=%s draft_revision=%s codes=%s",
+                map_name,
+                publication.expected_draft_revision,
+                ",".join(errors),
+            )
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "DEPLOYMENT_VALIDATION_FAILED",
+                    "error_codes": list(errors),
+                },
+            )
+        try:
+            return deployments.activate(staged, publication.published_by)
+        except MapProjectValidationError as error:
+            shutil.rmtree(staged.staging_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "DEPLOYMENT_VALIDATION_FAILED",
+                    "error_codes": list(error.args[0]),
+                },
+            ) from error
 
     @app.get(
         "/internal/v1/map-projects", response_model=list[MapProjectSummary]

@@ -27,6 +27,8 @@ abstract interface class FmsApi {
     PublishMapDto request,
   );
 
+  Future<RuntimeProfileDto> getRuntimeProfile();
+
   Future<OutboundOrderDto> createOutboundOrder(
     OutboundOrderRequestDto request, {
     required String idempotencyKey,

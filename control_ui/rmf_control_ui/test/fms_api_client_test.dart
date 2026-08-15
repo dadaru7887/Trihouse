@@ -52,6 +52,48 @@ Map<String, Object?> _jobJson() => {
 };
 
 void main() {
+  test('runtime profile is read only through the public Gateway route', () async {
+    late http.Request captured;
+    final client = FmsApiClient(
+      baseUri: Uri.parse('https://gateway.example'),
+      httpClient: MockClient((request) async {
+        captured = request;
+        return http.Response(
+          jsonEncode({
+            'profile_name': 'pinky_pro simulation profile',
+            'profile_hash': 'a' * 64,
+            'source_files': [
+              'pinky_pro/pinky_navigation/params/nav2_params.yaml',
+              'pinky_pro/pinky_bringup/config/pinky_params.yaml',
+            ],
+            'controller': {'plugin': 'RegulatedPurePursuitController'},
+            'planner': {'plugin': 'NavfnPlanner'},
+            'local_costmap': {'resolution': 0.05},
+            'global_costmap': {'resolution': 0.05},
+            'robot': {'robot_radius_m': null},
+            'max_speeds': {'linear_mps': 0.25},
+            'goal_tolerances': {'xy_m': 0.25},
+            'progress_tolerances': {'required_movement_radius_m': 0.5},
+            'wheel_parameters': {'wheel_radius_m': 0.027},
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    final profile = await client.getRuntimeProfile();
+
+    expect(captured.method, 'GET');
+    expect(
+      captured.url.path,
+      '/api/v1/runtime-profiles/pinky-pro-simulation',
+    );
+    expect(captured.url.path, isNot(contains('/internal/')));
+    expect(profile.profileName, 'pinky_pro simulation profile');
+    expect(profile.robot['robot_radius_m'], isNull);
+  });
+
   test(
     'listInventory reads inventory lots from the public Gateway route',
     () async {

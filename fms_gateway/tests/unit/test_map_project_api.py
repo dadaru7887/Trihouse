@@ -1,10 +1,23 @@
 import hashlib
 import json
+from pathlib import Path
+import time
 
 from fastapi.testclient import TestClient
 
 from fms_gateway.app.main import create_app
 from fms_gateway.app.repositories import InMemoryFmsRepository
+
+
+ROOT = Path(__file__).resolve().parents[3]
+PHYSICAL_JSONL = (
+    ROOT
+    / "control_ui"
+    / "rmf_control_ui"
+    / "data"
+    / "import"
+    / "trihouse_test_01_physical_features.jsonl"
+)
 
 
 def project1_payload() -> dict:
@@ -257,3 +270,384 @@ def test_published_project_cannot_be_deleted():
     response = client.delete("/internal/v1/map-projects/project1")
     assert response.status_code == 409
     assert response.json()["detail"] == "published map project cannot be deleted"
+
+
+def _public_draft(
+    profile_hash: str,
+    *,
+    staged_source_tokens: dict[str, str] | None = None,
+    source_uuids: dict[str, str] | None = None,
+    waypoints: list[dict] | None = None,
+    features: list[dict] | None = None,
+) -> dict:
+    return {
+        "map_name": "trihouse_test_01",
+        "format_version": 1,
+        "draft_revision": 0,
+        "source_uuids": source_uuids or {},
+        "staged_source_tokens": staged_source_tokens or {},
+        "waypoints": waypoints or [],
+        "features": features or [],
+        "runtime_profile_hash": profile_hash,
+    }
+
+
+def _stage(
+    client: TestClient,
+    map_name: str,
+    source_type: str,
+    content: bytes,
+    *,
+    file_name: str,
+    mime_type: str,
+) -> dict:
+    response = client.post(
+        f"/api/v1/map-projects/{map_name}/sources/stage",
+        data={"source_type": source_type},
+        files={"source": (file_name, content, mime_type)},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _profile_hash(client: TestClient) -> str:
+    response = client.get("/api/v1/runtime-profiles/pinky-pro-simulation")
+    assert response.status_code == 200, response.text
+    return response.json()["profile_hash"]
+
+
+def test_saved_draft_reopens_and_unsaved_edit_does_not_persist(tmp_path: Path):
+    client = TestClient(
+        create_app(InMemoryFmsRepository(), map_runtime_root=tmp_path)
+    )
+    profile_hash = _profile_hash(client)
+
+    saved = client.put(
+        "/api/v1/map-projects/trihouse_test_01",
+        json=_public_draft(
+            profile_hash,
+            waypoints=[
+                {
+                    "code": "manual-1",
+                    "display_name": "Manual 1",
+                    "x": 0.25,
+                    "y": -0.5,
+                    "yaw": 1.25,
+                    "origin": "manual",
+                }
+            ],
+        ),
+        headers={"If-Match": "0"},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["draft_revision"] == 1
+
+    unsaved_local_copy = saved.json()
+    unsaved_local_copy["waypoints"][0]["x"] = 99.0
+    reopened = client.get("/api/v1/map-projects/trihouse_test_01")
+    assert reopened.status_code == 200
+    assert reopened.json()["draft_revision"] == 1
+    assert reopened.json()["waypoints"][0]["x"] == 0.25
+
+
+def test_same_deployed_name_opens_existing_instead_of_duplicate_error(
+    tmp_path: Path,
+):
+    repository = InMemoryFmsRepository()
+    client = TestClient(create_app(repository, map_runtime_root=tmp_path))
+    profile_hash = _profile_hash(client)
+    saved = client.put(
+        "/api/v1/map-projects/trihouse_test_01",
+        json=_public_draft(profile_hash),
+        headers={"If-Match": "0"},
+    )
+    assert saved.status_code == 200
+
+    response = client.post(
+        "/api/v1/map-projects", json={"map_name": "trihouse_test_01"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["open_existing"] is True
+    assert response.json()["draft"]["draft_revision"] == 1
+    assert response.json()["active_revision"] is None
+
+
+def test_source_stage_is_db_free_and_save_is_project_scoped_and_replay_safe(
+    tmp_path: Path,
+):
+    repository = InMemoryFmsRepository()
+    client = TestClient(create_app(repository, map_runtime_root=tmp_path))
+    profile_hash = _profile_hash(client)
+    staged = _stage(
+        client,
+        "trihouse_test_01",
+        "physical_features_import",
+        PHYSICAL_JSONL.read_bytes(),
+        file_name="operator-selected-source.data",
+        mime_type="application/x-ndjson",
+    )
+    assert repository.list_map_projects() == []
+
+    cross_project = client.put(
+        "/api/v1/map-projects/another_project",
+        json={
+            **_public_draft(
+                profile_hash,
+                staged_source_tokens={
+                    "physical_features_import": staged["upload_token"]
+                },
+            ),
+            "map_name": "another_project",
+        },
+        headers={"If-Match": "0"},
+    )
+    assert cross_project.status_code == 422
+    assert cross_project.json()["detail"]["code"] == "STAGED_SOURCE_PROJECT_MISMATCH"
+
+    saved = client.put(
+        "/api/v1/map-projects/trihouse_test_01",
+        json=_public_draft(
+            profile_hash,
+            staged_source_tokens={
+                "physical_features_import": staged["upload_token"]
+            },
+            waypoints=staged["waypoints"],
+            features=staged["features"],
+        ),
+        headers={"If-Match": "0"},
+    )
+    assert saved.status_code == 200, saved.text
+    source_uuid = saved.json()["source_uuids"]["physical_features_import"]
+    assert repository.get_map_project_source("trihouse_test_01", source_uuid)
+
+    replay = client.put(
+        "/api/v1/map-projects/trihouse_test_01",
+        json=_public_draft(
+            profile_hash,
+            staged_source_tokens={
+                "physical_features_import": staged["upload_token"]
+            },
+        )
+        | {"draft_revision": 1},
+        headers={"If-Match": "1"},
+    )
+    assert replay.status_code == 422
+    assert replay.json()["detail"]["code"] == "STAGED_SOURCE_TOKEN_INVALID"
+
+
+def test_same_jsonl_can_be_saved_by_two_projects_with_distinct_source_identity(
+    tmp_path: Path,
+):
+    repository = InMemoryFmsRepository()
+    client = TestClient(create_app(repository, map_runtime_root=tmp_path))
+    profile_hash = _profile_hash(client)
+    saved_sources = []
+    for map_name in ("trihouse_test_01", "another_project"):
+        staged = _stage(
+            client,
+            map_name,
+            "physical_features_import",
+            PHYSICAL_JSONL.read_bytes(),
+            file_name=f"{map_name}.jsonl",
+            mime_type="application/x-ndjson",
+        )
+        body = {
+            **_public_draft(
+                profile_hash,
+                staged_source_tokens={
+                    "physical_features_import": staged["upload_token"]
+                },
+                waypoints=staged["waypoints"],
+                features=staged["features"],
+            ),
+            "map_name": map_name,
+        }
+        response = client.put(
+            f"/api/v1/map-projects/{map_name}",
+            json=body,
+            headers={"If-Match": "0"},
+        )
+        assert response.status_code == 200, response.text
+        source_uuid = response.json()["source_uuids"][
+            "physical_features_import"
+        ]
+        saved_sources.append(repository.get_map_project_source(map_name, source_uuid))
+
+    assert saved_sources[0]["source_uuid"] != saved_sources[1]["source_uuid"]
+    assert saved_sources[0]["sha256"] == saved_sources[1]["sha256"]
+
+
+def test_source_stage_rejects_path_mime_size_and_expired_tokens(tmp_path: Path):
+    client = TestClient(
+        create_app(
+            InMemoryFmsRepository(),
+            map_runtime_root=tmp_path,
+            map_source_max_bytes=16,
+            map_source_token_ttl_seconds=0.01,
+        )
+    )
+    for file_name, mime_type, content in (
+        ("../escape.yaml", "application/x-yaml", b"image: map.pgm\n"),
+        ("map.yaml", "text/plain", b"image: map.pgm\n"),
+        ("map.yaml", "application/x-yaml", b"x" * 17),
+    ):
+        response = client.post(
+            "/api/v1/map-projects/trihouse_test_01/sources/stage",
+            data={"source_type": "slam_yaml"},
+            files={"source": (file_name, content, mime_type)},
+        )
+        assert response.status_code == 422
+
+    staged = _stage(
+        client,
+        "trihouse_test_01",
+        "slam_yaml",
+        b"image: map.pgm\n",
+        file_name="map.yaml",
+        mime_type="application/x-yaml",
+    )
+    time.sleep(0.02)
+    expired = client.put(
+        "/api/v1/map-projects/trihouse_test_01",
+        json=_public_draft(
+            _profile_hash(client),
+            staged_source_tokens={"slam_yaml": staged["upload_token"]},
+        ),
+        headers={"If-Match": "0"},
+    )
+    assert expired.status_code == 422
+    assert expired.json()["detail"]["code"] == "STAGED_SOURCE_TOKEN_EXPIRED"
+
+
+def test_delete_without_active_removes_draft_and_unreferenced_sources(tmp_path: Path):
+    repository = InMemoryFmsRepository()
+    client = TestClient(create_app(repository, map_runtime_root=tmp_path))
+    staged = _stage(
+        client,
+        "trihouse_test_01",
+        "slam_yaml",
+        b"image: map.pgm\nresolution: 0.05\norigin: [0, 0, 0]\n",
+        file_name="map.yaml",
+        mime_type="application/x-yaml",
+    )
+    saved = client.put(
+        "/api/v1/map-projects/trihouse_test_01",
+        json=_public_draft(
+            _profile_hash(client),
+            staged_source_tokens={"slam_yaml": staged["upload_token"]},
+        ),
+        headers={"If-Match": "0"},
+    )
+    source_uuid = saved.json()["source_uuids"]["slam_yaml"]
+
+    deleted = client.delete("/api/v1/map-projects/trihouse_test_01/draft")
+
+    assert deleted.status_code == 204
+    assert client.get("/api/v1/map-projects/trihouse_test_01").status_code == 404
+    assert repository.get_map_project_source("trihouse_test_01", source_uuid) is None
+
+
+def test_publish_failure_preserves_active_without_audit_and_delete_restores_it(
+    tmp_path: Path,
+):
+    repository = InMemoryFmsRepository()
+    client = TestClient(create_app(repository, map_runtime_root=tmp_path))
+    profile_hash = _profile_hash(client)
+    staged_physical = _stage(
+        client,
+        "trihouse_test_01",
+        "physical_features_import",
+        PHYSICAL_JSONL.read_bytes(),
+        file_name="physical.data",
+        mime_type="application/x-ndjson",
+    )
+    staged_yaml = _stage(
+        client,
+        "trihouse_test_01",
+        "slam_yaml",
+        b"image: floor.pgm\nresolution: 0.05\norigin: [0, 0, 0]\n",
+        file_name="map.data",
+        mime_type="application/x-yaml",
+    )
+    staged_image = _stage(
+        client,
+        "trihouse_test_01",
+        "slam_image",
+        b"P5\n1 1\n255\n\x00",
+        file_name="image.data",
+        mime_type="image/x-portable-graymap",
+    )
+    tokens = {
+        value["source_type"]: value["upload_token"]
+        for value in (staged_physical, staged_yaml, staged_image)
+    }
+    saved = client.put(
+        "/api/v1/map-projects/trihouse_test_01",
+        json=_public_draft(
+            profile_hash,
+            staged_source_tokens=tokens,
+            waypoints=staged_physical["waypoints"],
+            features=staged_physical["features"],
+        ),
+        headers={"If-Match": "0"},
+    )
+    assert saved.status_code == 200, saved.text
+    first_draft = saved.json()
+    published = client.post(
+        "/api/v1/map-projects/trihouse_test_01/publish",
+        json={"expected_draft_revision": 1, "published_by": "W-OP-01"},
+    )
+    assert published.status_code == 200, published.text
+    active_revision = published.json()["map_revision"]
+
+    edited_body = {
+        **first_draft,
+        "source_uuids": {
+            key: value
+            for key, value in first_draft["source_uuids"].items()
+            if key != "slam_image"
+        },
+        "waypoints": first_draft["waypoints"]
+        + [
+            {
+                "code": "manual-unsaved-from-active",
+                "display_name": "Manual after active",
+                "x": 9.0,
+                "y": 9.0,
+                "yaw": 0.0,
+                "origin": "manual",
+            }
+        ],
+    }
+    edited = client.put(
+        "/api/v1/map-projects/trihouse_test_01",
+        json=edited_body,
+        headers={"If-Match": "1"},
+    )
+    assert edited.status_code == 200, edited.text
+
+    failed = client.post(
+        "/api/v1/map-projects/trihouse_test_01/publish",
+        json={"expected_draft_revision": 2, "published_by": "W-OP-01"},
+    )
+    assert failed.status_code == 422
+    assert "SOURCE_SLAM_IMAGE_MISSING" in failed.json()["detail"]["error_codes"]
+    assert repository.active_revision("trihouse_test_01") == active_revision
+    assert repository.deployment_failure_events("trihouse_test_01") == []
+
+    deleted = client.delete("/api/v1/map-projects/trihouse_test_01/draft")
+    assert deleted.status_code == 204
+    restored = client.get("/api/v1/map-projects/trihouse_test_01").json()
+    assert restored["draft_revision"] == 1
+    assert restored["source_uuids"] == first_draft["source_uuids"]
+    assert all(
+        value["code"] != "manual-unsaved-from-active"
+        for value in restored["waypoints"]
+    )
+    opened = client.post(
+        "/api/v1/map-projects", json={"map_name": "trihouse_test_01"}
+    )
+    assert opened.status_code == 200
+    assert opened.json()["open_existing"] is True
+    assert opened.json()["active_revision"] == active_revision

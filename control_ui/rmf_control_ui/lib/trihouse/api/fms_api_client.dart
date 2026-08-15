@@ -524,6 +524,26 @@ class FmsApiClient implements FmsApi {
   }
 
   @override
+  Future<RuntimeProfileDto> getRuntimeProfile() async {
+    const operation = 'GET pinky runtime profile';
+    final response = await _sendJson(
+      'GET',
+      '/api/v1/runtime-profiles/pinky-pro-simulation',
+    );
+    try {
+      return RuntimeProfileDto.fromJson(_object(response, operation));
+    } on FmsApiException {
+      rethrow;
+    } catch (error) {
+      throw _invalidResponse(
+        operation,
+        response.request?.url ?? baseUri,
+        error,
+      );
+    }
+  }
+
+  @override
   Future<OutboundOrderDto> createOutboundOrder(
     OutboundOrderRequestDto request, {
     required String idempotencyKey,

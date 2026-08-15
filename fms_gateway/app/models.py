@@ -236,6 +236,138 @@ MapProjectSourceType = Literal[
 ]
 
 
+class MapProjectOpenRequest(BaseModel):
+    map_name: str = Field(
+        pattern=r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,94}$"
+    )
+
+
+class PublicMapWaypoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=160)
+    rmf_waypoint_name: str | None = Field(default=None, max_length=128)
+    location_code: str | None = Field(default=None, max_length=96)
+    operational_role: str | None = Field(default=None, max_length=40)
+    parent_location_code: str | None = Field(default=None, max_length=96)
+    temperature_zone: Literal["ambient", "chilled", "frozen"] | None = None
+    x: float = Field(allow_inf_nan=False)
+    y: float = Field(allow_inf_nan=False)
+    yaw: float = Field(allow_inf_nan=False)
+    origin: Literal["physical_features_import", "manual"]
+
+
+class PublicMapFeature(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["bottleneck", "fiducial_binding"]
+    code: str = Field(min_length=1, max_length=128)
+    display_name: str | None = Field(default=None, max_length=160)
+    feature_code: str | None = Field(default=None, max_length=128)
+    mutex_group: str | None = Field(default=None, max_length=64)
+    marker_id: int | None = Field(default=None, ge=0)
+    dictionary: str | None = Field(default=None, max_length=64)
+    target_location_code: str | None = Field(default=None, max_length=96)
+    x: float = Field(allow_inf_nan=False)
+    y: float = Field(allow_inf_nan=False)
+    yaw: float | None = Field(default=None, allow_inf_nan=False)
+    radius_m: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    source_diameter_m: float | None = Field(
+        default=None, gt=0, allow_inf_nan=False
+    )
+    pixel_size: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    origin: Literal["physical_features_import"]
+
+    @model_validator(mode="after")
+    def fields_match_feature_type(self):
+        if self.type == "bottleneck" and not (
+            self.feature_code
+            and self.mutex_group
+            and self.radius_m is not None
+            and self.source_diameter_m is not None
+        ):
+            raise ValueError("bottleneck fields are incomplete")
+        if self.type == "fiducial_binding" and not (
+            self.marker_id is not None
+            and self.dictionary
+            and self.target_location_code
+            and self.yaw is not None
+            and self.pixel_size is not None
+        ):
+            raise ValueError("fiducial binding fields are incomplete")
+        return self
+
+
+class PublicMapDraftSave(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    map_name: str = Field(
+        pattern=r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,94}$"
+    )
+    format_version: int = Field(ge=1)
+    draft_revision: int = Field(ge=0)
+    source_uuids: dict[MapProjectSourceType, str] = Field(default_factory=dict)
+    staged_source_tokens: dict[MapProjectSourceType, str] = Field(
+        default_factory=dict
+    )
+    waypoints: list[PublicMapWaypoint] = Field(default_factory=list)
+    features: list[PublicMapFeature] = Field(default_factory=list)
+    runtime_profile_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class PublicMapDraft(BaseModel):
+    map_name: str
+    format_version: int
+    draft_revision: int
+    source_uuids: dict[str, str]
+    staged_source_tokens: dict[str, str] = Field(default_factory=dict)
+    waypoints: list[dict[str, Any]]
+    features: list[dict[str, Any]]
+    runtime_profile_hash: str
+
+
+class MapProjectOpenResponse(BaseModel):
+    draft: PublicMapDraft
+    open_existing: bool
+    active_revision: str | None
+
+
+class StagedMapSourceResponse(BaseModel):
+    upload_token: str
+    source_type: MapProjectSourceType
+    sha256: str
+    byte_size: int
+    expires_at: datetime
+    waypoints: list[dict[str, Any]] = Field(default_factory=list)
+    features: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PublicMapValidation(BaseModel):
+    valid: bool
+    error_codes: list[str]
+
+
+class PublicMapPublish(BaseModel):
+    expected_draft_revision: int = Field(ge=1)
+    published_by: str = Field(min_length=1, max_length=64)
+
+
+class RuntimeProfileView(BaseModel):
+    profile_name: Literal["pinky_pro simulation profile"]
+    profile_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_files: list[str]
+    controller: dict[str, Any]
+    planner: dict[str, Any]
+    local_costmap: dict[str, Any]
+    global_costmap: dict[str, Any]
+    robot: dict[str, Any]
+    max_speeds: dict[str, Any]
+    goal_tolerances: dict[str, Any]
+    progress_tolerances: dict[str, Any]
+    wheel_parameters: dict[str, Any]
+
+
 def _freeze_json_value(value: Any) -> Any:
     if isinstance(value, Mapping):
         if not all(isinstance(key, str) for key in value):

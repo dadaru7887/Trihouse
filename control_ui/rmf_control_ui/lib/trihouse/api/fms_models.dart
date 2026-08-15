@@ -117,24 +117,36 @@ class MapSourceUploadDto {
 }
 
 class StagedMapSourceDto {
-  const StagedMapSourceDto({
+  StagedMapSourceDto({
     required this.uploadToken,
     required this.sourceType,
     required this.sha256,
     required this.byteSize,
-  });
+    required this.expiresAt,
+    required List<JsonObject> waypoints,
+    required List<JsonObject> features,
+  }) : waypoints = _immutableJsonObjects(waypoints),
+       features = _immutableJsonObjects(features);
 
   factory StagedMapSourceDto.fromJson(JsonObject json) => StagedMapSourceDto(
     uploadToken: json['upload_token'] as String,
     sourceType: json['source_type'] as String,
     sha256: json['sha256'] as String,
     byteSize: json['byte_size'] as int,
+    expiresAt: json['expires_at'] == null
+        ? null
+        : DateTime.parse(json['expires_at'] as String),
+    waypoints: _immutableJsonObjects(json['waypoints']),
+    features: _immutableJsonObjects(json['features']),
   );
 
   final String uploadToken;
   final String sourceType;
   final String sha256;
   final int byteSize;
+  final DateTime? expiresAt;
+  final List<JsonObject> waypoints;
+  final List<JsonObject> features;
 }
 
 class MapSourceDto {
@@ -282,6 +294,60 @@ class PublishedMapDto {
   final String mapRevision;
   final int draftRevision;
   final JsonObject manifest;
+}
+
+class RuntimeProfileDto {
+  RuntimeProfileDto({
+    required this.profileName,
+    required this.profileHash,
+    required List<String> sourceFiles,
+    required JsonObject controller,
+    required JsonObject planner,
+    required JsonObject localCostmap,
+    required JsonObject globalCostmap,
+    required JsonObject robot,
+    required JsonObject maxSpeeds,
+    required JsonObject goalTolerances,
+    required JsonObject progressTolerances,
+    required JsonObject wheelParameters,
+  }) : sourceFiles = List.unmodifiable(sourceFiles),
+       controller = _immutableJsonObject(controller),
+       planner = _immutableJsonObject(planner),
+       localCostmap = _immutableJsonObject(localCostmap),
+       globalCostmap = _immutableJsonObject(globalCostmap),
+       robot = _immutableJsonObject(robot),
+       maxSpeeds = _immutableJsonObject(maxSpeeds),
+       goalTolerances = _immutableJsonObject(goalTolerances),
+       progressTolerances = _immutableJsonObject(progressTolerances),
+       wheelParameters = _immutableJsonObject(wheelParameters);
+
+  factory RuntimeProfileDto.fromJson(JsonObject json) => RuntimeProfileDto(
+    profileName: json['profile_name'] as String,
+    profileHash: json['profile_hash'] as String,
+    sourceFiles: List<String>.from(json['source_files'] as List<Object?>),
+    controller: _immutableJsonObject(json['controller']),
+    planner: _immutableJsonObject(json['planner']),
+    localCostmap: _immutableJsonObject(json['local_costmap']),
+    globalCostmap: _immutableJsonObject(json['global_costmap']),
+    robot: _immutableJsonObject(json['robot']),
+    maxSpeeds: _immutableJsonObject(json['max_speeds']),
+    goalTolerances: _immutableJsonObject(json['goal_tolerances']),
+    progressTolerances: _immutableJsonObject(json['progress_tolerances']),
+    wheelParameters: _immutableJsonObject(json['wheel_parameters']),
+  );
+
+  final String profileName;
+  final String profileHash;
+  final List<String> sourceFiles;
+  final JsonObject controller;
+  final JsonObject planner;
+  final JsonObject localCostmap;
+  final JsonObject globalCostmap;
+  final JsonObject robot;
+  final JsonObject maxSpeeds;
+  final JsonObject goalTolerances;
+  final JsonObject progressTolerances;
+  final JsonObject wheelParameters;
 }
 
 class OutboundOrderLineDto {

@@ -67,6 +67,8 @@ class FmsRepository(Protocol):
 
     def get_map_project(self, map_name: str) -> dict[str, Any] | None: ...
 
+    def get_public_map_draft(self, map_name: str) -> dict[str, Any] | None: ...
+
     def store_map_project_source(
         self, map_name: str, source: dict[str, Any]
     ) -> dict[str, Any]: ...
@@ -74,6 +76,20 @@ class FmsRepository(Protocol):
     def get_map_project_source(
         self, map_name: str, source_uuid: str
     ) -> dict[str, Any] | None: ...
+
+    def save_public_map_draft(
+        self,
+        map_name: str,
+        draft: dict[str, Any],
+        expected_revision: int,
+        staged_sources: list[dict[str, Any]],
+    ) -> dict[str, Any]: ...
+
+    def delete_public_map_draft(self, map_name: str) -> None: ...
+
+    def active_revision(self, map_name: str) -> str | None: ...
+
+    def deployment_failure_events(self, map_name: str) -> list[dict[str, Any]]: ...
 
     def save_map_project(
         self, map_name: str, project: dict[str, Any], expected_revision: int | None
@@ -88,6 +104,8 @@ class FmsRepository(Protocol):
     ) -> dict[str, Any]: ...
 
     def get_published_map(self, map_name: str) -> dict[str, Any] | None: ...
+
+    def list_projected_map_features(self, map_revision: str) -> list[dict[str, Any]]: ...
 
 
 class InventoryLotNotFound(Exception):
@@ -254,8 +272,13 @@ def _new_map_project_source(source: dict[str, Any]) -> dict[str, Any]:
         raise MapProjectSourceValidationError("content_bytes must be non-empty bytes")
     metadata = _canonical_source_metadata(source.get("metadata"))
     content_bytes = bytes(content)
+    source_uuid = source.get("source_uuid") or str(uuid.uuid4())
+    try:
+        source_uuid = str(uuid.UUID(str(source_uuid)))
+    except (AttributeError, TypeError, ValueError) as error:
+        raise MapProjectSourceValidationError("source_uuid must be a UUID") from error
     return {
-        "source_uuid": str(uuid.uuid4()),
+        "source_uuid": source_uuid,
         "source_type": source_type,
         "file_name": file_name,
         "mime_type": mime_type,
@@ -329,7 +352,150 @@ def _normalize_map_payload(
             and _same_point(waypoint.get("point"), previous.get("point"))
         ):
             waypoint["mapPose"] = deepcopy(previous["mapPose"])
+    for zone in normalized.setdefault("bottleneckZones", []):
+        zone["featureType"] = zone.get("featureType") or "bottleneck"
     return normalized
+
+
+def _public_draft_payload(map_name: str, draft: dict[str, Any]) -> dict[str, Any]:
+    """Translate the public point+yaw surface to the established authoring payload."""
+    public_waypoints = deepcopy(draft.get("waypoints", []))
+    public_features = deepcopy(draft.get("features", []))
+    waypoints: list[dict[str, Any]] = []
+    for waypoint in public_waypoints:
+        x = float(waypoint["x"])
+        y = float(waypoint["y"])
+        yaw = float(waypoint["yaw"])
+        role = waypoint.get("operational_role")
+        category = {
+            "loading_dock": "픽업",
+            "safety_zone": "대기",
+            "charging_station": "충전",
+        }.get(role, "일반")
+        rmf_name = waypoint.get("rmf_waypoint_name") or waypoint["code"]
+        waypoints.append(
+            {
+                "point": [x, y],
+                "mapPose": [x, y, yaw],
+                "yaw": yaw,
+                "name": waypoint.get("display_name") or rmf_name,
+                "rmfWaypointName": rmf_name,
+                "category": category,
+                **(
+                    {"locationCode": waypoint["location_code"]}
+                    if waypoint.get("location_code")
+                    else {}
+                ),
+                **(
+                    {"parentLocationCode": waypoint["parent_location_code"]}
+                    if waypoint.get("parent_location_code")
+                    else {}
+                ),
+                **(
+                    {"temperatureZone": waypoint["temperature_zone"]}
+                    if waypoint.get("temperature_zone")
+                    else {}
+                ),
+            }
+        )
+    bottlenecks = [
+        {
+            "featureType": "bottleneck",
+            "featureCode": feature["feature_code"],
+            "displayName": feature.get("display_name") or feature["feature_code"],
+            "mutexGroup": feature["mutex_group"],
+            "mapPose": [float(feature["x"]), float(feature["y"])],
+            "radiusM": float(feature["radius_m"]),
+        }
+        for feature in public_features
+        if feature.get("type") == "bottleneck"
+    ]
+    fiducials = [
+        {
+            "featureCode": feature["code"],
+            "markerId": int(feature["marker_id"]),
+            "dictionary": feature["dictionary"],
+            "targetLocationCode": feature["target_location_code"],
+            "recognitionPose": [
+                float(feature["x"]),
+                float(feature["y"]),
+                float(feature["yaw"]),
+            ],
+            "pixelSize": float(feature["pixel_size"]),
+        }
+        for feature in public_features
+        if feature.get("type") == "fiducial_binding"
+    ]
+    return {
+        "format": "trihouse-map-draft",
+        "version": int(draft["format_version"]),
+        "mapName": map_name,
+        "sourceUuids": deepcopy(draft.get("source_uuids", {})),
+        "runtimeProfileHash": draft["runtime_profile_hash"],
+        "publicWaypoints": public_waypoints,
+        "publicFeatures": public_features,
+        "waypoints": waypoints,
+        "bottleneckZones": bottlenecks,
+        "fiducialBindings": fiducials,
+    }
+
+
+def _public_draft_from_project(project: dict[str, Any]) -> dict[str, Any]:
+    payload = project["payload"]
+    return {
+        "map_name": project["map_name"],
+        "format_version": int(project["format_version"]),
+        "draft_revision": int(project["draft_revision"]),
+        "source_uuids": deepcopy(payload.get("sourceUuids", {})),
+        "staged_source_tokens": {},
+        "waypoints": deepcopy(payload.get("publicWaypoints", [])),
+        "features": deepcopy(payload.get("publicFeatures", [])),
+        "runtime_profile_hash": payload.get("runtimeProfileHash", ""),
+    }
+
+
+def _public_feature_projection(
+    map_name: str,
+    map_revision: str,
+    feature: dict[str, Any],
+) -> dict[str, Any]:
+    if feature["type"] == "bottleneck":
+        return {
+            "map_name": map_name,
+            "map_revision": map_revision,
+            "feature_code": feature["feature_code"],
+            "feature_type": "bottleneck",
+            "location_id": None,
+            "marker_code": None,
+            "geometry": {
+                "type": "Point",
+                "coordinates": [float(feature["x"]), float(feature["y"])],
+            },
+            "properties": {
+                "radius_m": float(feature["radius_m"]),
+                "mutex_group": feature["mutex_group"],
+            },
+            "active": True,
+        }
+    return {
+        "map_name": map_name,
+        "map_revision": map_revision,
+        "feature_code": feature["code"],
+        "feature_type": "fiducial",
+        "location_id": None,
+        "marker_code": int(feature["marker_id"]),
+        "geometry": {
+            "type": "Point",
+            "coordinates": [float(feature["x"]), float(feature["y"])],
+        },
+        "properties": {
+            "dictionary": feature["dictionary"],
+            "target_location_code": feature["target_location_code"],
+            "recognition_yaw": float(feature["yaw"]),
+            "pixel_size": float(feature["pixel_size"]),
+        },
+        "active": True,
+    }
 
 
 def _validate_map_draft(project: dict[str, Any]) -> list[str]:
@@ -415,7 +581,10 @@ def _validate_publication_artifacts(
     ).hexdigest()
     if publication["map_revision"] != f'{project["map_name"]}:{expected_suffix}':
         errors.append("map_revision이 artifact content hash와 다릅니다")
-    if project.get("building_yaml") != publication["building_yaml_content"]:
+    if (
+        project["payload"].get("format") != "trihouse-map-draft"
+        and project.get("building_yaml") != publication["building_yaml_content"]
+    ):
         errors.append("building YAML이 현재 draft와 다릅니다")
     try:
         nav_graph = yaml.safe_load(publication["nav_graph_yaml_content"])
@@ -616,6 +785,276 @@ class MySqlFmsRepository:
     def get_map_project(self, map_name: str) -> dict[str, Any] | None:
         with self.database.connection() as connection:
             return self._load_map_project(connection, map_name)
+
+    def get_public_map_draft(self, map_name: str) -> dict[str, Any] | None:
+        project = self.get_map_project(map_name)
+        if project is None:
+            return None
+        return _public_draft_from_project(project)
+
+    def _save_public_map_draft_on_connection(
+        self,
+        connection,
+        map_name: str,
+        draft: dict[str, Any],
+        expected_revision: int,
+        staged_sources: list[dict[str, Any]],
+        *,
+        revision_override: int | None = None,
+    ) -> dict[str, Any]:
+        prepared_sources = [_new_map_project_source(value) for value in staged_sources]
+        cursor = connection.cursor(dictionary=True)
+        try:
+            cursor.execute(
+                """
+                SELECT project_id, payload, draft_revision
+                FROM map_projects WHERE map_name = %s FOR UPDATE
+                """,
+                (map_name,),
+            )
+            current = cursor.fetchone()
+            current_revision = int(current["draft_revision"]) if current else 0
+            if current_revision != expected_revision:
+                raise MapDraftRevisionConflict
+            existing = (
+                {"payload": _json(current["payload"])} if current is not None else None
+            )
+            payload = _normalize_map_payload(
+                map_name, _public_draft_payload(map_name, draft), existing
+            )
+            next_revision = (
+                int(revision_override)
+                if revision_override is not None
+                else current_revision + 1
+            )
+            waypoint_count = len(payload.get("waypoints", []))
+            if current is None:
+                cursor.execute(
+                    """
+                    INSERT INTO map_projects
+                      (map_name, format_version, payload, waypoint_count,
+                       lane_count, draft_revision)
+                    VALUES (%s, %s, %s, %s, 0, %s)
+                    """,
+                    (
+                        map_name,
+                        draft["format_version"],
+                        json.dumps(payload, ensure_ascii=False),
+                        waypoint_count,
+                        next_revision,
+                    ),
+                )
+                project_id = int(cursor.lastrowid)
+            else:
+                project_id = int(current["project_id"])
+                cursor.execute(
+                    """
+                    UPDATE map_projects
+                    SET format_version = %s, payload = %s,
+                        drawing_name = NULL, drawing_extension = NULL,
+                        drawing_bytes = NULL, drawing_width = NULL,
+                        drawing_height = NULL, building_yaml = NULL,
+                        building_yaml_name = NULL, waypoint_count = %s,
+                        lane_count = 0, draft_revision = %s
+                    WHERE project_id = %s
+                    """,
+                    (
+                        draft["format_version"],
+                        json.dumps(payload, ensure_ascii=False),
+                        waypoint_count,
+                        next_revision,
+                        project_id,
+                    ),
+                )
+
+            cursor.execute(
+                "DELETE FROM map_project_robots WHERE project_id = %s",
+                (project_id,),
+            )
+            cursor.execute(
+                "DELETE FROM map_project_waypoints WHERE project_id = %s",
+                (project_id,),
+            )
+            cursor.execute(
+                "DELETE FROM map_project_files WHERE project_id = %s",
+                (project_id,),
+            )
+            cursor.execute(
+                "DELETE FROM map_project_fleets WHERE project_id = %s",
+                (project_id,),
+            )
+            for seq, waypoint in enumerate(payload.get("waypoints", []), start=1):
+                point = waypoint["point"]
+                map_pose = waypoint.get("mapPose") or []
+                cursor.execute(
+                    """
+                    INSERT INTO map_project_waypoints
+                      (waypoint_uuid, project_id, seq, location_code,
+                       rmf_waypoint_name, category, x, y, yaw,
+                       map_x, map_y, map_yaw, active)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, 1)
+                    """,
+                    (
+                        waypoint["waypointUuid"],
+                        project_id,
+                        seq,
+                        waypoint.get("locationCode"),
+                        waypoint["rmfWaypointName"],
+                        waypoint.get("category", "일반"),
+                        point[0],
+                        point[1],
+                        waypoint.get("yaw"),
+                        map_pose[0] if len(map_pose) >= 1 else None,
+                        map_pose[1] if len(map_pose) >= 2 else None,
+                        map_pose[2] if len(map_pose) >= 3 else None,
+                    ),
+                )
+
+            for stored in prepared_sources:
+                cursor.execute(
+                    """
+                    INSERT INTO map_project_sources
+                      (source_uuid, project_id, source_type, file_name, mime_type,
+                       content_bytes, sha256, byte_size, metadata)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        stored["source_uuid"],
+                        project_id,
+                        stored["source_type"],
+                        stored["file_name"],
+                        stored["mime_type"],
+                        stored["content_bytes"],
+                        stored["sha256"],
+                        stored["byte_size"],
+                        json.dumps(stored["metadata"], ensure_ascii=False)
+                        if stored["metadata"] is not None
+                        else None,
+                    ),
+                )
+            for source_type, source_uuid in draft.get("source_uuids", {}).items():
+                cursor.execute(
+                    """
+                    SELECT source_type FROM map_project_sources
+                    WHERE project_id = %s AND source_uuid = %s
+                    """,
+                    (project_id, source_uuid),
+                )
+                source = cursor.fetchone()
+                if source is None or source["source_type"] != source_type:
+                    raise MapProjectSourceValidationError(
+                        "source UUID is absent, cross-project, or has the wrong type"
+                    )
+            saved = self._load_map_project(connection, map_name)
+            if saved is None:
+                raise MapProjectNotFound
+            return saved
+        finally:
+            cursor.close()
+
+    def save_public_map_draft(
+        self,
+        map_name: str,
+        draft: dict[str, Any],
+        expected_revision: int,
+        staged_sources: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        with self.database.connection() as connection:
+            try:
+                saved = self._save_public_map_draft_on_connection(
+                    connection,
+                    map_name,
+                    draft,
+                    expected_revision,
+                    staged_sources,
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return _public_draft_from_project(saved)
+
+    def delete_public_map_draft(self, map_name: str) -> None:
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                cursor.execute(
+                    """
+                    SELECT project_id, draft_revision FROM map_projects
+                    WHERE map_name = %s FOR UPDATE
+                    """,
+                    (map_name,),
+                )
+                project = cursor.fetchone()
+                if project is None:
+                    raise MapProjectNotFound
+                cursor.execute(
+                    """
+                    SELECT draft_revision, manifest FROM map_revisions
+                    WHERE map_name = %s AND state = 'published'
+                    ORDER BY published_at DESC LIMIT 1 FOR UPDATE
+                    """,
+                    (map_name,),
+                )
+                active = cursor.fetchone()
+                if active is None:
+                    cursor.execute(
+                        "DELETE FROM map_projects WHERE project_id = %s",
+                        (project["project_id"],),
+                    )
+                    connection.commit()
+                    return
+                manifest = _json(active["manifest"])
+                snapshot = manifest.get("draft_snapshot")
+                if not isinstance(snapshot, dict):
+                    raise PublishedMapProjectDeleteConflict
+                self._save_public_map_draft_on_connection(
+                    connection,
+                    map_name,
+                    snapshot,
+                    int(project["draft_revision"]),
+                    [],
+                    revision_override=int(active["draft_revision"]),
+                )
+                referenced = list(snapshot.get("source_uuids", {}).values())
+                if referenced:
+                    placeholders = ",".join(["%s"] * len(referenced))
+                    cursor.execute(
+                        f"""
+                        DELETE FROM map_project_sources
+                        WHERE project_id = %s AND source_uuid NOT IN ({placeholders})
+                        """,
+                        (project["project_id"], *referenced),
+                    )
+                else:
+                    cursor.execute(
+                        "DELETE FROM map_project_sources WHERE project_id = %s",
+                        (project["project_id"],),
+                    )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                cursor.close()
+
+    def active_revision(self, map_name: str) -> str | None:
+        publication = self.get_published_map(map_name)
+        return str(publication["map_revision"]) if publication else None
+
+    def deployment_failure_events(self, map_name: str) -> list[dict[str, Any]]:
+        return [
+            row
+            for row in self._all(
+                """
+                SELECT event_id, event_uuid, occurred_at, event_type, payload
+                FROM operation_events WHERE event_type = 'MAP_DEPLOYMENT_FAILED'
+                ORDER BY event_id
+                """
+            )
+            if (_json(row.get("payload")) or {}).get("map_name") == map_name
+        ]
 
     def store_map_project_source(
         self, map_name: str, source: dict[str, Any]
@@ -1021,6 +1460,39 @@ class MySqlFmsRepository:
                             map_pose[2] if len(map_pose) >= 3 else None, metadata,
                         ),
                     )
+                for public_feature in project["payload"].get(
+                    "publicFeatures", []
+                ):
+                    feature = _public_feature_projection(
+                        map_name, publication["map_revision"], public_feature
+                    )
+                    if feature["feature_type"] == "fiducial":
+                        cursor.execute(
+                            "SELECT location_id FROM locations WHERE location_code = %s",
+                            (feature["properties"]["target_location_code"],),
+                        )
+                        target = cursor.fetchone()
+                        feature["location_id"] = (
+                            int(target["location_id"]) if target else None
+                        )
+                    cursor.execute(
+                        """
+                        INSERT INTO map_features
+                          (map_name, map_revision, feature_code, feature_type,
+                           location_id, marker_code, geometry, properties, active)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1)
+                        """,
+                        (
+                            feature["map_name"],
+                            feature["map_revision"],
+                            feature["feature_code"],
+                            feature["feature_type"],
+                            feature["location_id"],
+                            feature["marker_code"],
+                            json.dumps(feature["geometry"], ensure_ascii=False),
+                            json.dumps(feature["properties"], ensure_ascii=False),
+                        ),
+                    )
                 if active_codes:
                     placeholders = ",".join(["%s"] * len(active_codes))
                     cursor.execute(
@@ -1138,6 +1610,23 @@ class MySqlFmsRepository:
             return None
         rows[0]["manifest"] = _json(rows[0]["manifest"])
         return rows[0]
+
+    def list_projected_map_features(
+        self, map_revision: str
+    ) -> list[dict[str, Any]]:
+        rows = self._all(
+            """
+            SELECT map_name, map_revision, feature_code, feature_type,
+                   location_id, marker_code, geometry, properties, active
+            FROM map_features WHERE map_revision = %s ORDER BY feature_id
+            """,
+            (map_revision,),
+        )
+        for row in rows:
+            row["geometry"] = _json(row["geometry"])
+            row["properties"] = _json(row["properties"])
+            row["active"] = bool(row["active"])
+        return rows
 
     @staticmethod
     def _project_robot_state(status: dict[str, Any]) -> tuple[str, str]:
@@ -2131,6 +2620,7 @@ class InMemoryFmsRepository:
         self._map_project_sources: dict[str, dict[str, dict[str, Any]]] = {}
         self._map_publications: dict[str, dict[str, Any]] = {}
         self._map_publications_by_revision: dict[str, dict[str, Any]] = {}
+        self._map_features: dict[str, list[dict[str, Any]]] = {}
 
     def ping(self) -> bool:
         return True
@@ -2162,6 +2652,110 @@ class InMemoryFmsRepository:
         if project is None:
             return None
         return {**self._map_summary(project), **deepcopy(project)}
+
+    def get_public_map_draft(self, map_name: str) -> dict[str, Any] | None:
+        project = self.get_map_project(map_name)
+        if project is None:
+            return None
+        return _public_draft_from_project(project)
+
+    def save_public_map_draft(
+        self,
+        map_name: str,
+        draft: dict[str, Any],
+        expected_revision: int,
+        staged_sources: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        existing = self._map_projects.get(map_name)
+        current_revision = int(existing["draft_revision"]) if existing else 0
+        if current_revision != expected_revision:
+            raise MapDraftRevisionConflict
+        project_snapshot = deepcopy(self._map_projects)
+        source_snapshot = deepcopy(self._map_project_sources)
+        try:
+            payload = _normalize_map_payload(
+                map_name,
+                _public_draft_payload(map_name, draft),
+                existing,
+            )
+            self._map_projects[map_name] = {
+                "map_name": map_name,
+                "format_version": int(draft["format_version"]),
+                "payload": payload,
+                "building_yaml": None,
+                "building_yaml_name": None,
+                "files": [],
+                "fleet": None,
+                "robots": [],
+                "draft_revision": current_revision + 1,
+                "updated_at": datetime.now(SEOUL),
+            }
+            project_sources = self._map_project_sources.setdefault(map_name, {})
+            for source in staged_sources:
+                stored = {
+                    **_new_map_project_source(source),
+                    "map_name": map_name,
+                    "created_at": datetime.now(SEOUL),
+                }
+                if stored["source_uuid"] in project_sources:
+                    raise MapProjectSourceValidationError(
+                        "staged source UUID has already been promoted"
+                    )
+                project_sources[stored["source_uuid"]] = stored
+            for source_type, source_uuid in draft.get("source_uuids", {}).items():
+                stored = project_sources.get(source_uuid)
+                if stored is None or stored["source_type"] != source_type:
+                    raise MapProjectSourceValidationError(
+                        "source UUID is absent, cross-project, or has the wrong type"
+                    )
+        except Exception:
+            self._map_projects = project_snapshot
+            self._map_project_sources = source_snapshot
+            raise
+        return self.get_public_map_draft(map_name)  # type: ignore[return-value]
+
+    def delete_public_map_draft(self, map_name: str) -> None:
+        project = self._map_projects.get(map_name)
+        if project is None:
+            raise MapProjectNotFound
+        active = self._map_publications.get(map_name)
+        if active is None:
+            del self._map_projects[map_name]
+            self._map_project_sources.pop(map_name, None)
+            return
+        snapshot = active.get("manifest", {}).get("draft_snapshot")
+        if not isinstance(snapshot, dict):
+            raise PublishedMapProjectDeleteConflict
+        restored_payload = _normalize_map_payload(
+            map_name, _public_draft_payload(map_name, snapshot), project
+        )
+        self._map_projects[map_name] = {
+            "map_name": map_name,
+            "format_version": int(snapshot["format_version"]),
+            "payload": restored_payload,
+            "building_yaml": None,
+            "building_yaml_name": None,
+            "files": [],
+            "fleet": None,
+            "robots": [],
+            "draft_revision": int(active["draft_revision"]),
+            "updated_at": datetime.now(SEOUL),
+        }
+        referenced = set(snapshot.get("source_uuids", {}).values())
+        self._map_project_sources[map_name] = {
+            source_uuid: source
+            for source_uuid, source in self._map_project_sources.get(
+                map_name, {}
+            ).items()
+            if source_uuid in referenced
+        }
+
+    def active_revision(self, map_name: str) -> str | None:
+        publication = self._map_publications.get(map_name)
+        return str(publication["map_revision"]) if publication else None
+
+    def deployment_failure_events(self, map_name: str) -> list[dict[str, Any]]:
+        return []
 
     def store_map_project_source(
         self, map_name: str, source: dict[str, Any]
@@ -2244,6 +2838,12 @@ class InMemoryFmsRepository:
         errors = _validate_publication_artifacts(project, publication)
         if errors:
             raise MapProjectValidationError(errors)
+        self._map_features[publication["map_revision"]] = [
+            _public_feature_projection(
+                map_name, publication["map_revision"], feature
+            )
+            for feature in project["payload"].get("publicFeatures", [])
+        ]
         result = {
             **deepcopy(publication),
             "map_name": map_name,
@@ -2261,6 +2861,11 @@ class InMemoryFmsRepository:
     def get_published_map(self, map_name: str) -> dict[str, Any] | None:
         publication = self._map_publications.get(map_name)
         return deepcopy(publication) if publication else None
+
+    def list_projected_map_features(
+        self, map_revision: str
+    ) -> list[dict[str, Any]]:
+        return deepcopy(self._map_features.get(map_revision, []))
 
     def list_devices(self) -> list[dict[str, object]]:
         return []
