@@ -153,6 +153,7 @@ class PublishedMapProjectDeleteConflict(Exception):
 MAP_PROJECT_SOURCE_TYPES = frozenset(
     {"slam_yaml", "slam_image", "floor_plan", "physical_features_import"}
 )
+JSON_SAFE_INTEGER_MAX = 2**53 - 1
 
 
 def _canonical_source_metadata(metadata: object) -> dict[str, Any] | None:
@@ -168,6 +169,11 @@ def _canonical_source_metadata(metadata: object) -> dict[str, Any] | None:
         if value is None or isinstance(value, (str, bool)):
             return value
         if isinstance(value, int) and not isinstance(value, bool):
+            if not -JSON_SAFE_INTEGER_MAX <= value <= JSON_SAFE_INTEGER_MAX:
+                raise MapProjectSourceValidationError(
+                    f"metadata {path} must be an I-JSON safe integer between "
+                    f"{-JSON_SAFE_INTEGER_MAX} and {JSON_SAFE_INTEGER_MAX}"
+                )
             return value
         if isinstance(value, float):
             if not math.isfinite(value):

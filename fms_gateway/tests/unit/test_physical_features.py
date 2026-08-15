@@ -37,6 +37,13 @@ def _write_records(path: Path, records: list[dict[str, object]]) -> Path:
     return path
 
 
+def _duplicate_first_record_fragment(fragment: str, replacement: str) -> bytes:
+    lines = PHYSICAL_JSONL.read_text(encoding="utf-8").splitlines()
+    assert fragment in lines[0]
+    lines[0] = lines[0].replace(fragment, replacement, 1)
+    return ("\n".join(lines) + "\n").encode()
+
+
 def _cyclic_metadata() -> dict[str, object]:
     metadata: dict[str, object] = {}
     metadata["cycle"] = metadata
@@ -111,6 +118,54 @@ def test_imported_features_are_immutable() -> None:
 
     with pytest.raises(FrozenInstanceError):
         result.waypoints[0].pose.x = 99.0  # type: ignore[misc]
+
+
+def test_import_rejects_duplicate_top_level_json_names() -> None:
+    from fms_gateway.app.physical_features import PhysicalFeatureImportError
+
+    record = _records()[0]
+    value = json.dumps(record["source_id"], ensure_ascii=False)
+    field = f'"source_id":{value}'
+    duplicate = f'{field},"source_id":{value}'
+
+    with pytest.raises(
+        PhysicalFeatureImportError,
+        match=r"line 1:.*duplicate JSON key.*source_id",
+    ):
+        _importer().parse(_duplicate_first_record_fragment(field, duplicate))
+
+
+@pytest.mark.parametrize(
+    ("container", "field_name", "expected_path"),
+    [
+        ("map_pose", "x", r"map_pose\.x"),
+        (
+            "source_measurements",
+            "timestamp",
+            r"source_measurements\[0\]\.timestamp",
+        ),
+    ],
+)
+def test_import_rejects_duplicate_nested_json_names(
+    container: str, field_name: str, expected_path: str
+) -> None:
+    from fms_gateway.app.physical_features import PhysicalFeatureImportError
+
+    record = _records()[0]
+    if container == "map_pose":
+        nested = record[container]
+    else:
+        nested = record[container][0]
+    value = json.dumps(nested[field_name], ensure_ascii=False)
+    prefix = f'"{container}":' + ("[{" if container == "source_measurements" else "{")
+    field = f'{prefix}"{field_name}":{value}'
+    duplicate = f'{field},"{field_name}":{value}'
+
+    with pytest.raises(
+        PhysicalFeatureImportError,
+        match=rf"line 1:.*duplicate JSON key.*{expected_path}",
+    ):
+        _importer().parse(_duplicate_first_record_fragment(field, duplicate))
 
 
 @pytest.mark.parametrize(
@@ -411,6 +466,72 @@ def test_in_memory_source_metadata_rejects_non_json_values(metadata_factory) -> 
                 "content_bytes": b"content",
                 "metadata": metadata_factory(),
             },
+        )
+
+
+def _in_memory_repository_for_source_metadata():
+    from fms_gateway.app.repositories import InMemoryFmsRepository
+
+    repository = InMemoryFmsRepository()
+    repository.save_map_project(
+        "source_project",
+        {
+            "format_version": 1,
+            "payload": {"version": 1},
+            "files": [],
+            "fleet": None,
+            "robots": [],
+        },
+        None,
+    )
+    return repository
+
+
+def _source_with_metadata(metadata: dict[str, object]) -> dict[str, object]:
+    return {
+        "source_type": "physical_features_import",
+        "file_name": "physical.jsonl",
+        "mime_type": "application/x-ndjson",
+        "content_bytes": b"content",
+        "metadata": metadata,
+    }
+
+
+@pytest.mark.parametrize("value", [-(2**53 - 1), 2**53 - 1])
+def test_in_memory_source_metadata_round_trips_safe_integer_boundaries(
+    value: int,
+) -> None:
+    repository = _in_memory_repository_for_source_metadata()
+
+    stored = repository.store_map_project_source(
+        "source_project",
+        _source_with_metadata({"nested": {"value": value}, "enabled": True}),
+    )
+    loaded = repository.get_map_project_source(
+        "source_project", stored["source_uuid"]
+    )
+
+    assert loaded is not None
+    assert loaded["metadata"]["nested"]["value"] == value
+    assert type(loaded["metadata"]["nested"]["value"]) is int
+    assert loaded["metadata"]["enabled"] is True
+
+
+@pytest.mark.parametrize("value", [-(2**53), 2**53, 10**400])
+def test_in_memory_source_metadata_rejects_integers_outside_safe_range(
+    value: int,
+) -> None:
+    from fms_gateway.app.repositories import MapProjectSourceValidationError
+
+    repository = _in_memory_repository_for_source_metadata()
+
+    with pytest.raises(
+        MapProjectSourceValidationError,
+        match=r"metadata \$\.nested\.value.*safe integer",
+    ):
+        repository.store_map_project_source(
+            "source_project",
+            _source_with_metadata({"nested": {"value": value}}),
         )
 
 

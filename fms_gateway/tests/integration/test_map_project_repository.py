@@ -199,3 +199,57 @@ def test_mysql_project_source_metadata_uses_stable_domain_errors(
                 "metadata": metadata_factory(),
             },
         )
+
+
+def _mysql_source_with_metadata(metadata: dict[str, object]) -> dict[str, object]:
+    return {
+        "source_type": "physical_features_import",
+        "file_name": "physical.jsonl",
+        "mime_type": "application/x-ndjson",
+        "content_bytes": b"content",
+        "metadata": metadata,
+    }
+
+
+@pytest.mark.parametrize("value", [-(2**53 - 1), 2**53 - 1])
+def test_mysql_source_metadata_round_trips_safe_integer_boundaries(
+    mysql_db, value: int
+) -> None:
+    repository = _repository()
+    repository.save_map_project("source_project", _project(), None)
+
+    stored = repository.store_map_project_source(
+        "source_project",
+        _mysql_source_with_metadata(
+            {"nested": {"value": value}, "enabled": True}
+        ),
+    )
+    loaded = repository.get_map_project_source(
+        "source_project", stored["source_uuid"]
+    )
+
+    assert loaded is not None
+    assert loaded["metadata"]["nested"]["value"] == value
+    assert type(loaded["metadata"]["nested"]["value"]) is int
+    assert loaded["metadata"]["enabled"] is True
+
+
+@pytest.mark.parametrize("value", [-(2**53), 2**53, 10**400])
+def test_mysql_source_metadata_rejects_integers_outside_safe_range_before_sql(
+    mysql_db, value: int
+) -> None:
+    repository = _repository()
+    repository.save_map_project("source_project", _project(), None)
+
+    with pytest.raises(
+        MapProjectSourceValidationError,
+        match=r"metadata \$\.nested\.value.*safe integer",
+    ):
+        repository.store_map_project_source(
+            "source_project",
+            _mysql_source_with_metadata({"nested": {"value": value}}),
+        )
+
+    assert mysql_db.one("SELECT COUNT(*) AS count FROM map_project_sources")[
+        "count"
+    ] == 0

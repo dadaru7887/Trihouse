@@ -80,6 +80,43 @@ class PhysicalFeatureImportError(ValueError):
     """Raised when a physical-feature JSONL source violates its data contract."""
 
 
+@dataclass(frozen=True)
+class _JsonObjectPairs:
+    pairs: tuple[tuple[str, Any], ...]
+
+
+class _DuplicateJsonKey(ValueError):
+    def __init__(self, path: str):
+        self.path = path
+        super().__init__(path)
+
+
+def _strict_json_value(line: str) -> Any:
+    """Decode JSON while retaining object pairs long enough to reject duplicates."""
+    parsed = json.loads(
+        line,
+        object_pairs_hook=lambda pairs: _JsonObjectPairs(tuple(pairs)),
+    )
+
+    def materialize(value: Any, path: str) -> Any:
+        if isinstance(value, _JsonObjectPairs):
+            result: dict[str, Any] = {}
+            for key, nested in value.pairs:
+                field_path = key if path == "$" else f"{path}.{key}"
+                if key in result:
+                    raise _DuplicateJsonKey(field_path)
+                result[key] = materialize(nested, field_path)
+            return result
+        if isinstance(value, list):
+            return [
+                materialize(nested, f"{path}[{index}]")
+                for index, nested in enumerate(value)
+            ]
+        return value
+
+    return materialize(parsed, "$")
+
+
 @dataclass(frozen=True, slots=True)
 class MapPose:
     x: float
@@ -500,7 +537,11 @@ class PhysicalFeatureImporter:
                     f"line {line_number}: blank JSONL records are not supported"
                 )
             try:
-                record = json.loads(line)
+                record = _strict_json_value(line)
+            except _DuplicateJsonKey as error:
+                raise PhysicalFeatureImportError(
+                    f"line {line_number}: duplicate JSON key at {error.path}"
+                ) from error
             except json.JSONDecodeError as error:
                 raise PhysicalFeatureImportError(
                     f"line {line_number}: invalid JSON"
