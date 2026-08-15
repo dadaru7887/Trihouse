@@ -45,6 +45,32 @@ CREATE TABLE IF NOT EXISTS map_projects (
   CONSTRAINT chk_map_projects_payload CHECK (JSON_TYPE(payload) = 'OBJECT')
 ) ENGINE=InnoDB COMMENT='Stores editable map projects used to generate Open-RMF artifacts.';
 
+-- [지도 편집 원본] 업로드된 지도·도면·실측 feature 원본을 프로젝트별 불변 row로 보관한다.
+CREATE TABLE IF NOT EXISTS map_project_sources (
+  source_uuid   CHAR(36) NOT NULL COMMENT 'Immutable UUID of the uploaded project source.',
+  project_id    BIGINT UNSIGNED NOT NULL COMMENT 'Identifier of the project that owns this source row.',
+  source_type   VARCHAR(32) NOT NULL COMMENT 'Constrained category of the uploaded map source.',
+  file_name     VARCHAR(255) NOT NULL COMMENT 'Original file name supplied for this source.',
+  mime_type     VARCHAR(128) NOT NULL COMMENT 'Media type declared for the source bytes.',
+  content_bytes LONGBLOB NOT NULL COMMENT 'Immutable original bytes of the uploaded source.',
+  sha256        CHAR(64) NOT NULL COMMENT 'Lowercase SHA-256 digest of the source bytes.',
+  byte_size     BIGINT UNSIGNED NOT NULL COMMENT 'Size of the source content in bytes.',
+  metadata      JSON NULL COMMENT 'Optional source-specific metadata object.',
+  created_at    DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'Timestamp when the immutable source row was created.',
+  PRIMARY KEY (source_uuid),
+  KEY idx_map_project_sources_project (project_id, source_type, created_at),
+  CONSTRAINT fk_map_project_sources_project FOREIGN KEY (project_id)
+    REFERENCES map_projects(project_id) ON DELETE CASCADE,
+  CONSTRAINT chk_map_project_sources_type CHECK (source_type IN
+    ('slam_yaml','slam_image','floor_plan','physical_features_import')),
+  CONSTRAINT chk_map_project_sources_hash CHECK
+    (sha256 REGEXP '^[0-9a-f]{64}$' AND byte_size > 0),
+  CONSTRAINT chk_map_project_sources_metadata CHECK
+    (metadata IS NULL OR JSON_TYPE(metadata) = 'OBJECT'),
+  CONSTRAINT chk_map_project_sources_uuid CHECK
+    (source_uuid REGEXP '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+) ENGINE=InnoDB COMMENT='Stores immutable binary map sources scoped to one editable map project.';
+
 CREATE TABLE IF NOT EXISTS map_project_waypoints (
   waypoint_uuid       CHAR(36) NOT NULL COMMENT 'Immutable waypoint UUID.',
   project_id          BIGINT UNSIGNED NOT NULL COMMENT 'Identifier of the parent map project.',
@@ -211,7 +237,7 @@ CREATE TABLE IF NOT EXISTS locations (
 CREATE TABLE IF NOT EXISTS map_features (
   feature_id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'Identifier of the related feature.',
   map_name            VARCHAR(96) NOT NULL COMMENT 'Name of the map.',
-  map_revision        VARCHAR(128) NOT NULL COMMENT 'Map revision for this record.',
+  map_revision        VARCHAR(160) NOT NULL COMMENT 'Map revision for this record.',
   feature_code        VARCHAR(128) NOT NULL COMMENT 'Business code for feature.',
   feature_type        VARCHAR(24) NOT NULL COMMENT 'Code identifying the feature type.',
   location_id         BIGINT UNSIGNED NULL COMMENT 'Identifier of the related location.',
@@ -227,7 +253,8 @@ CREATE TABLE IF NOT EXISTS map_features (
   CONSTRAINT fk_map_features_location FOREIGN KEY (location_id)
     REFERENCES locations (location_id),
   CONSTRAINT chk_map_features_type CHECK (feature_type IN
-    ('fiducial','static_obstacle','bottleneck','door','no_go_zone')),
+    ('fiducial','static_obstacle','bottleneck','door','no_go_zone',
+     'facility_footprint','safety_zone','speed_zone','camera')),
   CONSTRAINT chk_map_features_marker CHECK
     ((feature_type = 'fiducial' AND marker_code IS NOT NULL) OR
      (feature_type <> 'fiducial' AND marker_code IS NULL))

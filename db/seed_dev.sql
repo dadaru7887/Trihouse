@@ -146,9 +146,11 @@ INSERT INTO device_states
    battery_pct, progress, details)
 VALUES
   ('PK_01', '2026-08-03 09:00:00.000000', 'idle', 'ok',
-   2.0, 2.0, 3.141593, 92.00, 0.0000, JSON_OBJECT('source', 'dev_seed')),
+   NULL, NULL, NULL, 92.00, 0.0000,
+   JSON_OBJECT('source', 'dev_seed', 'pose_source', 'deployment_charger_import')),
   ('PK_02', '2026-08-03 09:00:00.000000', 'idle', 'ok',
-   2.5, 2.0, 3.141593, 88.00, 0.0000, JSON_OBJECT('source', 'dev_seed')),
+   NULL, NULL, NULL, 88.00, 0.0000,
+   JSON_OBJECT('source', 'dev_seed', 'pose_source', 'deployment_charger_import')),
   ('OMX_01', '2026-08-03 09:00:00.000000', 'idle', 'ok',
    NULL, NULL, NULL, NULL, 0.0000, JSON_OBJECT('source', 'dev_seed')),
   ('OMX_02', '2026-08-03 09:00:00.000000', 'idle', 'ok',

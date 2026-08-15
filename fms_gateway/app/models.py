@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class DeviceView(BaseModel):
@@ -216,6 +216,34 @@ class RmfDispatchAccepted(BaseModel):
     job_step_id: int
     state: str
     rmf_task_id: str | None = None
+
+
+MapProjectSourceType = Literal[
+    "slam_yaml",
+    "slam_image",
+    "floor_plan",
+    "physical_features_import",
+]
+
+
+class MapProjectSourceView(BaseModel):
+    """Project-scoped immutable source metadata; source bytes stay server-side."""
+
+    model_config = ConfigDict(frozen=True)
+
+    source_uuid: str = Field(
+        pattern=(
+            r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        )
+    )
+    source_type: MapProjectSourceType
+    file_name: str = Field(min_length=1, max_length=255)
+    mime_type: str = Field(min_length=1, max_length=128)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    byte_size: int = Field(gt=0)
+    metadata: dict[str, Any] | None = None
+    created_at: datetime
 
 
 class MapProjectFile(BaseModel):

@@ -31,6 +31,7 @@ FMS_TABLES = {
     "map_project_fleets",
     "map_project_lanes",
     "map_project_robots",
+    "map_project_sources",
     "map_project_waypoints",
     "map_projects",
     "map_revisions",
@@ -71,6 +72,88 @@ def test_recovery_memory_tables_are_created(mysql_db, recovery_mysql_db):
 
     assert {row["table_name"] for row in fms_tables} == FMS_TABLES
     assert {row["table_name"] for row in recovery_tables} == RECOVERY_TABLES
+
+
+def test_map_project_sources_allow_same_hash_in_separate_projects(mysql_db):
+    for map_name in ("source_project_a", "source_project_b"):
+        mysql_db.execute(
+            """
+            INSERT INTO map_projects (map_name, format_version, payload)
+            VALUES (%s, 1, JSON_OBJECT())
+            """,
+            (map_name,),
+        )
+
+    digest = "a" * 64
+    mysql_db.execute(
+        """
+        INSERT INTO map_project_sources
+          (source_uuid, project_id, source_type, file_name, mime_type,
+           content_bytes, sha256, byte_size, metadata)
+        SELECT %s, project_id, 'physical_features_import', %s,
+               'application/x-ndjson', %s, %s, 3, JSON_OBJECT('schema_version', 1)
+        FROM map_projects WHERE map_name = %s
+        """,
+        (
+            "00000000-0000-0000-0000-000000000601",
+            "features-a.jsonl",
+            b"abc",
+            digest,
+            "source_project_a",
+        ),
+    )
+    mysql_db.execute(
+        """
+        INSERT INTO map_project_sources
+          (source_uuid, project_id, source_type, file_name, mime_type,
+           content_bytes, sha256, byte_size)
+        SELECT %s, project_id, 'physical_features_import', %s,
+               'application/x-ndjson', %s, %s, 3
+        FROM map_projects WHERE map_name = %s
+        """,
+        (
+            "00000000-0000-0000-0000-000000000602",
+            "features-b.jsonl",
+            b"abc",
+            digest,
+            "source_project_b",
+        ),
+    )
+
+    rows = mysql_db.all(
+        """
+        SELECT p.map_name, s.source_uuid, s.sha256
+        FROM map_project_sources s
+        JOIN map_projects p ON p.project_id = s.project_id
+        ORDER BY p.map_name
+        """
+    )
+    assert [(row["map_name"], row["sha256"]) for row in rows] == [
+        ("source_project_a", digest),
+        ("source_project_b", digest),
+    ]
+    assert rows[0]["source_uuid"] != rows[1]["source_uuid"]
+
+
+def test_map_features_accept_planned_types_at_full_revision_width(mysql_db):
+    revision = "r" * 160
+    for index, feature_type in enumerate(
+        ("facility_footprint", "safety_zone", "speed_zone", "camera"), start=1
+    ):
+        mysql_db.execute(
+            """
+            INSERT INTO map_features
+              (map_name, map_revision, feature_code, feature_type, geometry)
+            VALUES ('feature_contract', %s, %s, %s,
+                    JSON_OBJECT('type', 'Point', 'coordinates', JSON_ARRAY(0, 0)))
+            """,
+            (revision, f"FEATURE-{index}", feature_type),
+        )
+
+    assert mysql_db.one(
+        "SELECT COUNT(*) AS count FROM map_features WHERE map_revision = %s",
+        (revision,),
+    )["count"] == 4
 
 
 def test_all_tables_have_english_comments(mysql_db):
@@ -370,6 +453,30 @@ def _apply_seed_twice(mysql_db):
     execute_sql_script(mysql_db.connection, SEED_PATH)
     after = mysql_db.one("SELECT NOW(6) AS now")["now"]
     return before, after
+
+
+def test_development_seed_defers_mobile_pose_to_deployment_import(mysql_db):
+    _apply_seed_twice(mysql_db)
+
+    states = mysql_db.all(
+        """
+        SELECT device_id, pose_x, pose_y, pose_yaw, details
+        FROM device_states
+        WHERE device_id IN ('PK_01', 'PK_02')
+        ORDER BY device_id
+        """
+    )
+
+    assert [row["device_id"] for row in states] == ["PK_01", "PK_02"]
+    assert all(
+        row[column] is None
+        for row in states
+        for column in ("pose_x", "pose_y", "pose_yaw")
+    )
+    assert all(
+        json.loads(row["details"])["pose_source"] == "deployment_charger_import"
+        for row in states
+    )
 
 
 def test_development_seed_is_idempotent_and_has_location_hierarchy(mysql_db):

@@ -67,6 +67,14 @@ class FmsRepository(Protocol):
 
     def get_map_project(self, map_name: str) -> dict[str, Any] | None: ...
 
+    def store_map_project_source(
+        self, map_name: str, source: dict[str, Any]
+    ) -> dict[str, Any]: ...
+
+    def get_map_project_source(
+        self, map_name: str, source_uuid: str
+    ) -> dict[str, Any] | None: ...
+
     def save_map_project(
         self, map_name: str, project: dict[str, Any], expected_revision: int | None
     ) -> dict[str, Any]: ...
@@ -136,6 +144,41 @@ class MapProjectValidationError(Exception):
 
 class PublishedMapProjectDeleteConflict(Exception):
     pass
+
+
+MAP_PROJECT_SOURCE_TYPES = frozenset(
+    {"slam_yaml", "slam_image", "floor_plan", "physical_features_import"}
+)
+
+
+def _new_map_project_source(source: dict[str, Any]) -> dict[str, Any]:
+    """Validate immutable source input and derive its identity metadata from bytes."""
+    source_type = source.get("source_type")
+    if source_type not in MAP_PROJECT_SOURCE_TYPES:
+        raise ValueError("unsupported map project source_type")
+    file_name = source.get("file_name")
+    if not isinstance(file_name, str) or not file_name or len(file_name) > 255:
+        raise ValueError("file_name must be between 1 and 255 characters")
+    mime_type = source.get("mime_type")
+    if not isinstance(mime_type, str) or not mime_type or len(mime_type) > 128:
+        raise ValueError("mime_type must be between 1 and 128 characters")
+    content = source.get("content_bytes")
+    if not isinstance(content, (bytes, bytearray)) or not content:
+        raise ValueError("content_bytes must be non-empty bytes")
+    metadata = source.get("metadata")
+    if metadata is not None and not isinstance(metadata, dict):
+        raise ValueError("metadata must be an object or null")
+    content_bytes = bytes(content)
+    return {
+        "source_uuid": str(uuid.uuid4()),
+        "source_type": source_type,
+        "file_name": file_name,
+        "mime_type": mime_type,
+        "content_bytes": content_bytes,
+        "sha256": hashlib.sha256(content_bytes).hexdigest(),
+        "byte_size": len(content_bytes),
+        "metadata": deepcopy(metadata),
+    }
 
 
 PROJECT1_LOCATION_CODES = {
@@ -532,6 +575,82 @@ class MySqlFmsRepository:
     def get_map_project(self, map_name: str) -> dict[str, Any] | None:
         with self.database.connection() as connection:
             return self._load_map_project(connection, map_name)
+
+    def store_map_project_source(
+        self, map_name: str, source: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Append one immutable source row; equal bytes in another project stay distinct."""
+        stored = _new_map_project_source(source)
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                cursor.execute(
+                    "SELECT project_id FROM map_projects WHERE map_name = %s FOR UPDATE",
+                    (map_name,),
+                )
+                project = cursor.fetchone()
+                if project is None:
+                    raise MapProjectNotFound
+                cursor.execute(
+                    """
+                    INSERT INTO map_project_sources
+                      (source_uuid, project_id, source_type, file_name, mime_type,
+                       content_bytes, sha256, byte_size, metadata)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        stored["source_uuid"],
+                        project["project_id"],
+                        stored["source_type"],
+                        stored["file_name"],
+                        stored["mime_type"],
+                        stored["content_bytes"],
+                        stored["sha256"],
+                        stored["byte_size"],
+                        json.dumps(stored["metadata"], ensure_ascii=False)
+                        if stored["metadata"] is not None
+                        else None,
+                    ),
+                )
+                cursor.execute(
+                    """
+                    SELECT s.source_uuid, p.map_name, s.source_type, s.file_name,
+                           s.mime_type, s.content_bytes, s.sha256, s.byte_size,
+                           s.metadata, s.created_at
+                    FROM map_project_sources s
+                    JOIN map_projects p ON p.project_id = s.project_id
+                    WHERE s.source_uuid = %s
+                    """,
+                    (stored["source_uuid"],),
+                )
+                result = _seoul_datetimes(dict(cursor.fetchone()))
+                result["metadata"] = _json(result["metadata"])
+                connection.commit()
+                return result
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                cursor.close()
+
+    def get_map_project_source(
+        self, map_name: str, source_uuid: str
+    ) -> dict[str, Any] | None:
+        rows = self._all(
+            """
+            SELECT s.source_uuid, p.map_name, s.source_type, s.file_name,
+                   s.mime_type, s.content_bytes, s.sha256, s.byte_size,
+                   s.metadata, s.created_at
+            FROM map_project_sources s
+            JOIN map_projects p ON p.project_id = s.project_id
+            WHERE p.map_name = %s AND s.source_uuid = %s
+            """,
+            (map_name, source_uuid),
+        )
+        if not rows:
+            return None
+        rows[0]["metadata"] = _json(rows[0]["metadata"])
+        return rows[0]
 
     def save_map_project(
         self, map_name: str, project: dict[str, Any], expected_revision: int | None
@@ -1986,6 +2105,7 @@ class InMemoryFmsRepository:
         self._device_states: dict[str, dict[str, Any]] = {}
         self._task_events: dict[str, dict[str, Any]] = {}
         self._map_projects: dict[str, dict[str, Any]] = {}
+        self._map_project_sources: dict[str, dict[str, dict[str, Any]]] = {}
         self._map_publications: dict[str, dict[str, Any]] = {}
         self._map_publications_by_revision: dict[str, dict[str, Any]] = {}
 
@@ -2019,6 +2139,25 @@ class InMemoryFmsRepository:
         if project is None:
             return None
         return {**self._map_summary(project), **deepcopy(project)}
+
+    def store_map_project_source(
+        self, map_name: str, source: dict[str, Any]
+    ) -> dict[str, Any]:
+        if map_name not in self._map_projects:
+            raise MapProjectNotFound
+        stored = {
+            **_new_map_project_source(source),
+            "map_name": map_name,
+            "created_at": datetime.now(SEOUL),
+        }
+        self._map_project_sources.setdefault(map_name, {})[stored["source_uuid"]] = stored
+        return deepcopy(stored)
+
+    def get_map_project_source(
+        self, map_name: str, source_uuid: str
+    ) -> dict[str, Any] | None:
+        stored = self._map_project_sources.get(map_name, {}).get(source_uuid)
+        return deepcopy(stored) if stored is not None else None
 
     def save_map_project(
         self, map_name: str, project: dict[str, Any], expected_revision: int | None
