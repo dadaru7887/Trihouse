@@ -47,6 +47,14 @@ class FmsRepository(Protocol):
 
     def get_job_timeline(self, job_id: int) -> list[dict[str, Any]] | None: ...
 
+    def complete_worker_packing(
+        self, job_id: int, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]: ...
+
+    def assign_job_resources(
+        self, job_id: int, assignment: dict[str, Any]
+    ) -> dict[str, Any]: ...
+
     def dispatch_step(
         self, job_step_id: int, request: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]: ...
@@ -151,6 +159,26 @@ class OutboundOrderActiveMapUnavailable(Exception):
 
 
 class JobNotFound(Exception):
+    pass
+
+
+class ManualAcknowledgementRequired(Exception):
+    def __init__(self, item_ids: tuple[int, ...]):
+        super().__init__("manual-required items must be acknowledged")
+        self.item_ids = item_ids
+
+
+class WorkerCompletionConflict(Exception):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+class ResourceAssignmentConflict(Exception):
+    pass
+
+
+class ResourceUnavailable(Exception):
     pass
 
 
@@ -750,6 +778,17 @@ def _seoul_datetimes(row: dict[str, object]) -> dict[str, object]:
         if isinstance(value, datetime) and value.tzinfo is None:
             row[key] = value.replace(tzinfo=SEOUL)
     return row
+
+
+def _json_safe(value: object) -> object:
+    """Detach repository responses into JSON-compatible idempotency payloads."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _json_safe(nested) for key, nested in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(nested) for nested in value]
+    return value
 
 
 class MySqlFmsRepository:
@@ -2758,41 +2797,669 @@ class MySqlFmsRepository:
             finally:
                 cursor.close()
 
-    def get_job(self, job_id: int) -> dict[str, Any] | None:
+    def assign_job_resources(
+        self, job_id: int, assignment: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Persist one complete revision and reserve all exclusive resources."""
+        expected_chargers = {
+            "PK_01": "TRIHOUSE-TEST-01-CHG-01",
+            "PK_02": "TRIHOUSE-TEST-01-CHG-02",
+        }
+        revision = int(assignment["revision"])
+        response = {"job_id": job_id, **assignment}
         with self.database.connection() as connection:
             cursor = connection.cursor(dictionary=True)
             try:
                 cursor.execute(
                     """
-                    SELECT job_id, job_code, operation_type, priority, state,
-                           requested_by, external_reference, source_location_id,
-                           destination_location_id, due_at, context, created_at
-                    FROM jobs WHERE job_id = %s
+                    SELECT job_id, state, context
+                    FROM jobs WHERE job_id = %s FOR UPDATE
                     """,
                     (job_id,),
                 )
-                row = cursor.fetchone()
-                if row is None:
-                    return None
-                job = _seoul_datetimes(dict(row))
-                job["context"] = _json(job.get("context")) or {}
+                job = cursor.fetchone()
+                if job is None:
+                    raise JobNotFound
+                context = _json(job.get("context")) or {}
+                current = context.get("assignment")
+                if current is not None:
+                    current_response = {"job_id": job_id, **current}
+                    if current_response == response:
+                        return current_response
+                    if revision <= int(current.get("revision", 0)):
+                        raise ResourceAssignmentConflict("ASSIGNMENT_REVISION_CONFLICT")
+                    if revision != int(current.get("revision", 0)) + 1:
+                        raise ResourceAssignmentConflict("ASSIGNMENT_REVISION_GAP")
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS active_steps FROM job_steps
+                        WHERE job_id = %s AND state IN ('running','succeeded')
+                        """,
+                        (job_id,),
+                    )
+                    if int(cursor.fetchone()["active_steps"]):
+                        raise ResourceAssignmentConflict("ASSIGNMENT_ALREADY_EXECUTING")
+                elif revision != 1:
+                    raise ResourceAssignmentConflict("INITIAL_ASSIGNMENT_REVISION_MUST_BE_ONE")
+
+                expected_charger = expected_chargers.get(assignment["mobile_id"])
+                if expected_charger != assignment["charger_code"]:
+                    raise ResourceAssignmentConflict("FIXED_CHARGER_MISMATCH")
+
+                device_ids = sorted((assignment["mobile_id"], assignment["omx_id"]))
                 cursor.execute(
                     """
-                    SELECT job_step_id, step_no, executor_type, assigned_device_id,
-                           assignment_revision, action_type, target_location_id,
-                           state, rmf_task_id, input, result, started_at, completed_at
-                    FROM job_steps WHERE job_id = %s ORDER BY step_no
+                    SELECT device.device_id, device.device_type, device.active,
+                           device.control_mode, state.state AS runtime_state,
+                           state.health
+                    FROM devices device
+                    LEFT JOIN device_states state ON state.device_id = device.device_id
+                    WHERE device.device_id IN (%s, %s)
+                    ORDER BY device.device_id
+                    FOR UPDATE
+                    """,
+                    tuple(device_ids),
+                )
+                devices = {row["device_id"]: row for row in cursor.fetchall()}
+                if set(devices) != set(device_ids):
+                    raise ResourceUnavailable("assigned device is not registered")
+                if devices[assignment["mobile_id"]]["device_type"] != "mobile":
+                    raise ResourceAssignmentConflict("MOBILE_DEVICE_TYPE_MISMATCH")
+                if devices[assignment["omx_id"]]["device_type"] != "arm":
+                    raise ResourceAssignmentConflict("OMX_DEVICE_TYPE_MISMATCH")
+                if any(
+                    not row["active"]
+                    or row["control_mode"] != "automatic"
+                    or row["runtime_state"] not in {"idle", "charging"}
+                    or row["health"] != "ok"
+                    for row in devices.values()
+                ):
+                    raise ResourceUnavailable("assigned device is not available")
+
+                location_codes = sorted(
+                    (assignment["packing_dock_code"], assignment["charger_code"])
+                )
+                cursor.execute(
+                    """
+                    SELECT location_id, location_code, map_name
+                    FROM locations
+                    WHERE location_code IN (%s, %s)
+                    ORDER BY location_code
+                    FOR UPDATE
+                    """,
+                    tuple(location_codes),
+                )
+                locations = {row["location_code"]: row for row in cursor.fetchall()}
+                if set(locations) != set(location_codes) or any(
+                    row["map_name"] != "trihouse_test_01" for row in locations.values()
+                ):
+                    raise ResourceAssignmentConflict("CANONICAL_MAP_RESOURCE_REQUIRED")
+
+                resource_params = (
+                    assignment["mobile_id"],
+                    assignment["omx_id"],
+                    locations[assignment["packing_dock_code"]]["location_id"],
+                )
+                cursor.execute(
+                    """
+                    SELECT reservation_id FROM reservations
+                    WHERE state IN ('reserved','in_use')
+                      AND (device_id IN (%s, %s) OR location_id = %s)
+                    ORDER BY active_resource_key
+                    FOR UPDATE
+                    """,
+                    resource_params,
+                )
+                conflicts = list(cursor.fetchall())
+                if conflicts:
+                    raise ResourceUnavailable("one or more resources are already reserved")
+
+                if current is not None:
+                    cursor.execute(
+                        """
+                        UPDATE reservations
+                        SET state = 'released', released_at = NOW(6)
+                        WHERE job_id = %s AND state IN ('reserved','in_use')
+                        """,
+                        (job_id,),
+                    )
+                context["assignment"] = dict(assignment)
+                cursor.execute(
+                    """
+                    UPDATE jobs
+                    SET state = 'assigned', assigned_mobile_id = %s,
+                        destination_location_id = %s, context = %s,
+                        revision = revision + 1
+                    WHERE job_id = %s
+                    """,
+                    (
+                        assignment["mobile_id"],
+                        locations[assignment["packing_dock_code"]]["location_id"],
+                        json.dumps(context, ensure_ascii=False),
+                        job_id,
+                    ),
+                )
+                cursor.execute(
+                    """
+                    UPDATE job_steps
+                    SET assigned_device_id = CASE executor_type
+                          WHEN 'mobile' THEN %s WHEN 'arm' THEN %s ELSE NULL END,
+                        assignment_revision = %s
+                    WHERE job_id = %s
+                    """,
+                    (
+                        assignment["mobile_id"],
+                        assignment["omx_id"],
+                        revision,
+                        job_id,
+                    ),
+                )
+                for device_id in sorted(
+                    (assignment["mobile_id"], assignment["omx_id"])
+                ):
+                    cursor.execute(
+                        """
+                        INSERT INTO reservations
+                          (job_id, device_id, reservation_mode, state, expires_at)
+                        VALUES (%s, %s, 'exclusive_lock', 'reserved',
+                                DATE_ADD(NOW(6), INTERVAL 4 HOUR))
+                        """,
+                        (job_id, device_id),
+                    )
+                cursor.execute(
+                    """
+                    INSERT INTO reservations
+                      (job_id, location_id, reservation_mode, state, expires_at)
+                    VALUES (%s, %s, 'exclusive_lock', 'reserved',
+                            DATE_ADD(NOW(6), INTERVAL 4 HOUR))
+                    """,
+                    (
+                        job_id,
+                        locations[assignment["packing_dock_code"]]["location_id"],
+                    ),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO operation_events
+                      (event_uuid, occurred_at, job_id, severity, category,
+                       event_type, message, payload)
+                    VALUES (%s, NOW(6), %s, 'info', 'policy',
+                            'job.assignment.persisted',
+                            'Control Tower assignment persisted', %s)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        job_id,
+                        json.dumps({"assignment": assignment}, ensure_ascii=False),
+                    ),
+                )
+                connection.commit()
+                return response
+            except Exception as error:
+                connection.rollback()
+                if getattr(error, "errno", None) == 1062:
+                    raise ResourceUnavailable(
+                        "one or more resources were reserved concurrently"
+                    ) from error
+                raise
+            finally:
+                cursor.close()
+
+    @staticmethod
+    def _job_detail_from_cursor(cursor, job_id: int) -> dict[str, Any] | None:
+        cursor.execute(
+            """
+            SELECT job_id, job_code, operation_type, priority, state,
+                   requested_by, external_reference, source_location_id,
+                   destination_location_id, due_at, context, created_at
+            FROM jobs WHERE job_id = %s
+            """,
+            (job_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        job = _seoul_datetimes(dict(row))
+        job["context"] = _json(job.get("context")) or {}
+        cursor.execute(
+            """
+            SELECT job_item_id, product_code, requested_qty, completed_qty,
+                   lot_id, handling_unit_code, verification_state, metadata
+            FROM job_items WHERE job_id = %s ORDER BY job_item_id
+            """,
+            (job_id,),
+        )
+        items = []
+        for item_row in cursor.fetchall():
+            item = dict(item_row)
+            item["metadata"] = _json(item.get("metadata")) or {}
+            items.append(item)
+        job["items"] = items
+        cursor.execute(
+            """
+            SELECT job_step_id, step_no, executor_type, assigned_device_id,
+                   assignment_revision, action_type, target_location_id,
+                   state, rmf_task_id, input, result, started_at, completed_at
+            FROM job_steps WHERE job_id = %s ORDER BY step_no
+            """,
+            (job_id,),
+        )
+        steps = []
+        for step_row in cursor.fetchall():
+            step = _seoul_datetimes(dict(step_row))
+            step["input"] = _json(step.get("input")) or {}
+            step["result"] = _json(step.get("result"))
+            steps.append(step)
+        job["steps"] = steps
+        return job
+
+    def get_job(self, job_id: int) -> dict[str, Any] | None:
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                return self._job_detail_from_cursor(cursor, job_id)
+            finally:
+                cursor.close()
+
+    def complete_worker_packing(
+        self, job_id: int, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """Finalize physical stock and enqueue the fixed return in one transaction."""
+        canonical_request = {
+            "worker_id": request["worker_id"],
+            "completion_note": request.get("completion_note"),
+            "acknowledged_manual_item_ids": sorted(
+                set(request.get("acknowledged_manual_item_ids", []))
+            ),
+        }
+        fingerprint = {"job_id": job_id, "request": canonical_request}
+        event_uuid = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"trihouse:worker-completion:{idempotency_key}",
+            )
+        )
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                # Global lock order: Job -> relevant Steps -> Items -> lots -> ledger.
+                cursor.execute(
+                    """
+                    SELECT job_id, state, assigned_mobile_id,
+                           destination_location_id, context
+                    FROM jobs WHERE job_id = %s FOR UPDATE
                     """,
                     (job_id,),
                 )
-                steps = []
-                for step_row in cursor.fetchall():
-                    step = _seoul_datetimes(dict(step_row))
-                    step["input"] = _json(step.get("input")) or {}
-                    step["result"] = _json(step.get("result"))
-                    steps.append(step)
-                job["steps"] = steps
-                return job
+                job = cursor.fetchone()
+                if job is None:
+                    raise JobNotFound
+                cursor.execute(
+                    "SELECT payload FROM operation_events WHERE event_uuid = %s",
+                    (event_uuid,),
+                )
+                replay_event = cursor.fetchone()
+                if replay_event is not None:
+                    replay_payload = _json(replay_event["payload"]) or {}
+                    if replay_payload.get("request") != fingerprint:
+                        raise IdempotencyConflict
+                    if replay_payload.get("response") is None:
+                        raise RuntimeError(
+                            "completion idempotency response was not committed"
+                        )
+                    return replay_payload["response"]
+                context = _json(job.get("context")) or {}
+                assignment = context.get("assignment") or {}
+                if not assignment:
+                    raise WorkerCompletionConflict("ASSIGNMENT_REQUIRED")
+
+                cursor.execute(
+                    "SELECT active FROM workers WHERE worker_id = %s",
+                    (canonical_request["worker_id"],),
+                )
+                worker = cursor.fetchone()
+                if worker is None or not worker["active"]:
+                    raise WorkerCompletionConflict("ACTIVE_WORKER_REQUIRED")
+
+                cursor.execute(
+                    """
+                    INSERT IGNORE INTO operation_events
+                      (event_uuid, occurred_at, actor_worker_id, job_id,
+                       severity, category, event_type, message, payload)
+                    VALUES (%s, NOW(6), %s, %s, 'info', 'inventory',
+                            'worker.packing.completed',
+                            'worker completed outbound packing', %s)
+                    """,
+                    (
+                        event_uuid,
+                        canonical_request["worker_id"],
+                        job_id,
+                        json.dumps(
+                            {"request": fingerprint, "response": None},
+                            ensure_ascii=False,
+                        ),
+                    ),
+                )
+                owns_key = cursor.rowcount == 1
+                if not owns_key:
+                    cursor.execute(
+                        "SELECT payload FROM operation_events WHERE event_uuid = %s",
+                        (event_uuid,),
+                    )
+                    existing = cursor.fetchone()
+                    if existing is None:
+                        raise RuntimeError("completion idempotency event was not readable")
+                    payload = _json(existing["payload"]) or {}
+                    if payload.get("request") != fingerprint:
+                        raise IdempotencyConflict
+                    if payload.get("response") is None:
+                        raise RuntimeError("completion idempotency response was not committed")
+                    return payload["response"]
+
+                cursor.execute(
+                    """
+                    SELECT job_step_id, step_no, action_type,
+                           target_location_id, state, input,
+                           assigned_device_id, assignment_revision
+                    FROM job_steps
+                    WHERE job_id = %s
+                      AND action_type IN ('handover','wait','return_home')
+                    ORDER BY step_no
+                    FOR UPDATE
+                    """,
+                    (job_id,),
+                )
+                steps = [dict(row) for row in cursor.fetchall()]
+                packing_handover = [
+                    step
+                    for step in steps
+                    if step["action_type"] == "handover"
+                    and step["target_location_id"] == job["destination_location_id"]
+                ]
+                waits = [step for step in steps if step["action_type"] == "wait"]
+                returns = [
+                    step for step in steps if step["action_type"] == "return_home"
+                ]
+                if (
+                    len(packing_handover) != 1
+                    or packing_handover[0]["state"] != "succeeded"
+                    or len(waits) != 1
+                    or waits[0]["state"] not in {"pending", "running"}
+                    or len(returns) != 1
+                    or returns[0]["state"] != "pending"
+                ):
+                    raise WorkerCompletionConflict("PACKING_NOT_READY")
+                wait_step = waits[0]
+                return_step = returns[0]
+
+                cursor.execute(
+                    """
+                    SELECT job_item_id, product_code, requested_qty,
+                           completed_qty, lot_id, verification_state, metadata
+                    FROM job_items WHERE job_id = %s
+                    ORDER BY job_item_id
+                    FOR UPDATE
+                    """,
+                    (job_id,),
+                )
+                items = []
+                for row in cursor.fetchall():
+                    item = dict(row)
+                    item["metadata"] = _json(item.get("metadata")) or {}
+                    items.append(item)
+                lot_ids = sorted(
+                    {int(item["lot_id"]) for item in items if item["lot_id"] is not None}
+                )
+                lots: dict[int, dict[str, Any]] = {}
+                if lot_ids:
+                    placeholders = ", ".join(["%s"] * len(lot_ids))
+                    cursor.execute(
+                        f"""
+                        SELECT lot_id, available_qty, reserved_qty
+                        FROM inventory_lots
+                        WHERE lot_id IN ({placeholders})
+                        ORDER BY lot_id
+                        FOR UPDATE
+                        """,
+                        tuple(lot_ids),
+                    )
+                    lots = {
+                        int(row["lot_id"]): dict(row) for row in cursor.fetchall()
+                    }
+                cursor.execute(
+                    """
+                    SELECT reservation_id, location_id, device_id, state
+                    FROM reservations WHERE job_id = %s
+                    ORDER BY reservation_id
+                    FOR UPDATE
+                    """,
+                    (job_id,),
+                )
+                reservations = [dict(row) for row in cursor.fetchall()]
+
+                manual_ids = tuple(
+                    int(item["job_item_id"])
+                    for item in items
+                    if item["verification_state"] == "manual_review"
+                    or item["metadata"].get("fulfillment_state")
+                    == "MANUAL_FULFILLMENT_REQUIRED"
+                )
+                acknowledged = set(
+                    canonical_request["acknowledged_manual_item_ids"]
+                )
+                missing = tuple(item_id for item_id in manual_ids if item_id not in acknowledged)
+                if missing:
+                    raise ManualAcknowledgementRequired(missing)
+                known_item_ids = {int(item["job_item_id"]) for item in items}
+                if not acknowledged <= known_item_ids:
+                    raise WorkerCompletionConflict("UNKNOWN_ITEM_ACKNOWLEDGEMENT")
+
+                required_by_lot: dict[int, int] = {}
+                completed_by_item: dict[int, int] = {}
+                for item in items:
+                    reserved_quantity = int(
+                        item["metadata"].get("reserved_quantity", 0)
+                    )
+                    completed_by_item[int(item["job_item_id"])] = reserved_quantity
+                    if item["lot_id"] is not None and reserved_quantity:
+                        lot_id = int(item["lot_id"])
+                        required_by_lot[lot_id] = (
+                            required_by_lot.get(lot_id, 0) + reserved_quantity
+                        )
+                if set(required_by_lot) - set(lots):
+                    raise WorkerCompletionConflict("INVENTORY_LOT_MISSING")
+                for lot_id, quantity in sorted(required_by_lot.items()):
+                    lot = lots[lot_id]
+                    if (
+                        int(lot["available_qty"]) < quantity
+                        or int(lot["reserved_qty"]) < quantity
+                    ):
+                        raise WorkerCompletionConflict("INVENTORY_RESERVATION_MISMATCH")
+
+                for item in items:
+                    cursor.execute(
+                        """
+                        UPDATE job_items
+                        SET completed_qty = %s,
+                            verification_state = CASE
+                              WHEN verification_state = 'manual_review'
+                              THEN 'matched' ELSE verification_state END,
+                            metadata = JSON_SET(
+                              COALESCE(metadata, JSON_OBJECT()),
+                              '$.worker_completion_acknowledged', true
+                            )
+                        WHERE job_item_id = %s
+                        """,
+                        (
+                            completed_by_item[int(item["job_item_id"])],
+                            item["job_item_id"],
+                        ),
+                    )
+                for lot_id, quantity in sorted(required_by_lot.items()):
+                    lot = lots[lot_id]
+                    available_after = int(lot["available_qty"]) - quantity
+                    reserved_after = int(lot["reserved_qty"]) - quantity
+                    cursor.execute(
+                        """
+                        UPDATE inventory_lots
+                        SET available_qty = %s, reserved_qty = %s
+                        WHERE lot_id = %s
+                        """,
+                        (available_after, reserved_after, lot_id),
+                    )
+                    cursor.execute(
+                        """
+                        INSERT INTO inventory_moves
+                          (lot_id, job_id, job_step_id, move_type,
+                           quantity_delta, quantity_after, reserved_delta,
+                           reserved_after, recorded_by, note)
+                        VALUES (%s, %s, %s, 'outbound', %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            lot_id,
+                            job_id,
+                            wait_step["job_step_id"],
+                            -quantity,
+                            available_after,
+                            -quantity,
+                            reserved_after,
+                            canonical_request["worker_id"],
+                            canonical_request["completion_note"],
+                        ),
+                    )
+
+                active_packing = [
+                    reservation
+                    for reservation in reservations
+                    if reservation["location_id"] == job["destination_location_id"]
+                    and reservation["state"] in {"reserved", "in_use"}
+                ]
+                if len(active_packing) != 1:
+                    raise WorkerCompletionConflict("PACKING_RESERVATION_MISMATCH")
+                cursor.execute(
+                    """
+                    UPDATE reservations
+                    SET state = 'released', released_at = NOW(6)
+                    WHERE reservation_id = %s
+                    """,
+                    (active_packing[0]["reservation_id"],),
+                )
+                cursor.execute(
+                    """
+                    UPDATE job_steps
+                    SET state = 'succeeded', completed_at = NOW(6),
+                        result = %s
+                    WHERE job_step_id = %s
+                    """,
+                    (
+                        json.dumps(
+                            {
+                                "worker_id": canonical_request["worker_id"],
+                                "manual_item_acknowledgements": sorted(acknowledged),
+                            },
+                            ensure_ascii=False,
+                        ),
+                        wait_step["job_step_id"],
+                    ),
+                )
+
+                charger_code = assignment.get("charger_code")
+                expected_charger = {
+                    "PK_01": "TRIHOUSE-TEST-01-CHG-01",
+                    "PK_02": "TRIHOUSE-TEST-01-CHG-02",
+                }.get(job["assigned_mobile_id"])
+                if charger_code != expected_charger:
+                    raise WorkerCompletionConflict("FIXED_CHARGER_MISMATCH")
+                cursor.execute(
+                    """
+                    SELECT location_id FROM locations
+                    WHERE location_code = %s AND map_name = 'trihouse_test_01'
+                    """,
+                    (charger_code,),
+                )
+                charger = cursor.fetchone()
+                if charger is None:
+                    raise WorkerCompletionConflict("FIXED_CHARGER_NOT_FOUND")
+                assignment_revision = int(assignment["revision"])
+                cursor.execute(
+                    """
+                    UPDATE job_steps
+                    SET target_location_id = %s, assigned_device_id = %s,
+                        assignment_revision = %s,
+                        input = JSON_SET(
+                          COALESCE(input, JSON_OBJECT()),
+                          '$.charger_code', %s,
+                          '$.assignment_revision', %s
+                        )
+                    WHERE job_step_id = %s
+                    """,
+                    (
+                        charger["location_id"],
+                        job["assigned_mobile_id"],
+                        assignment_revision,
+                        charger_code,
+                        assignment_revision,
+                        return_step["job_step_id"],
+                    ),
+                )
+                return_key = (
+                    f"worker-completion:{job_id}:revision:{assignment_revision}:return-home"
+                )
+                return_payload = {
+                    "job_id": job_id,
+                    "job_step_id": int(return_step["job_step_id"]),
+                    "action_type": "return_home",
+                    "assigned_mobile_id": job["assigned_mobile_id"],
+                    "assignment_revision": assignment_revision,
+                    "charger_code": charger_code,
+                    "target_location_id": int(charger["location_id"]),
+                }
+                cursor.execute(
+                    """
+                    INSERT INTO integration_messages
+                      (message_id, direction, channel, device_id, job_step_id,
+                       message_type, idempotency_key, payload)
+                    VALUES (%s, 'outbound', 'rmf', %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        job["assigned_mobile_id"],
+                        return_step["job_step_id"],
+                        "return_home",
+                        return_key,
+                        json.dumps(return_payload, ensure_ascii=False),
+                    ),
+                )
+                cursor.execute(
+                    """
+                    UPDATE jobs
+                    SET state = 'running',
+                        state_reason_code = 'RETURNING_TO_FIXED_CHARGER'
+                    WHERE job_id = %s
+                    """,
+                    (job_id,),
+                )
+                response = self._job_detail_from_cursor(cursor, job_id)
+                assert response is not None
+                safe_response = _json_safe(response)
+                cursor.execute(
+                    """
+                    UPDATE operation_events SET payload = %s
+                    WHERE event_uuid = %s
+                    """,
+                    (
+                        json.dumps(
+                            {"request": fingerprint, "response": safe_response},
+                            ensure_ascii=False,
+                        ),
+                        event_uuid,
+                    ),
+                )
+                connection.commit()
+                return safe_response
+            except Exception:
+                connection.rollback()
+                raise
             finally:
                 cursor.close()
 
@@ -2831,8 +3498,11 @@ class MySqlFmsRepository:
                 cursor.execute(
                     """
                     SELECT js.job_step_id, js.job_id, js.step_no, js.executor_type,
-                           js.action_type, js.target_location_id, js.state, js.input
+                           js.action_type, js.target_location_id, js.state, js.input,
+                           js.assigned_device_id, js.assignment_revision,
+                           jobs.context AS job_context
                     FROM job_steps js
+                    JOIN jobs ON jobs.job_id = js.job_id
                     WHERE js.job_step_id = %s
                     FOR UPDATE
                     """,
@@ -2841,6 +3511,21 @@ class MySqlFmsRepository:
                 step = cursor.fetchone()
                 if step is None:
                     raise JobStepNotFound
+                job_context = _json(step.get("job_context")) or {}
+                if (
+                    job_context.get("source") == "public_product_order"
+                    and not job_context.get("assignment")
+                ):
+                    raise JobStepNotDispatchable
+                requested_device = request.get("assigned_device_id")
+                if (
+                    step.get("assigned_device_id") is not None
+                    and requested_device is not None
+                    and requested_device != step["assigned_device_id"]
+                ):
+                    raise ResourceAssignmentConflict(
+                        "DISPATCH_ASSIGNED_DEVICE_MISMATCH"
+                    )
                 cursor.execute(
                     """
                     SELECT message_id, channel, message_type, state, payload
@@ -2918,7 +3603,7 @@ class MySqlFmsRepository:
                     (
                         message_id,
                         channel,
-                        request.get("assigned_device_id"),
+                        step.get("assigned_device_id") or requested_device,
                         job_step_id,
                         message_type,
                         idempotency_key,
@@ -3052,9 +3737,11 @@ class MySqlFmsRepository:
                     """
                     SELECT im.message_id, im.job_step_id, im.state,
                            im.external_reference,
-                           js.rmf_task_id, js.assigned_device_id
+                           js.rmf_task_id, js.assigned_device_id,
+                           js.executor_type, jobs.assigned_mobile_id
                     FROM integration_messages im
                     JOIN job_steps js ON js.job_step_id = im.job_step_id
+                    JOIN jobs ON jobs.job_id = js.job_id
                     WHERE im.message_id = %s AND im.direction = 'outbound'
                       AND im.channel = 'rmf' AND im.message_type = 'dispatch_task_request'
                     FOR UPDATE
@@ -3079,6 +3766,16 @@ class MySqlFmsRepository:
                     and pending_booking_reference != message["external_reference"]
                 ):
                     raise IdempotencyConflict
+                if (
+                    acceptance["accepted"]
+                    and message["executor_type"] == "mobile"
+                    and message["assigned_mobile_id"] is not None
+                    and acceptance["assigned_device_id"]
+                    != message["assigned_mobile_id"]
+                ):
+                    raise ResourceAssignmentConflict(
+                        "RMF_ASSIGNED_DEVICE_MISMATCH"
+                    )
                 target_state = (
                     "acknowledged" if acceptance["accepted"]
                     else "sent" if pending_assignment
@@ -3094,19 +3791,28 @@ class MySqlFmsRepository:
                     ):
                         raise IdempotencyConflict
                 elif acceptance["accepted"]:
-                    cursor.execute(
-                        """
-                        UPDATE job_steps
-                        SET rmf_task_id = %s, assigned_device_id = %s,
-                            assignment_revision = assignment_revision + 1
-                        WHERE job_step_id = %s
-                        """,
-                        (
-                            acceptance["rmf_task_id"],
-                            acceptance["assigned_device_id"],
-                            message["job_step_id"],
-                        ),
-                    )
+                    if message["assigned_mobile_id"] is not None:
+                        cursor.execute(
+                            """
+                            UPDATE job_steps SET rmf_task_id = %s
+                            WHERE job_step_id = %s
+                            """,
+                            (acceptance["rmf_task_id"], message["job_step_id"]),
+                        )
+                    else:
+                        cursor.execute(
+                            """
+                            UPDATE job_steps
+                            SET rmf_task_id = %s, assigned_device_id = %s,
+                                assignment_revision = assignment_revision + 1
+                            WHERE job_step_id = %s
+                            """,
+                            (
+                                acceptance["rmf_task_id"],
+                                acceptance["assigned_device_id"],
+                                message["job_step_id"],
+                            ),
+                        )
                 cursor.execute(
                     """
                     UPDATE integration_messages
@@ -3256,6 +3962,7 @@ class InMemoryFmsRepository:
         self._events: dict[int, list[dict[str, Any]]] = {}
         self._dispatches: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
         self._claims: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]] = {}
+        self._reserved_assignment_resources: dict[str, int] = {}
         self._next_job_id = 1
         self._next_step_id = 1
         self._next_event_id = 1
@@ -3694,8 +4401,66 @@ class InMemoryFmsRepository:
         if job is None:
             return None
         detail = {key: deepcopy(value) for key, value in job.items() if key != "steps"}
+        detail.setdefault("items", [])
         detail["steps"] = [deepcopy(step) for step in sorted(self._steps.values(), key=lambda row: row["step_no"]) if step["job_id"] == job_id]
         return detail
+
+    def assign_job_resources(
+        self, job_id: int, assignment: dict[str, Any]
+    ) -> dict[str, Any]:
+        job = self._jobs.get(job_id)
+        if job is None:
+            raise JobNotFound
+        expected = {
+            "PK_01": "TRIHOUSE-TEST-01-CHG-01",
+            "PK_02": "TRIHOUSE-TEST-01-CHG-02",
+        }.get(assignment["mobile_id"])
+        if expected != assignment["charger_code"]:
+            raise ResourceAssignmentConflict("FIXED_CHARGER_MISMATCH")
+        context = job.setdefault("context", {})
+        current = context.get("assignment")
+        response = {"job_id": job_id, **deepcopy(assignment)}
+        if current is not None:
+            if {"job_id": job_id, **current} == response:
+                return response
+            if int(assignment["revision"]) <= int(current["revision"]):
+                raise ResourceAssignmentConflict("ASSIGNMENT_REVISION_CONFLICT")
+            for value in (
+                current["mobile_id"],
+                current["omx_id"],
+                current["packing_dock_code"],
+            ):
+                self._reserved_assignment_resources.pop(value, None)
+        elif int(assignment["revision"]) != 1:
+            raise ResourceAssignmentConflict("INITIAL_ASSIGNMENT_REVISION_MUST_BE_ONE")
+        resources = (
+            assignment["mobile_id"],
+            assignment["omx_id"],
+            assignment["packing_dock_code"],
+        )
+        if any(
+            resource in self._reserved_assignment_resources
+            and self._reserved_assignment_resources[resource] != job_id
+            for resource in resources
+        ):
+            raise ResourceUnavailable("one or more resources are already reserved")
+        for resource in resources:
+            self._reserved_assignment_resources[resource] = job_id
+        context["assignment"] = deepcopy(assignment)
+        job["assigned_mobile_id"] = assignment["mobile_id"]
+        job["state"] = "assigned"
+        for step in self._steps.values():
+            if step["job_id"] != job_id:
+                continue
+            step["assignment_revision"] = int(assignment["revision"])
+            step["assigned_device_id"] = {
+                "mobile": assignment["mobile_id"],
+                "arm": assignment["omx_id"],
+            }.get(step["executor_type"])
+        self._append_event(
+            job_id, None, "job.assignment.persisted", {"assignment": assignment}
+        )
+        return response
 
     def get_job_timeline(self, job_id: int) -> list[dict[str, Any]] | None:
         if job_id not in self._jobs:
@@ -3723,6 +4488,18 @@ class InMemoryFmsRepository:
         step = self._steps.get(job_step_id)
         if step is None:
             raise JobStepNotFound
+        job_context = self._jobs[step["job_id"]].get("context", {})
+        if (
+            job_context.get("source") == "public_product_order"
+            and not job_context.get("assignment")
+        ):
+            raise JobStepNotDispatchable
+        if (
+            step.get("assigned_device_id") is not None
+            and request.get("assigned_device_id") is not None
+            and request["assigned_device_id"] != step["assigned_device_id"]
+        ):
+            raise ResourceAssignmentConflict("DISPATCH_ASSIGNED_DEVICE_MISMATCH")
         fingerprint = {
             "job_step_id": job_step_id,
             "actor": request["actor"],
@@ -3793,9 +4570,13 @@ class InMemoryFmsRepository:
         step = self._steps.get(job_step_id)
         if step is None:
             raise JobStepNotFound
+        assignment = self._jobs[step["job_id"]].get("context", {}).get("assignment")
+        if assignment is not None and assignment["mobile_id"] != robot_id:
+            raise ResourceAssignmentConflict("RMF_ASSIGNED_DEVICE_MISMATCH")
         step["rmf_task_id"] = rmf_task_id
-        step["assigned_device_id"] = robot_id
-        step["assignment_revision"] += 1
+        if assignment is None:
+            step["assigned_device_id"] = robot_id
+            step["assignment_revision"] += 1
 
     def claim_rmf_dispatches(self, worker_id: str, limit: int) -> list[dict[str, Any]]:
         del worker_id
@@ -3845,6 +4626,15 @@ class InMemoryFmsRepository:
         ):
             raise IdempotencyConflict
         if acceptance["accepted"]:
+            step = self._steps[message["job_step_id"]]
+            assignment = self._jobs[step["job_id"]].get("context", {}).get(
+                "assignment"
+            )
+            if (
+                assignment is not None
+                and assignment["mobile_id"] != acceptance["assigned_device_id"]
+            ):
+                raise ResourceAssignmentConflict("RMF_ASSIGNED_DEVICE_MISMATCH")
             self.record_rmf_acceptance(
                 message["job_step_id"],
                 acceptance["rmf_task_id"],

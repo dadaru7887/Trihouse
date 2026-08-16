@@ -327,6 +327,47 @@ def test_rmf_worker_claim_and_acceptance_map_dispatch_for_command_claim():
     assert command.status_code == 200
 
 
+def test_rmf_acceptance_cannot_substitute_control_tower_assignment():
+    """RMF traffic coordination cannot overwrite the persisted Pinky or revision."""
+    repository = InMemoryFmsRepository()
+    client = TestClient(create_app(repository))
+    step_id = client.post("/internal/v1/jobs", json=outbound_job()).json()["steps"][0][
+        "job_step_id"
+    ]
+    assigned = client.post(
+        "/internal/v1/jobs/1/assignment",
+        json={
+            "revision": 1,
+            "mobile_id": "PK_01",
+            "omx_id": "OMX_01",
+            "packing_dock_code": "PACKING-01-DOCK-01",
+            "charger_code": "TRIHOUSE-TEST-01-CHG-01",
+        },
+    )
+    dispatch = client.post(
+        f"/internal/v1/job-steps/{step_id}/dispatch",
+        headers={"Idempotency-Key": "dispatch-owned-assignment"},
+        json={"actor": "control-tower", "assigned_device_id": "PK_01"},
+    ).json()
+    client.post("/internal/v1/rmf/dispatches/claim", json={"worker_id": "worker"})
+
+    rejected = client.post(
+        f"/internal/v1/rmf/dispatches/{dispatch['message_id']}/acceptance",
+        json={
+            "accepted": True,
+            "rmf_task_id": "rmf-substitute",
+            "assigned_device_id": "PK_02",
+        },
+    )
+    detail = client.get("/api/v1/jobs/1").json()
+
+    assert assigned.status_code == 200
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["code"] == "RMF_ASSIGNED_DEVICE_MISMATCH"
+    assert detail["steps"][0]["assigned_device_id"] == "PK_01"
+    assert detail["steps"][0]["assignment_revision"] == 1
+
+
 def test_rejected_rmf_dispatch_is_failed_without_mapping():
     client = TestClient(create_app(InMemoryFmsRepository()))
     step_id = client.post("/internal/v1/jobs", json=outbound_job()).json()["steps"][0][

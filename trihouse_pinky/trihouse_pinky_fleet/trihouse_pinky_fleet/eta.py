@@ -4,6 +4,7 @@
 실효 속도를 사용한다.
 """
 
+from dataclasses import dataclass
 from enum import StrEnum
 
 
@@ -68,3 +69,44 @@ class EtaEstimator:
 
     def should_reschedule_omx(self, *, previous_arrival_s: float, updated_arrival_s: float) -> bool:
         return abs(updated_arrival_s - previous_arrival_s) > self._omx_reschedule_threshold_s
+
+
+@dataclass
+class PreparationWindow:
+    eta_at_s: float
+    prepare_at_s: float
+    omx_ready: bool = False
+
+
+class OmxPreparationSchedule:
+    """Refresh Nav2/RMF timing until the OMX episode reaches READY."""
+
+    def __init__(self, *, grasp_duration_s: float, prep_margin_s: float) -> None:
+        if grasp_duration_s < 0 or prep_margin_s < 0:
+            raise ValueError('OMX durations must be non-negative')
+        self._grasp_duration_s = grasp_duration_s
+        self._prep_margin_s = prep_margin_s
+        self._current: PreparationWindow | None = None
+
+    def refresh(
+        self, *, now_s: float, nav2_eta_s: float, rmf_delay_s: float
+    ) -> PreparationWindow:
+        if min(now_s, nav2_eta_s, rmf_delay_s) < 0:
+            raise ValueError('ETA inputs must be non-negative')
+        if self._current is not None and self._current.omx_ready:
+            return self._current
+        eta_at_s = now_s + nav2_eta_s + rmf_delay_s
+        self._current = PreparationWindow(
+            eta_at_s=eta_at_s,
+            prepare_at_s=max(
+                now_s,
+                eta_at_s - self._grasp_duration_s - self._prep_margin_s,
+            ),
+        )
+        return self._current
+
+    def mark_omx_ready(self) -> PreparationWindow:
+        if self._current is None:
+            raise ValueError('prepare schedule has not been calculated')
+        self._current.omx_ready = True
+        return self._current

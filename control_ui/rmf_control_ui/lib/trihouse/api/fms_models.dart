@@ -430,8 +430,10 @@ class JobDetailDto {
     required this.dueAt,
     required JsonObject context,
     required this.createdAt,
+    required List<JsonObject> items,
     required List<JsonObject> steps,
   }) : context = _immutableJsonObject(context),
+       items = _immutableJsonObjects(items),
        steps = _immutableJsonObjects(steps);
 
   factory JobDetailDto.fromJson(JsonObject json) => JobDetailDto(
@@ -447,6 +449,7 @@ class JobDetailDto {
     dueAt: _optionalDateTime(json['due_at']),
     context: _immutableJsonObject(json['context'] ?? const <String, Object?>{}),
     createdAt: DateTime.parse(json['created_at'] as String),
+    items: _immutableJsonObjects(json['items'] ?? const <Object?>[]),
     steps: _immutableJsonObjects(json['steps']),
   );
 
@@ -462,6 +465,7 @@ class JobDetailDto {
   final DateTime? dueAt;
   final JsonObject context;
   final DateTime createdAt;
+  final List<JsonObject> items;
   final List<JsonObject> steps;
 }
 

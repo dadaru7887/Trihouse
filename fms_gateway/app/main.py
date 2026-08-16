@@ -29,6 +29,8 @@ from .models import (
     JobCreate,
     JobCreated,
     JobDetail,
+    JobAssignmentRequest,
+    JobAssignmentView,
     JobTimeline,
     JobView,
     MapProjectDraft,
@@ -52,6 +54,7 @@ from .models import (
     RmfDispatchClaim,
     RmfDispatchesClaimed,
     StepDispatch,
+    WorkerCompletionRequest,
 )
 from .runtime_profiles import RuntimeProfileProvider
 from .repositories import (
@@ -63,6 +66,8 @@ from .repositories import (
     InventoryQuantityConflict,
     JobStepNotDispatchable,
     JobStepNotFound,
+    JobNotFound,
+    ManualAcknowledgementRequired,
     MapDraftRevisionConflict,
     MapProjectNotFound,
     MapProjectSourceValidationError,
@@ -73,6 +78,9 @@ from .repositories import (
     OutboundOrderInsufficientStock,
     OutboundOrderProductNotFound,
     PublishedMapProjectDeleteConflict,
+    ResourceAssignmentConflict,
+    ResourceUnavailable,
+    WorkerCompletionConflict,
 )
 from .tcp_protocol import TcpIngestionServer
 
@@ -629,6 +637,10 @@ def create_app(
                 status_code=409,
                 detail="job step is not the current pending step",
             ) from error
+        except ResourceAssignmentConflict as error:
+            raise HTTPException(
+                status_code=409, detail={"code": str(error)}
+            ) from error
         except IdempotencyConflict as error:
             raise HTTPException(
                 status_code=409,
@@ -653,6 +665,10 @@ def create_app(
             )
         except DispatchMessageNotFound as error:
             raise HTTPException(status_code=404, detail="RMF dispatch not found") from error
+        except ResourceAssignmentConflict as error:
+            raise HTTPException(
+                status_code=409, detail={"code": str(error)}
+            ) from error
         except (JobStepNotDispatchable, IdempotencyConflict) as error:
             raise HTTPException(status_code=409, detail="RMF dispatch state conflict") from error
 
@@ -677,6 +693,57 @@ def create_app(
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
         return job
+
+    @app.post(
+        "/api/v1/jobs/{job_id}/worker-completion", response_model=JobDetail
+    )
+    def complete_worker_packing(
+        job_id: int,
+        completion: WorkerCompletionRequest,
+        idempotency_key: str = Header(min_length=1, max_length=160),
+    ):
+        try:
+            return repo.complete_worker_packing(
+                job_id, completion.model_dump(), idempotency_key
+            )
+        except JobNotFound as error:
+            raise HTTPException(status_code=404, detail="job not found") from error
+        except ManualAcknowledgementRequired as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "MANUAL_ACKNOWLEDGEMENT_REQUIRED",
+                    "item_ids": list(error.item_ids),
+                },
+            ) from error
+        except WorkerCompletionConflict as error:
+            raise HTTPException(
+                status_code=409, detail={"code": error.code}
+            ) from error
+        except IdempotencyConflict as error:
+            raise HTTPException(
+                status_code=409, detail={"code": "IDEMPOTENCY_CONFLICT"}
+            ) from error
+
+    @app.post(
+        "/internal/v1/jobs/{job_id}/assignment",
+        response_model=JobAssignmentView,
+    )
+    def persist_job_assignment(job_id: int, assignment: JobAssignmentRequest):
+        try:
+            return repo.assign_job_resources(job_id, assignment.model_dump())
+        except JobNotFound as error:
+            raise HTTPException(status_code=404, detail="job not found") from error
+        except ResourceAssignmentConflict as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": str(error) or "ASSIGNMENT_CONFLICT"},
+            ) from error
+        except ResourceUnavailable as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "RESOURCE_UNAVAILABLE", "message": str(error)},
+            ) from error
 
     @app.get("/api/v1/jobs/{job_id}/timeline", response_model=JobTimeline)
     def job_timeline(job_id: int):

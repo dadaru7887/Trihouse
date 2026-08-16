@@ -19,6 +19,7 @@ class PickFailureReport:
     recording_segment_id: str
     recording_path: str
     recommended_action: str
+    recovery_choices: tuple[str, ...]
 
 
 class PickFailureReporter:
@@ -46,4 +47,5 @@ class PickFailureReporter:
             job_id, order_id, item_id, shelf_id, slot_id, omx_id, camera_id, occurred_at_s, last_result,
             segment.segment_id if segment is not None else '', self._catalog.recording_path(segment),
             'BUNDLE_HELD' if bundle_blocked else 'ITEM_HELD_CONTINUE_OTHERS',
+            ('재시도', '포장대에서 처리'),
         )

@@ -136,3 +136,111 @@ class OmxWorkflow:
             return self._jobs[job_id]
         except KeyError as error:
             raise ValueError(f'unknown OMX job {job_id}') from error
+
+
+@dataclass(frozen=True)
+class PickRecoveryDecision:
+    accepted: bool
+    reason_code: str = ''
+    reobserve_qr_aruco: bool = False
+    reset_act_episode: bool = False
+    retry_no: int = 0
+
+
+@dataclass(frozen=True)
+class PickRecoveryState:
+    pinky_departure_allowed: bool
+    retry_allowed: bool
+
+
+class PickRecovery:
+    """Operator decisions after an item pick/load failure.
+
+    P0 returns decision contracts only; no method here commands physical OMX
+    motion.  Intake-time partial fulfilment is deliberately absent.
+    """
+
+    RETRY = '재시도'
+    HANDLE_AT_PACKING = '포장대에서 처리'
+
+    def __init__(self, *, item_id: str) -> None:
+        if not item_id:
+            raise ValueError('item ID is required')
+        self.item_id = item_id
+        self.retry_count = 0
+        self.item_state = 'PICK_FAILED'
+        self.item_in_order = True
+        self._failure_result = ''
+        self._drop_hold = False
+        self._object_recovered = False
+        self._area_clear = False
+        self._awaiting_result = False
+
+    @property
+    def available_choices(self) -> tuple[str, ...]:
+        if self.item_state == 'MANUAL_FULFILLMENT_REQUIRED':
+            return ()
+        if self.retry_count >= 2:
+            return (self.HANDLE_AT_PACKING,)
+        return (self.RETRY, self.HANDLE_AT_PACKING)
+
+    def record_failure(self, result: str) -> PickRecoveryState:
+        if result not in {
+            'DROP_DETECTED',
+            'LOAD_UNCERTAIN',
+            'GRASP_RETAINED',
+        }:
+            raise ValueError('unsupported recoverable load result')
+        self._failure_result = result
+        self._awaiting_result = False
+        if result == 'DROP_DETECTED':
+            self._drop_hold = True
+            self._object_recovered = False
+            self._area_clear = False
+        return PickRecoveryState(
+            pinky_departure_allowed=False,
+            retry_allowed=self._retry_allowed(),
+        )
+
+    def select(self, choice: str) -> PickRecoveryDecision:
+        if choice not in (self.RETRY, self.HANDLE_AT_PACKING):
+            return PickRecoveryDecision(False, 'UNSUPPORTED_DECISION')
+        if choice == self.HANDLE_AT_PACKING:
+            self.item_state = 'MANUAL_FULFILLMENT_REQUIRED'
+            return PickRecoveryDecision(True, 'MANUAL_FULFILLMENT_REQUIRED')
+        if not self._retry_allowed():
+            reason = 'DROP_RECOVERY_REQUIRED' if self._drop_hold else 'RETRY_LIMIT_REACHED'
+            return PickRecoveryDecision(False, reason)
+        self.retry_count += 1
+        self._awaiting_result = True
+        self.item_state = 'RETRY_OBSERVATION_REQUIRED'
+        return PickRecoveryDecision(
+            True,
+            'RETRY_SELECTED',
+            reobserve_qr_aruco=True,
+            reset_act_episode=True,
+            retry_no=self.retry_count,
+        )
+
+    def record_object_recovered(self) -> None:
+        if self._drop_hold:
+            self._object_recovered = True
+            self._release_drop_hold_if_safe()
+
+    def record_area_clear(self) -> None:
+        if self._drop_hold:
+            self._area_clear = True
+            self._release_drop_hold_if_safe()
+
+    def _release_drop_hold_if_safe(self) -> None:
+        if self._object_recovered and self._area_clear:
+            self._drop_hold = False
+
+    def _retry_allowed(self) -> bool:
+        return (
+            bool(self._failure_result)
+            and not self._drop_hold
+            and not self._awaiting_result
+            and self.retry_count < 2
+            and self.item_state != 'MANUAL_FULFILLMENT_REQUIRED'
+        )

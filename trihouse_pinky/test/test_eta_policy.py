@@ -2,7 +2,7 @@
 
 import unittest
 
-from trihouse_pinky_fleet.eta import EtaEstimator, SegmentKind
+from trihouse_pinky_fleet.eta import EtaEstimator, OmxPreparationSchedule, SegmentKind
 
 
 class EtaEstimatorTest(unittest.TestCase):
@@ -39,6 +39,28 @@ class EtaEstimatorTest(unittest.TestCase):
         """One-to-two seconds of plan noise must not churn the OMX schedule."""
         self.assertFalse(self.estimator.should_reschedule_omx(previous_arrival_s=100.0, updated_arrival_s=101.5))
         self.assertTrue(self.estimator.should_reschedule_omx(previous_arrival_s=100.0, updated_arrival_s=102.1))
+
+    def test_prepare_at_refreshes_from_nav2_eta_and_rmf_delay(self) -> None:
+        """A material path or traffic delay moves preparation without changing identity."""
+        schedule = OmxPreparationSchedule(grasp_duration_s=12.0, prep_margin_s=5.0)
+
+        first = schedule.refresh(now_s=50.0, nav2_eta_s=40.0, rmf_delay_s=10.0)
+        delayed = schedule.refresh(now_s=55.0, nav2_eta_s=45.0, rmf_delay_s=12.0)
+
+        self.assertEqual(83.0, first.prepare_at_s)
+        self.assertEqual(95.0, delayed.prepare_at_s)
+        self.assertEqual(112.0, delayed.eta_at_s)
+
+    def test_ready_omx_episode_is_never_reset_by_later_eta_refresh(self) -> None:
+        """Traffic replanning cannot restart a pick that is already OMX_READY."""
+        schedule = OmxPreparationSchedule(grasp_duration_s=12.0, prep_margin_s=5.0)
+        ready = schedule.refresh(now_s=50.0, nav2_eta_s=40.0, rmf_delay_s=10.0)
+        schedule.mark_omx_ready()
+
+        unchanged = schedule.refresh(now_s=60.0, nav2_eta_s=90.0, rmf_delay_s=30.0)
+
+        self.assertEqual(ready, unchanged)
+        self.assertTrue(unchanged.omx_ready)
 
 
 if __name__ == '__main__':

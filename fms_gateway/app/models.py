@@ -187,7 +187,41 @@ class JobDetail(BaseModel):
     due_at: datetime | None = None
     context: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
+    items: list[dict[str, Any]] = Field(default_factory=list)
     steps: list[dict[str, Any]]
+
+
+class WorkerCompletionRequest(BaseModel):
+    """Packing worker confirmation that authorizes physical stock finalization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    worker_id: str = Field(min_length=1, max_length=64)
+    completion_note: str | None = Field(default=None, max_length=512)
+    acknowledged_manual_item_ids: list[int] = Field(default_factory=list, max_length=100)
+
+    @field_validator("acknowledged_manual_item_ids")
+    @classmethod
+    def acknowledgements_are_unique_positive_ids(cls, value: list[int]) -> list[int]:
+        if any(item_id <= 0 for item_id in value) or len(value) != len(set(value)):
+            raise ValueError("manual item acknowledgements must be unique positive IDs")
+        return value
+
+
+class JobAssignmentRequest(BaseModel):
+    """Complete Control Tower selection persisted before any dispatch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    revision: int = Field(ge=1)
+    mobile_id: str = Field(min_length=1, max_length=64)
+    omx_id: str = Field(min_length=1, max_length=64)
+    packing_dock_code: str = Field(min_length=1, max_length=96)
+    charger_code: str = Field(min_length=1, max_length=96)
+
+
+class JobAssignmentView(JobAssignmentRequest):
+    job_id: int
 
 
 class StepDispatch(BaseModel):

@@ -17,6 +17,52 @@ class PackingChoice:
     waiting_node_id: str = ''
 
 
+@dataclass(frozen=True)
+class PackingDockCandidate:
+    """Control Tower inputs used to compare one reservable Packing Dock."""
+
+    code: str
+    reservation_available_at_s: float
+    rmf_wait_s: float
+    nav2_travel_s: float
+    available: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.code:
+            raise ValueError("packing Dock code is required")
+        if min(
+            self.reservation_available_at_s,
+            self.rmf_wait_s,
+            self.nav2_travel_s,
+        ) < 0:
+            raise ValueError("packing timing inputs must be non-negative")
+
+    @property
+    def assignment_score_s(self) -> float:
+        return (
+            self.reservation_available_at_s
+            + self.rmf_wait_s
+            + self.nav2_travel_s
+        )
+
+
+def choose_packing_dock(
+    candidates: tuple[PackingDockCandidate, ...],
+    *,
+    reserved_codes: frozenset[str] = frozenset(),
+) -> PackingDockCandidate:
+    """Choose by reservation availability + RMF wait + Nav2 travel."""
+
+    available = tuple(
+        candidate
+        for candidate in candidates
+        if candidate.available and candidate.code not in reserved_codes
+    )
+    if not available:
+        raise ValueError("no Packing Dock is available")
+    return min(available, key=lambda candidate: (candidate.assignment_score_s, candidate.code))
+
+
 @dataclass
 class _Station:
     worker_present: bool

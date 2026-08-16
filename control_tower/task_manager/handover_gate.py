@@ -13,6 +13,7 @@ class GateDecision:
     duplicate: bool = False
     released: bool = False
     reason_code: str = ""
+    command: str | None = None
 
 
 @dataclass
@@ -91,6 +92,7 @@ class HandoverGate:
             accepted=True,
             released=should_release,
             reason_code="GATE_RELEASED" if should_release else "WAITING_FOR_PEER",
+            command="START_LOAD" if should_release else None,
         )
 
     def reassign_pinky(
