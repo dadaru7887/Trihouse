@@ -1,5 +1,6 @@
 """Pinky SR 주행 ETA와 OMX 준비 시각의 인수 테스트."""
 
+from dataclasses import FrozenInstanceError
 import unittest
 
 from trihouse_pinky_fleet.eta import EtaEstimator, OmxPreparationSchedule, SegmentKind
@@ -44,8 +45,14 @@ class EtaEstimatorTest(unittest.TestCase):
         """A material path or traffic delay moves preparation without changing identity."""
         schedule = OmxPreparationSchedule(grasp_duration_s=12.0, prep_margin_s=5.0)
 
-        first = schedule.refresh(now_s=50.0, nav2_eta_s=40.0, rmf_delay_s=10.0)
-        delayed = schedule.refresh(now_s=55.0, nav2_eta_s=45.0, rmf_delay_s=12.0)
+        first = schedule.refresh(
+            now_s=50.0, nav2_eta_s=40.0, rmf_delay_s=10.0,
+            assignment_revision=4, handover_group_id="group-ambient",
+        )
+        delayed = schedule.refresh(
+            now_s=55.0, nav2_eta_s=45.0, rmf_delay_s=12.0,
+            assignment_revision=4, handover_group_id="group-ambient",
+        )
 
         self.assertEqual(83.0, first.prepare_at_s)
         self.assertEqual(95.0, delayed.prepare_at_s)
@@ -54,13 +61,39 @@ class EtaEstimatorTest(unittest.TestCase):
     def test_ready_omx_episode_is_never_reset_by_later_eta_refresh(self) -> None:
         """Traffic replanning cannot restart a pick that is already OMX_READY."""
         schedule = OmxPreparationSchedule(grasp_duration_s=12.0, prep_margin_s=5.0)
-        ready = schedule.refresh(now_s=50.0, nav2_eta_s=40.0, rmf_delay_s=10.0)
-        schedule.mark_omx_ready()
+        schedule.refresh(
+            now_s=50.0, nav2_eta_s=40.0, rmf_delay_s=10.0,
+            assignment_revision=4, handover_group_id="group-ambient",
+        )
+        ready = schedule.mark_omx_ready()
 
-        unchanged = schedule.refresh(now_s=60.0, nav2_eta_s=90.0, rmf_delay_s=30.0)
+        unchanged = schedule.refresh(
+            now_s=60.0, nav2_eta_s=90.0, rmf_delay_s=30.0,
+            assignment_revision=4, handover_group_id="group-ambient",
+        )
 
         self.assertEqual(ready, unchanged)
         self.assertTrue(unchanged.omx_ready)
+
+    def test_preparation_window_is_immutable_and_bound_to_assignment_episode(self) -> None:
+        schedule = OmxPreparationSchedule(grasp_duration_s=12.0, prep_margin_s=5.0)
+        first = schedule.refresh(
+            now_s=100.0, nav2_eta_s=30.0, rmf_delay_s=4.0,
+            assignment_revision=4, handover_group_id="group-ambient",
+        )
+        ready = schedule.mark_omx_ready()
+
+        with self.assertRaises(FrozenInstanceError):
+            ready.omx_ready = False
+        with self.assertRaisesRegex(ValueError, "preparation episode identity"):
+            schedule.refresh(
+                now_s=110.0, nav2_eta_s=50.0, rmf_delay_s=8.0,
+                assignment_revision=5, handover_group_id="group-frozen",
+            )
+
+        self.assertIs(schedule.current, ready)
+        self.assertEqual(4, first.assignment_revision)
+        self.assertEqual("group-ambient", first.handover_group_id)
 
 
 if __name__ == '__main__':

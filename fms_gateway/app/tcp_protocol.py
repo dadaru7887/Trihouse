@@ -1,4 +1,4 @@
-"""Validation, processing, and a small asyncio NDJSON ingestion boundary."""
+"""로봇 NDJSON 메시지의 검증·세션 처리와 asyncio TCP 수신 경계."""
 
 import asyncio
 from dataclasses import dataclass
@@ -13,17 +13,19 @@ SCHEMA_VERSION = 3
 
 
 class ProtocolRejected(ValueError):
-    """A stable protocol rejection suitable for an event_rejected response."""
+    """`event_rejected` 응답으로 노출할 안정적인 프로토콜 거절 사유."""
 
 
 @dataclass(frozen=True)
 class ProcessedMessage:
+    """세션/스키마 검증을 통과해 Repository에 전달 가능한 메시지."""
     action: str
     robot_id: str
     payload: dict[str, Any]
 
 
 def _reject(reason: str) -> None:
+    """모든 검증 실패가 동일한 응답 경로를 타도록 예외로 중단한다."""
     raise ProtocolRejected(reason)
 
 
@@ -42,7 +44,7 @@ def _uuid(value: object) -> str:
 
 
 class ProtocolSession:
-    """Validate one connection, which is permanently bound by its hello."""
+    """첫 hello의 robot/session identity에 영구적으로 묶인 연결 검증기."""
 
     def __init__(self, registered_robot_ids: Collection[str]):
         self._registered = frozenset(registered_robot_ids)
@@ -51,6 +53,7 @@ class ProtocolSession:
         self._last_sequence = 0
 
     def process(self, message: Mapping[str, Any]) -> ProcessedMessage:
+        """연결 상태에 따라 hello를 강제하고 이후 메시지를 종류별 검증한다."""
         message_type = message.get("type")
         if self._robot_id is None:
             if message_type != "hello":
@@ -84,6 +87,7 @@ class ProtocolSession:
         return ProcessedMessage("hello_accepted", robot_id, dict(message))
 
     def _status(self, message: Mapping[str, Any]) -> ProcessedMessage:
+        """telemetry 필드, 유한 수치, 실행 문맥, 단조 증가 sequence를 확인한다."""
         self._base(message)
         required = (
             "sequence",
@@ -110,6 +114,7 @@ class ProtocolSession:
         sequence = message["sequence"]
         if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence <= 0:
             _reject("SCHEMA_INVALID")
+        # 같은 연결의 과거/중복 상태가 최신 DB projection을 덮지 못하게 한다.
         if sequence <= self._last_sequence:
             _reject("STALE_SEQUENCE")
         pose = message["pose"]
@@ -143,6 +148,7 @@ class ProtocolSession:
         return ProcessedMessage("robot_status", self._robot_id or "", dict(message))
 
     def _task_event(self, message: Mapping[str, Any]) -> ProcessedMessage:
+        """허용된 상태 전이 이벤트와 활성 task_context를 검증한다."""
         self._base(message)
         _require_fields(
             message,
@@ -190,7 +196,7 @@ class ProtocolSession:
 
 
 class TcpIngestionServer:
-    """Bounded, line-oriented asyncio server with per-connection sessions."""
+    """연결별 세션과 줄 크기 제한을 둔 asyncio NDJSON 서버."""
 
     def __init__(
         self,
@@ -215,6 +221,7 @@ class TcpIngestionServer:
         return int(self._server.sockets[0].getsockname()[1])
 
     async def start(self) -> None:
+        """중복 시작을 허용하면서 설정된 주소에 TCP 서버를 연다."""
         if self._server is not None:
             return
         self._server = await asyncio.start_server(
@@ -225,6 +232,7 @@ class TcpIngestionServer:
         )
 
     async def stop(self) -> None:
+        """새 연결 수락을 닫고 기존 서버 소켓 종료를 기다린다."""
         if self._server is None:
             return
         self._server.close()
@@ -234,11 +242,13 @@ class TcpIngestionServer:
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        """줄 단위 메시지를 처리하고 각 메시지에 ACK 또는 거절을 반환한다."""
         registered = self._registered_robot_ids()
         if inspect.isawaitable(registered):
             registered = await registered
         session = ProtocolSession(registered)
         try:
+            # StreamReader limit과 명시적 길이 검사로 메모리 사용을 제한한다.
             while True:
                 try:
                     line = await reader.readline()
@@ -255,6 +265,7 @@ class TcpIngestionServer:
                     if not isinstance(message, dict):
                         _reject("SCHEMA_INVALID")
                     processed = session.process(message)
+                    # callback이 sync/async 어느 형태든 같은 프로토콜 경계를 지원한다.
                     callback_result = self._on_message(processed)
                     if inspect.isawaitable(callback_result):
                         await callback_result
@@ -277,5 +288,6 @@ class TcpIngestionServer:
 
     @staticmethod
     async def _write(writer: asyncio.StreamWriter, response: dict[str, object]) -> None:
+        """응답도 한 줄 JSON으로 직렬화하고 커널 버퍼 전송을 기다린다."""
         writer.write((json.dumps(response, separators=(",", ":")) + "\n").encode("utf-8"))
         await writer.drain()

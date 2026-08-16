@@ -4,7 +4,7 @@
 실효 속도를 사용한다.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 
@@ -71,8 +71,10 @@ class EtaEstimator:
         return abs(updated_arrival_s - previous_arrival_s) > self._omx_reschedule_threshold_s
 
 
-@dataclass
+@dataclass(frozen=True)
 class PreparationWindow:
+    assignment_revision: int
+    handover_group_id: str
     eta_at_s: float
     prepare_at_s: float
     omx_ready: bool = False
@@ -89,14 +91,30 @@ class OmxPreparationSchedule:
         self._current: PreparationWindow | None = None
 
     def refresh(
-        self, *, now_s: float, nav2_eta_s: float, rmf_delay_s: float
+        self,
+        *,
+        now_s: float,
+        nav2_eta_s: float,
+        rmf_delay_s: float,
+        assignment_revision: int,
+        handover_group_id: str,
     ) -> PreparationWindow:
         if min(now_s, nav2_eta_s, rmf_delay_s) < 0:
             raise ValueError('ETA inputs must be non-negative')
+        if assignment_revision <= 0 or not handover_group_id:
+            raise ValueError('preparation episode identity is required')
+        identity = (assignment_revision, handover_group_id)
+        if self._current is not None and identity != (
+            self._current.assignment_revision,
+            self._current.handover_group_id,
+        ):
+            raise ValueError('preparation episode identity cannot be replaced')
         if self._current is not None and self._current.omx_ready:
             return self._current
         eta_at_s = now_s + nav2_eta_s + rmf_delay_s
         self._current = PreparationWindow(
+            assignment_revision=assignment_revision,
+            handover_group_id=handover_group_id,
             eta_at_s=eta_at_s,
             prepare_at_s=max(
                 now_s,
@@ -108,5 +126,9 @@ class OmxPreparationSchedule:
     def mark_omx_ready(self) -> PreparationWindow:
         if self._current is None:
             raise ValueError('prepare schedule has not been calculated')
-        self._current.omx_ready = True
+        self._current = replace(self._current, omx_ready=True)
+        return self._current
+
+    @property
+    def current(self) -> PreparationWindow | None:
         return self._current

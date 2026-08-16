@@ -1,7 +1,9 @@
 """control_system overlay와 Trihouse runtime을 단일 소유권으로 조합한다."""
 
+import os
 from pathlib import Path
 
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
@@ -9,6 +11,7 @@ from launch.actions import (
     GroupAction,
     IncludeLaunchDescription,
     OpaqueFunction,
+    SetEnvironmentVariable,
     TimerAction,
 )
 from launch.conditions import IfCondition
@@ -36,6 +39,12 @@ def _include(path: Path, arguments: dict, condition=None):
     )
 
 
+def _enabled(context, name: str) -> bool:
+    return LaunchConfiguration(name).perform(context).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def _runtime(context):
     rmf_ws_root = Path(
         LaunchConfiguration("rmf_ws_root").perform(context)
@@ -61,18 +70,34 @@ def _runtime(context):
         raise RuntimeError(f"control_system RMF project가 없습니다: {project_dir}")
 
     core_launch = project_dir / f"{project}.launch.xml"
-    gazebo_launch = project_dir / f"{project}_bringup.launch.xml"
-    nav2_launch = project_dir / f"{project}_nav2.launch.xml"
-    for path in (core_launch, gazebo_launch, nav2_launch):
+    generated_gazebo_launch = project_dir / f"{project}_bringup.launch.xml"
+    generated_nav2_launch = project_dir / f"{project}_nav2.launch.xml"
+    world = project_dir / f"{project}.world"
+    bridge_params = project_dir / f"{project}_gz_bridge.yaml"
+    nav2_map = project_dir / "nav2_map" / f"{project}.yaml"
+    robot_id_value = LaunchConfiguration("robot_id").perform(context)
+    robot_dir = project_dir / "robots" / robot_id_value
+    robot_spawn_launch = robot_dir / "spawn.launch.xml"
+    robot_nav2_launch = robot_dir / "nav2.launch.xml"
+    for path in (
+        core_launch,
+        generated_gazebo_launch,
+        generated_nav2_launch,
+        world,
+        bridge_params,
+        nav2_map,
+        robot_spawn_launch,
+        robot_nav2_launch,
+    ):
         if not path.is_file():
-            raise RuntimeError(f"필수 control_system launch가 없습니다: {path}")
+            raise RuntimeError(f"필수 control_system artifact가 없습니다: {path}")
     nav_graph = project_dir / "nav_graphs" / "0.yaml"
     if not nav_graph.is_file():
         raise RuntimeError(
             f"RMF nav graph가 없습니다: {nav_graph}. "
             "control_system UI에서 project를 다시 export하세요."
         )
-    if "nav2_adapter.py" in nav2_launch.read_text(encoding="utf-8"):
+    if "nav2_adapter.py" in generated_nav2_launch.read_text(encoding="utf-8"):
         raise RuntimeError(
             "기존 project Nav2 adapter가 남아 있습니다. "
             "prepare_control_system_overlay 실행 파일로 test overlay를 만드세요."
@@ -132,17 +157,80 @@ def _runtime(context):
             {**map_dir_args, "headless": LaunchConfiguration("headless")},
             IfCondition(LaunchConfiguration("start_control_system_core")),
         ),
-        _include(
-            gazebo_launch,
-            {"map_dir": str(project_dir), "headless": LaunchConfiguration("headless")},
-            IfCondition(LaunchConfiguration("start_gazebo")),
-        ),
-        _include(
-            nav2_launch,
-            map_dir_args,
-            IfCondition(LaunchConfiguration("start_nav2")),
-        ),
     ]
+
+    # UI export의 전체 bringup에는 프로젝트에 등록된 Pinky와 OMX가 모두
+    # 포함된다. 통합 시험에서는 CLI로 선택한 한 로봇의 산출물만 조합해
+    # RMF fleet owner와 물리 실행 owner가 중복되지 않게 한다.
+    if _enabled(context, "start_gazebo"):
+        ros_gz_launch = (
+            Path(get_package_share_directory("ros_gz_sim"))
+            / "launch" / "gz_sim.launch.py"
+        )
+        pinky_share_parent = Path(
+            get_package_share_directory("pinky_description")
+        ).parent
+        actions.extend([
+            SetEnvironmentVariable(
+                "GZ_SIM_RESOURCE_PATH",
+                os.pathsep.join([
+                    str(pinky_share_parent),
+                    str(project_dir / "generated_models"),
+                    str(Path.home() / ".gazebo" / "models"),
+                ]),
+            ),
+            _include(
+                ros_gz_launch,
+                {
+                    "gz_args": f"-r -s -v2 --headless-rendering {world}",
+                    "on_exit_shutdown": "true",
+                },
+            ),
+        ])
+        if not _enabled(context, "headless"):
+            actions.append(_include(ros_gz_launch, {"gz_args": "-g -v2"}))
+        actions.extend([
+            _include(robot_spawn_launch, {}),
+            Node(
+                package="ros_gz_bridge",
+                executable="parameter_bridge",
+                name="gz_bridge",
+                output="screen",
+                arguments=[
+                    "--ros-args", "-p", f"config_file:={bridge_params}",
+                ],
+            ),
+        ])
+
+    if _enabled(context, "start_nav2"):
+        actions.extend([
+            Node(
+                package="nav2_map_server",
+                executable="map_server",
+                name="map_server",
+                output="screen",
+                parameters=[{
+                    "yaml_filename": str(nav2_map),
+                    "use_sim_time": use_sim_time,
+                    "topic_name": "nav2_map",
+                }],
+            ),
+            Node(
+                package="nav2_lifecycle_manager",
+                executable="lifecycle_manager",
+                name="lifecycle_manager_map",
+                output="screen",
+                parameters=[{
+                    "use_sim_time": False,
+                    "autostart": True,
+                    "node_names": ["map_server"],
+                }],
+            ),
+            _include(
+                robot_nav2_launch,
+                {"use_sim_time": use_sim_time},
+            ),
+        ])
 
     edge_nodes = [
         Node(

@@ -18,6 +18,7 @@ from trihouse_pinky_fleet.workflow import (  # noqa: E402
     JobPhase,
     TransportWorkflow,
 )
+from trihouse_pinky_fleet.fleet_node import transport_arrival_succeeded  # noqa: E402
 from trihouse_pinky_fleet.status import StatusInputs, build_status  # noqa: E402
 from trihouse_pinky_fleet.battery_policy import classify_battery  # noqa: E402
 from trihouse_pinky_fleet.recovery_health import RecoveryHealthInputs, evaluate_recovery_health  # noqa: E402
@@ -144,6 +145,12 @@ class TransportWorkflowTest(unittest.TestCase):
         parked = self.workflow.nav_result(succeeded=True, stationary=True)
         self.assertEqual(JobPhase.NAVIGATING, moving.phase)
         self.assertEqual(JobPhase.WAITING_HANDOVER, parked.phase)
+
+    def test_failed_navigation_cannot_be_reported_as_transport_success(self) -> None:
+        """IDLE로 복귀한 실패 결과를 도착 성공으로 오인하면 안 된다."""
+        self.workflow.accept(self.command, ready=True, cargo_confirmed=True)
+        failed = self.workflow.nav_result(succeeded=False, stationary=True)
+        self.assertFalse(transport_arrival_succeeded(failed))
 
     def test_emergency_clear_requires_return_and_health_before_new_job(self) -> None:
         """A cleared emergency never resumes the interrupted transport automatically."""

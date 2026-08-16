@@ -1,4 +1,8 @@
-"""Public FMS API response models."""
+"""FMS HTTP API의 요청/응답 계약을 정의하는 Pydantic 모델.
+
+Repository는 dict를 반환하지만 FastAPI 경계에서 이 모델들이 타입, 범위,
+필수 조합을 검증하고 OpenAPI 스키마를 만든다.
+"""
 
 from collections.abc import Mapping
 from datetime import date, datetime
@@ -16,7 +20,11 @@ from pydantic import (
 )
 
 
+# 운영 현황 조회 DTO ---------------------------------------------------------
+
+
 class DeviceView(BaseModel):
+    """장치 기본 정보와 가장 최근 상태 projection."""
     device_id: str
     device_type: str
     name: str
@@ -28,6 +36,7 @@ class DeviceView(BaseModel):
 
 
 class InventoryLotView(BaseModel):
+    """위치·유효기간·가용/예약 수량을 포함한 재고 lot 조회 결과."""
     lot_id: int
     lot_code: str
     product_code: str
@@ -41,6 +50,7 @@ class InventoryLotView(BaseModel):
 
 
 class InventoryAdjustment(BaseModel):
+    """감사 주체와 사유를 포함한 재고 증감 요청."""
     quantity_delta: int
     recorded_by: str = Field(min_length=1, max_length=64)
     note: str | None = Field(default=None, max_length=512)
@@ -48,6 +58,7 @@ class InventoryAdjustment(BaseModel):
     @field_validator("quantity_delta")
     @classmethod
     def quantity_must_change(cls, value: int) -> int:
+        """변화가 없는 조정을 감사 이력에 기록하지 않도록 거절한다."""
         if value == 0:
             raise ValueError("quantity_delta must not be zero")
         return value
@@ -101,6 +112,7 @@ class OutboundOrderCreated(BaseModel):
 
 
 class JobView(BaseModel):
+    """목록 화면에 필요한 Job 요약."""
     job_id: int
     job_code: str
     operation_type: str
@@ -110,6 +122,9 @@ class JobView(BaseModel):
     assigned_mobile_id: str | None = None
     item_count: int
     step_count: int
+
+
+# Job 생성·실행 DTO ---------------------------------------------------------
 
 
 ActionType = Literal[
@@ -131,6 +146,7 @@ ExecutorType = Literal["mobile", "arm", "fms"]
 
 
 class JobStepCreate(BaseModel):
+    """Job 안에서 순서대로 실행할 하나의 동작 정의."""
     step_no: int = Field(ge=1, le=65535)
     action_type: ActionType
     executor_type: ExecutorType
@@ -139,6 +155,7 @@ class JobStepCreate(BaseModel):
 
 
 class JobCreate(BaseModel):
+    """출고 Job과 최소 한 개 Step을 함께 만드는 요청."""
     job_code: str = Field(min_length=1, max_length=64)
     operation_type: Literal["outbound"] = "outbound"
     priority: Literal["critical", "high", "normal", "low"] = "normal"
@@ -152,6 +169,7 @@ class JobCreate(BaseModel):
 
     @model_validator(mode="after")
     def steps_are_strictly_ordered(self):
+        """Step 번호가 중복 없이 오름차순인지 보장한다."""
         numbers = [step.step_no for step in self.steps]
         if numbers != sorted(set(numbers)):
             raise ValueError("steps must have unique, strictly increasing step_no values")
@@ -224,6 +242,66 @@ class JobAssignmentView(JobAssignmentRequest):
     job_id: int
 
 
+LoadResult = Literal[
+    "LOAD_CONFIRMED", "DROP_DETECTED", "LOAD_UNCERTAIN", "GRASP_RETAINED"
+]
+
+
+class LoadAttemptRequest(BaseModel):
+    """Complete fixture-observed load evidence; never an OMX motion request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_id: str = Field(pattern=r"^[0-9a-fA-F-]{36}$")
+    job_id: int = Field(ge=1)
+    item_id: int = Field(ge=1)
+    handover_group_id: str = Field(min_length=1, max_length=128)
+    assignment_revision: int = Field(ge=1)
+    pinky_id: str = Field(min_length=1, max_length=64)
+    omx_id: str = Field(min_length=1, max_length=64)
+    result: LoadResult
+    criteria: dict[str, Any] = Field(min_length=1)
+    observations: dict[str, Any] = Field(min_length=1)
+    metrics: dict[str, Any] = Field(min_length=1)
+    evidence_refs: list[str] = Field(min_length=1, max_length=100)
+    policy_name: str = Field(min_length=1, max_length=128)
+    policy_version: str = Field(min_length=1, max_length=128)
+    model_name: str = Field(min_length=1, max_length=128)
+    model_version: str = Field(min_length=1, max_length=128)
+
+
+class LoadAttemptView(LoadAttemptRequest):
+    departure_allowed: bool
+
+
+class PickRecoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: int = Field(ge=1)
+    item_id: int = Field(ge=1)
+    operator_id: str = Field(min_length=1, max_length=64)
+    choice: Literal["재시도", "포장대에서 처리"]
+
+
+class RecoveryFactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: int = Field(ge=1)
+    item_id: int = Field(ge=1)
+    operator_id: str = Field(min_length=1, max_length=64)
+    fact: Literal["object-recovered", "area-clear"]
+
+
+class PickRecoveryView(BaseModel):
+    job_id: int
+    item_id: int
+    retry_no: int = 0
+    drop_hold: bool
+    manual_required: bool = False
+    reobserve_qr_aruco: bool = False
+    reset_act_episode: bool = False
+
+
 class StepDispatch(BaseModel):
     actor: str = Field(min_length=1, max_length=64)
     occurred_at: datetime | None = None
@@ -232,6 +310,7 @@ class StepDispatch(BaseModel):
 
 
 class DispatchRecord(BaseModel):
+    """Job Step을 실행자에게 전달하기 위한 outbox 메시지."""
     message_id: str
     idempotency_key: str
     job_id: int
@@ -255,17 +334,23 @@ class TimelineEvent(BaseModel):
 
 
 class JobTimeline(BaseModel):
+    """Job의 감사 가능한 상태 변화 이벤트 모음."""
     job_id: int
     events: list[TimelineEvent]
 
 
+# RMF와 로봇 명령 인계 DTO --------------------------------------------------
+
+
 class CommandClaim(BaseModel):
+    """RMF task를 실제 로봇 실행 identity에 연결하는 요청."""
     robot_id: str = Field(min_length=1, max_length=64)
     execution_id: str = Field(min_length=1, max_length=160)
     map_revision: str = Field(min_length=1, max_length=160)
 
 
 class TaskContext(BaseModel):
+    """늦거나 잘못된 로봇 이벤트를 식별하는 서버 발급 실행 문맥."""
     active: bool
     job_id: int
     job_step_id: int
@@ -290,6 +375,7 @@ class RmfDispatchesClaimed(BaseModel):
 
 
 class RmfDispatchAcceptance(BaseModel):
+    """RMF가 dispatch를 수락했는지와 실제 task/robot 매핑을 전달한다."""
     accepted: bool
     rmf_task_id: str | None = Field(default=None, max_length=128)
     assigned_device_id: str | None = Field(default=None, max_length=64)
@@ -297,6 +383,7 @@ class RmfDispatchAcceptance(BaseModel):
 
     @model_validator(mode="after")
     def accepted_dispatch_requires_mapping(self):
+        """수락된 요청은 RMF task와 담당 robot을 반드시 확정하게 한다."""
         if self.accepted and not (self.rmf_task_id and self.assigned_device_id):
             raise ValueError("accepted dispatch requires rmf_task_id and assigned_device_id")
         return self
@@ -307,6 +394,9 @@ class RmfDispatchAccepted(BaseModel):
     job_step_id: int
     state: str
     rmf_task_id: str | None = None
+
+
+# 지도 편집·검증·발행 DTO ---------------------------------------------------
 
 
 MapProjectSourceType = Literal[
@@ -504,6 +594,7 @@ class MapProjectSourceView(BaseModel):
 
 
 class MapProjectFile(BaseModel):
+    """지도 프로젝트에 함께 보관하는 생성/설정 파일."""
     file_name: str = Field(min_length=1, max_length=255)
     kind: str = Field(min_length=1, max_length=32)
     description: str = Field(default="", max_length=512)
@@ -532,6 +623,7 @@ class MapProjectRobot(BaseModel):
 
 
 class MapProjectSave(BaseModel):
+    """편집 가능한 지도 초안 전체를 원자적으로 저장하는 요청."""
     format_version: int = Field(ge=1)
     payload: dict[str, Any]
     building_yaml: str | None = None
@@ -567,6 +659,7 @@ class MapProjectValidation(BaseModel):
 
 
 class MapProjectPublish(BaseModel):
+    """콘텐츠 해시로 검증할 세 RMF/Gazebo artifact 발행 요청."""
     map_revision: str = Field(min_length=1, max_length=160)
     building_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     nav_graph_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -579,6 +672,7 @@ class MapProjectPublish(BaseModel):
 
 
 class PublishedMap(BaseModel):
+    """실행 환경이 재사용할 수 있는 불변 지도 revision 메타데이터."""
     map_revision: str
     map_name: str
     draft_revision: int
@@ -589,3 +683,38 @@ class PublishedMap(BaseModel):
     manifest: dict[str, Any]
     published_by: str
     published_at: datetime
+
+
+# 전역 운영 이벤트 DTO ------------------------------------------------------
+
+
+class MapProjectChange(BaseModel):
+    category: str = Field(min_length=1, max_length=64)
+    action: str = Field(min_length=1, max_length=64)
+    target: str = Field(min_length=1, max_length=256)
+    summary: str = Field(min_length=1, max_length=512)
+
+
+class MapProjectChanges(BaseModel):
+    changes: list[MapProjectChange] = Field(min_length=1, max_length=100)
+
+
+class OperationEventView(BaseModel):
+    event_id: int
+    event_uuid: str
+    occurred_at: datetime
+    actor_worker_id: str | None = None
+    device_id: str | None = None
+    job_id: int | None = None
+    job_step_id: int | None = None
+    incident_id: int | None = None
+    severity: str
+    category: str
+    event_type: str
+    message: str | None = None
+    payload: dict[str, Any] | None = None
+
+
+class MapProjectChangesRecorded(BaseModel):
+    map_name: str
+    events: list[OperationEventView]

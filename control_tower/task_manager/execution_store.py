@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .execution_result import CompletionEvent, ExecutionFact, ExecutionOutcome
+from .zone_handover import ZoneHandoverSnapshot
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,12 @@ class ExecutionStore(Protocol):
     ) -> int:
         """취소·재배정으로 더 이상 실행하면 안 되는 명령을 무효화한다."""
 
+    def save_handover(self, snapshot: ZoneHandoverSnapshot) -> None: ...
+
+    def load_handover(self, job_id: str) -> ZoneHandoverSnapshot | None: ...
+
+    def clear_handover(self, job_id: str) -> None: ...
+
 
 class InMemoryExecutionStore:
     """단위·통합 테스트에서 실제 중복 방지 동작을 검증하는 저장소."""
@@ -76,6 +83,7 @@ class InMemoryExecutionStore:
         self._command_keys: set[str] = set()
         self._commands_by_uuid: dict[str, TaskCommand] = {}
         self._active_command_uuids: set[str] = set()
+        self._handovers: dict[str, ZoneHandoverSnapshot] = {}
 
     def record_execution(
         self,
@@ -131,3 +139,12 @@ class InMemoryExecutionStore:
         }
         self._active_command_uuids.difference_update(targets)
         return len(targets)
+
+    def save_handover(self, snapshot: ZoneHandoverSnapshot) -> None:
+        self._handovers[snapshot.job_id] = snapshot
+
+    def load_handover(self, job_id: str) -> ZoneHandoverSnapshot | None:
+        return self._handovers.get(job_id)
+
+    def clear_handover(self, job_id: str) -> None:
+        self._handovers.pop(job_id, None)

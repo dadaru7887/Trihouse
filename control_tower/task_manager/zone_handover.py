@@ -76,6 +76,18 @@ class ItemLoadState:
     pinky_departure_allowed: bool
 
 
+@dataclass(frozen=True)
+class ZoneHandoverSnapshot:
+    job_id: str
+    handover_group_id: str
+    assignment_revision: int
+    pinky_id: str
+    omx_id: str
+    fact_ids: tuple[str, ...]
+    ready_roles: tuple[str, ...]
+    released: bool
+
+
 class ZoneHandover:
     """Converge two readiness roles and persist fixture-observed load attempts."""
 
@@ -105,6 +117,32 @@ class ZoneHandover:
     @property
     def attempts(self) -> tuple[ItemLoadAttempt, ...]:
         return tuple(self._attempts)
+
+    def snapshot(self) -> ZoneHandoverSnapshot:
+        return ZoneHandoverSnapshot(
+            job_id=self.job_id,
+            handover_group_id=self.handover_group_id,
+            assignment_revision=self.assignment_revision,
+            pinky_id=self.pinky_id,
+            omx_id=self.omx_id,
+            fact_ids=tuple(sorted(self._fact_ids)),
+            ready_roles=tuple(sorted(role.value for role in self._ready)),
+            released=self._released,
+        )
+
+    @classmethod
+    def restore(cls, snapshot: ZoneHandoverSnapshot) -> "ZoneHandover":
+        handover = cls(
+            job_id=snapshot.job_id,
+            handover_group_id=snapshot.handover_group_id,
+            assignment_revision=snapshot.assignment_revision,
+            pinky_id=snapshot.pinky_id,
+            omx_id=snapshot.omx_id,
+        )
+        handover._fact_ids.update(snapshot.fact_ids)
+        handover._ready.update(ReadinessRole(role) for role in snapshot.ready_roles)
+        handover._released = snapshot.released
+        return handover
 
     def record(self, fact: ReadinessFact) -> HandoverDecision:
         if fact.job_id != self.job_id:

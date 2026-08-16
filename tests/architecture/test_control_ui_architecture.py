@@ -10,6 +10,7 @@ CONTROL_UI = ROOT / "control_ui"
 APP = CONTROL_UI / "rmf_control_ui"
 LIB = APP / "lib"
 PRESENTATION = LIB / "trihouse" / "presentation"
+FEATURES = LIB / "trihouse" / "features"
 
 REMOVED_LEGACY_ENTRIES = {
     ".claude",
@@ -40,6 +41,16 @@ TRANSPORT_IMPORT_PREFIXES = (
     "dart:js_interop",
     "package:http/",
     "package:web/",
+    "package:web_socket_channel/",
+)
+# Browser-only shims that touch a web library for a local capability the Gateway
+# does not provide (file selection). They carry no Gateway transport, so they are
+# allowed to live with the feature that owns them instead of inside `api/`.
+BROWSER_CAPABILITY_SHIMS = {
+    "trihouse/features/maps/map_source_picker_web.dart",
+}
+GATEWAY_TRANSPORT_PREFIXES = (
+    "package:http/",
     "package:web_socket_channel/",
 )
 FORBIDDEN_BACKEND_LIBRARIES = {
@@ -160,8 +171,14 @@ def test_runtime_import_graph_has_one_browser_gateway_boundary() -> None:
         forbidden = sorted(imports.intersection(FORBIDDEN_IMPORTS))
         for directive in forbidden:
             violations.append(f"{relative}: forbidden import {directive}")
+        inside_api = api_root in path.parents
+        shim = path.relative_to(LIB).as_posix() in BROWSER_CAPABILITY_SHIMS
         for directive in imports:
-            if directive.startswith(TRANSPORT_IMPORT_PREFIXES) and api_root not in path.parents:
+            if inside_api:
+                continue
+            if directive.startswith(GATEWAY_TRANSPORT_PREFIXES) or (
+                directive.startswith(TRANSPORT_IMPORT_PREFIXES) and not shim
+            ):
                 violations.append(f"{relative}: transport outside API boundary {directive}")
         if path.name.endswith("_io.dart"):
             violations.append(f"{relative}: IO implementation")
@@ -174,7 +191,9 @@ def test_runtime_import_graph_has_one_browser_gateway_boundary() -> None:
 
 
 def test_team_a_presentation_foundation_depends_on_fms_api() -> None:
-    dart_files = list(PRESENTATION.rglob("*.dart"))
+    # P0 moved order/map pages under `trihouse/features/`; the shell and shared
+    # widgets stay under `trihouse/presentation/`. Both are UI-owned surfaces.
+    dart_files = [*PRESENTATION.rglob("*.dart"), *FEATURES.rglob("*.dart")]
     declared: dict[str, Path] = {}
     for path in dart_files:
         text = path.read_text(encoding="utf-8")

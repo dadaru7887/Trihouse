@@ -6,11 +6,12 @@ import uuid
 
 import pytest
 
-from fms_gateway.app.config import Settings, get_settings
+from fms_gateway.app.config import Settings
 from fms_gateway.app.database import Database
 from fms_gateway.app.repositories import (
     MapDraftRevisionConflict,
     MapProjectSourceValidationError,
+    MapRevisionContentConflict,
     MySqlFmsRepository,
 )
 
@@ -24,34 +25,6 @@ PHYSICAL_JSONL = (
     / "import"
     / "trihouse_test_01_physical_features.jsonl"
 )
-
-
-def _repository() -> MySqlFmsRepository:
-    get_settings.cache_clear()
-    return MySqlFmsRepository(Database(get_settings()))
-
-
-def _race_repository() -> MySqlFmsRepository:
-    return MySqlFmsRepository(
-        Database(
-            Settings(
-                host=os.environ.get("FMS_DB_HOST", "127.0.0.1"),
-                port=int(os.environ.get("FMS_DB_PORT", "3307")),
-                user=os.environ.get("FMS_DB_USER", "fms_gateway"),
-                password=os.environ.get(
-                    "FMS_DB_PASSWORD", "test_gateway_password"
-                ),
-                database="trihouse_fms",
-                pool_size=2,
-            )
-        )
-    )
-
-
-def _cyclic_metadata() -> dict[str, object]:
-    metadata: dict[str, object] = {}
-    metadata["cycle"] = metadata
-    return metadata
 
 
 def _project() -> dict:
@@ -92,11 +65,33 @@ def _project() -> dict:
     }
 
 
+def _mysql_repository() -> MySqlFmsRepository:
+    return MySqlFmsRepository(
+        Database(
+            Settings(
+                host=os.environ.get("FMS_DB_HOST", "127.0.0.1"),
+                port=int(os.environ.get("FMS_DB_PORT", "3307")),
+                user=os.environ.get("FMS_DB_USER", "fms_gateway"),
+                password=os.environ.get(
+                    "FMS_DB_PASSWORD", "test_gateway_password"
+                ),
+                database="trihouse_fms",
+                pool_size=2,
+            )
+        )
+    )
+
+
+def _cyclic_metadata() -> dict[str, object]:
+    metadata: dict[str, object] = {}
+    metadata["cycle"] = metadata
+    return metadata
+
+
 def test_mysql_project_publish_updates_authoring_and_operational_projection(
     mysql_db,
 ):
-    get_settings.cache_clear()
-    repository = MySqlFmsRepository(Database(get_settings()))
+    repository = _mysql_repository()
 
     saved = repository.save_map_project("project1", _project(), None)
     assert saved["draft_revision"] == 1
@@ -113,19 +108,31 @@ def test_mysql_project_publish_updates_authoring_and_operational_projection(
     revision = hashlib.sha256(
         json.dumps(hashes, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    publication = repository.publish_map_project(
-        "project1",
-        {
-            "map_revision": "project1:" + revision,
-            **hashes,
-            "building_yaml_content": building,
-            "nav_graph_yaml_content": nav_graph,
-            "world_content": world,
-            "published_by": "W-OP-01",
-            "manifest": {"project": "project1"},
-        },
-    )
+    publication_request = {
+        "map_revision": "project1:" + revision,
+        **hashes,
+        "building_yaml_content": building,
+        "nav_graph_yaml_content": nav_graph,
+        "world_content": world,
+        "published_by": "W-OP-01",
+        "manifest": {"project": "project1"},
+    }
+    publication = repository.publish_map_project("project1", publication_request)
     assert publication["state"] == "published"
+
+    repository.save_map_project("project1", _project(), 1)
+    replay = repository.publish_map_project("project1", publication_request)
+    assert replay == publication
+    assert replay["draft_revision"] == 1
+    with pytest.raises(MapRevisionContentConflict):
+        repository.publish_map_project(
+            "project1",
+            {**publication_request, "manifest": {"project": "different"}},
+        )
+    with pytest.raises(MapRevisionContentConflict):
+        repository.publish_map_project(
+            "project1", {**publication_request, "world_sha256": "0" * 64}
+        )
 
     charger = mysql_db.one(
         "SELECT map_name, rmf_waypoint_name, pose_x, pose_y, metadata "
@@ -151,7 +158,7 @@ def test_mysql_project_publish_updates_authoring_and_operational_projection(
 def test_mysql_draft_discards_legacy_lanes_without_using_compatibility_table(
     mysql_db,
 ):
-    repository = _repository()
+    repository = _mysql_repository()
 
     saved = repository.save_map_project("project1", _project(), None)
 
@@ -162,7 +169,7 @@ def test_mysql_draft_discards_legacy_lanes_without_using_compatibility_table(
 
 
 def test_mysql_project_sources_match_in_memory_scope_and_lifecycle(mysql_db):
-    repository = _repository()
+    repository = _mysql_repository()
     for map_name in ("source_project_a", "source_project_b"):
         repository.save_map_project(map_name, _project(), None)
     source = {
@@ -217,7 +224,7 @@ def test_mysql_project_sources_match_in_memory_scope_and_lifecycle(mysql_db):
 def test_mysql_project_source_metadata_uses_stable_domain_errors(
     mysql_db, metadata_factory
 ):
-    repository = _repository()
+    repository = _mysql_repository()
     repository.save_map_project("source_project", _project(), None)
 
     with pytest.raises(MapProjectSourceValidationError, match="metadata"):
@@ -247,7 +254,7 @@ def _mysql_source_with_metadata(metadata: dict[str, object]) -> dict[str, object
 def test_mysql_source_metadata_round_trips_safe_integer_boundaries(
     mysql_db, value: int
 ) -> None:
-    repository = _repository()
+    repository = _mysql_repository()
     repository.save_map_project("source_project", _project(), None)
 
     stored = repository.store_map_project_source(
@@ -270,7 +277,7 @@ def test_mysql_source_metadata_round_trips_safe_integer_boundaries(
 def test_mysql_source_metadata_rejects_integers_outside_safe_range_before_sql(
     mysql_db, value: int
 ) -> None:
-    repository = _repository()
+    repository = _mysql_repository()
     repository.save_map_project("source_project", _project(), None)
 
     with pytest.raises(
@@ -333,7 +340,7 @@ def _source(
 def test_mysql_public_save_promotes_sources_and_draft_in_one_transaction(mysql_db):
     from fms_gateway.app.runtime_profiles import RuntimeProfileProvider
 
-    repository = _repository()
+    repository = _mysql_repository()
     profile_hash = RuntimeProfileProvider(ROOT).load()["profile_hash"]
     physical_waypoints, physical_features = _public_records()
     source = _source(
@@ -377,7 +384,7 @@ def test_mysql_public_save_promotes_sources_and_draft_in_one_transaction(mysql_d
 def test_mysql_same_jsonl_two_projects_has_distinct_uuid_and_equal_hash(mysql_db):
     from fms_gateway.app.runtime_profiles import RuntimeProfileProvider
 
-    repository = _repository()
+    repository = _mysql_repository()
     profile_hash = RuntimeProfileProvider(ROOT).load()["profile_hash"]
     waypoints, features = _public_records()
     stored = []
@@ -427,7 +434,7 @@ def test_mysql_active_delete_restores_manifest_draft_and_preserves_projection(
         )
     mysql_db.connection.commit()
 
-    repository = _repository()
+    repository = _mysql_repository()
     profiles = RuntimeProfileProvider(ROOT)
     profile_hash = profiles.load()["profile_hash"]
     waypoints, features = _public_records()
@@ -529,7 +536,7 @@ def test_mysql_publish_fence_rejects_committed_save_after_validation(
     from fms_gateway.app.map_deployment import MapDeploymentCoordinator
     from fms_gateway.app.runtime_profiles import RuntimeProfileProvider
 
-    repository = _race_repository()
+    repository = _mysql_repository()
     profiles = RuntimeProfileProvider(ROOT)
     profile_hash = profiles.load()["profile_hash"]
     waypoints, features = _public_records()
@@ -570,7 +577,7 @@ def test_mysql_publish_fence_rejects_committed_save_after_validation(
     original_publish = repository.publish_map_project
 
     def save_then_publish(map_name: str, publication: dict):
-        concurrent_repository = _race_repository()
+        concurrent_repository = _mysql_repository()
         concurrent_repository.save_public_map_draft(
             map_name,
             _public_draft(

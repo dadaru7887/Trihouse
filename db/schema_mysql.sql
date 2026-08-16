@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS map_projects (
                         ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'Timestamp when the map project was last updated.',
   PRIMARY KEY (project_id),
   UNIQUE KEY uq_map_projects_name (map_name),
+  CONSTRAINT chk_map_projects_name CHECK
+    (REGEXP_LIKE(map_name, '^[A-Za-z0-9_][A-Za-z0-9_-]{0,94}$', 'c')),
   CONSTRAINT chk_map_projects_payload CHECK (JSON_TYPE(payload) = 'OBJECT')
 ) ENGINE=InnoDB COMMENT='Stores editable map projects used to generate Open-RMF artifacts.';
 
@@ -77,7 +79,13 @@ CREATE TABLE IF NOT EXISTS map_project_waypoints (
   seq                 INT UNSIGNED NOT NULL COMMENT 'Stable display order within the current draft.',
   location_code       VARCHAR(96) NULL COMMENT 'Stable FMS location business key for operational waypoints.',
   rmf_waypoint_name   VARCHAR(128) NOT NULL COMMENT 'Waypoint name written to the RMF graph.',
-  category            VARCHAR(32) NOT NULL COMMENT 'UI waypoint category.',
+  category            VARCHAR(32) NOT NULL COMMENT 'Canonical English UI/RMF waypoint category.',
+  operational_role    VARCHAR(40) NOT NULL DEFAULT 'transit_waypoint'
+    COMMENT 'Warehouse operation role selected in the UI and projected to locations.',
+  temperature_zone    VARCHAR(16) NULL
+    COMMENT 'Optional ambient, chilled, or frozen operating zone.',
+  parent_location_code VARCHAR(96) NULL
+    COMMENT 'Optional canonical location_code of the warehouse or station that owns this access point.',
   x                   DOUBLE NOT NULL COMMENT 'Drawing-space X coordinate used by the editor.',
   y                   DOUBLE NOT NULL COMMENT 'Drawing-space Y coordinate used by the editor.',
   yaw                 DOUBLE NULL COMMENT 'Drawing-space heading retained by the editor.',
@@ -92,7 +100,12 @@ CREATE TABLE IF NOT EXISTS map_project_waypoints (
   CONSTRAINT fk_map_waypoints_project FOREIGN KEY (project_id)
     REFERENCES map_projects (project_id) ON DELETE CASCADE,
   CONSTRAINT chk_map_waypoints_category CHECK (category IN
-    ('대기','주차','홈','충전','픽업','드랍오프','설비','일반')),
+    ('waypoint','holding','parking','home','charger','pickup','dropoff','equipment')),
+  CONSTRAINT chk_map_waypoints_operational_role CHECK (operational_role IN
+    ('safety_zone','charging_station','loading_dock','bottleneck_waiting_point',
+     'transit_waypoint','parking_spot','inspection_point','workcell_station')),
+  CONSTRAINT chk_map_waypoints_temperature_zone CHECK
+    (temperature_zone IS NULL OR temperature_zone IN ('ambient','chilled','frozen')),
   CONSTRAINT chk_map_waypoints_uuid CHECK
     (waypoint_uuid REGEXP '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
 ) ENGINE=InnoDB COMMENT='Stores stable waypoint identities and FMS location mappings for map drafts.';
@@ -163,6 +176,7 @@ CREATE TABLE IF NOT EXISTS map_project_robots (
   spawn_heading     DOUBLE NOT NULL DEFAULT 0 COMMENT 'Gazebo spawn heading in radians.',
   PRIMARY KEY (project_id, robot_id),
   UNIQUE KEY uq_map_robots_seq (project_id, seq),
+  UNIQUE KEY uq_map_robots_gz_name (project_id, gz_name),
   CONSTRAINT fk_map_robots_project FOREIGN KEY (project_id)
     REFERENCES map_projects (project_id) ON DELETE CASCADE,
   CONSTRAINT fk_map_robots_charger FOREIGN KEY (charger_waypoint_uuid)
@@ -222,7 +236,7 @@ CREATE TABLE IF NOT EXISTS locations (
   CONSTRAINT fk_locations_parent
     FOREIGN KEY (parent_location_id) REFERENCES locations (location_id),
   CONSTRAINT chk_locations_type CHECK (location_type IN
-    ('rack','slot','waypoint','staging','inbound_dock','outbound_dock',
+    ('rack','slot','waypoint','staging','loading_dock',
      'charger','workstation','door','safe_node')),
   CONSTRAINT chk_locations_temperature CHECK (temperature_zone IS NULL OR
     temperature_zone IN ('ambient','chilled','frozen')),

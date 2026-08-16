@@ -900,7 +900,7 @@ Safety 승인·거부, Nav2 취소는 이 테이블이 아니라 `operation_even
 
 | 컬럼 | 값 |
 | --- | --- |
-| `location_type` | `rack`, `slot`, `waypoint`, `staging`, `inbound_dock`, `outbound_dock`, `charger`, `workstation`, `door`, `safe_node` |
+| `location_type` | `rack`, `slot`, `waypoint`, `staging`, `loading_dock`, `charger`, `workstation`, `door`, `safe_node` |
 | `temperature_zone` | `ambient`, `chilled`, `frozen` (NULL 허용) |
 | `state` | `available`, `reserved`, `occupied`, `blocked`, `maintenance` |
 

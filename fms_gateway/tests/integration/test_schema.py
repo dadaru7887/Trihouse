@@ -483,9 +483,9 @@ def test_development_seed_is_idempotent_and_has_location_hierarchy(mysql_db):
     _apply_seed_twice(mysql_db)
 
     expected_warehouses = {
-        "WH-AMB-01": ("상온창고", "ambient", "available"),
-        "WH-CHL-01": ("냉장창고", "chilled", "available"),
-        "WH-FRZ-01": ("냉동창고", "frozen", "available"),
+        "WH-AMB-01": ("Ambient Storage", "ambient", "available"),
+        "WH-CHL-01": ("Chilled Storage", "chilled", "available"),
+        "WH-FRZ-01": ("Frozen Storage", "frozen", "available"),
     }
     warehouses = mysql_db.all(
         """

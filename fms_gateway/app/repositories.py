@@ -1,4 +1,8 @@
-"""Queries used by the first control-system vertical slice."""
+"""FMS의 영속성, 트랜잭션, 상태 전이를 소유하는 Repository 계층.
+
+운영 구현은 MySQL의 행 잠금과 commit으로 일관성을 보장하고, 메모리 구현은
+같은 외부 계약과 상태 전이를 단위 테스트에서 결정적으로 재현한다.
+"""
 
 
 import base64
@@ -29,6 +33,7 @@ SEOUL = ZoneInfo("Asia/Seoul")
 
 
 class FmsRepository(Protocol):
+    """HTTP API와 TCP ingestion이 요구하는 저장소 유스케이스 계약."""
     def ping(self) -> bool: ...
 
     def list_devices(self) -> list[dict[str, object]]: ...
@@ -53,6 +58,14 @@ class FmsRepository(Protocol):
 
     def assign_job_resources(
         self, job_id: int, assignment: dict[str, Any]
+    ) -> dict[str, Any]: ...
+
+    def record_load_attempt(
+        self, job_step_id: int, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]: ...
+
+    def record_pick_recovery(
+        self, job_step_id: int, request: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]: ...
 
     def dispatch_step(
@@ -126,9 +139,25 @@ class FmsRepository(Protocol):
 
     def get_published_map(self, map_name: str) -> dict[str, Any] | None: ...
 
+    def get_projected_location(self, location_code: str) -> dict[str, Any] | None: ...
+
     def list_projected_map_features(self, map_revision: str) -> list[dict[str, Any]]: ...
 
+    def record_map_project_changes(
+        self, map_name: str, changes: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]: ...
 
+    def list_operation_events(
+        self,
+        from_at: datetime | None,
+        to_at: datetime | None,
+        limit: int,
+        before_at: datetime | None = None,
+        before_event_id: int | None = None,
+    ) -> list[dict[str, Any]]: ...
+
+
+# 상위 경계가 안정적인 HTTP/프로토콜 오류로 변환하는 도메인 예외들이다.
 class InventoryLotNotFound(Exception):
     pass
 
@@ -172,6 +201,10 @@ class WorkerCompletionConflict(Exception):
     def __init__(self, code: str):
         super().__init__(code)
         self.code = code
+
+
+class PickRecoveryConflict(Exception):
+    pass
 
 
 class ResourceAssignmentConflict(Exception):
@@ -358,10 +391,192 @@ PROJECT1_LOCATION_CODES = {
     "설비2": "OMX-WS-02",
 }
 
+LEGACY_WAYPOINT_CATEGORIES = {
+    "대기": "holding",
+    "주차": "parking",
+    "홈": "home",
+    "충전": "charger",
+    "픽업": "pickup",
+    "드랍오프": "dropoff",
+    "설비": "equipment",
+    "일반": "waypoint",
+}
+
+CANONICAL_WAYPOINT_CATEGORIES = frozenset(
+    {
+        "waypoint",
+        "holding",
+        "parking",
+        "home",
+        "charger",
+        "pickup",
+        "dropoff",
+        "equipment",
+    }
+)
+
+CATEGORY_LOCATION_TYPES = {
+    "waypoint": "waypoint",
+    "holding": "staging",
+    "parking": "staging",
+    "home": "staging",
+    "charger": "charger",
+    "pickup": "loading_dock",
+    "dropoff": "loading_dock",
+    "equipment": "workstation",
+}
+
+OPERATIONAL_ROLE_SPECS: dict[str, dict[str, Any]] = {
+    "safety_zone": {
+        "category": "holding",
+        "location_type": "safe_node",
+        "temperature_zone": None,
+    },
+    "charging_station": {
+        "category": "charger",
+        "location_type": "charger",
+        "temperature_zone": None,
+    },
+    "loading_dock": {
+        "category": "holding",
+        "location_type": "loading_dock",
+        "temperature_zone": "role-dependent",
+        "parent_required": True,
+    },
+    "bottleneck_waiting_point": {
+        "category": "holding",
+        "location_type": "staging",
+        "temperature_zone": "role-dependent",
+        "parent_required": True,
+    },
+    "transit_waypoint": {
+        "category": "waypoint",
+        "location_type": "waypoint",
+        "temperature_zone": None,
+        "project_location": False,
+    },
+    "parking_spot": {
+        "category": "parking",
+        "location_type": "staging",
+        "temperature_zone": None,
+    },
+    "inspection_point": {
+        "category": "holding",
+        "location_type": "staging",
+        "temperature_zone": None,
+    },
+    "workcell_station": {
+        "category": "equipment",
+        "location_type": "workstation",
+        "temperature_zone": None,
+    },
+}
+
+LEGACY_OPERATIONAL_ROLES = {
+    "ambient_storage_access": "loading_dock",
+    "chilled_storage_access": "loading_dock",
+    "frozen_storage_access": "loading_dock",
+    "packing_handover": "loading_dock",
+}
+
+TEMPERATURE_ZONES = frozenset({"ambient", "chilled", "frozen"})
+
+
+def _canonical_category(category: object) -> object:
+    return LEGACY_WAYPOINT_CATEGORIES.get(category, category)
+
+
+def _waypoint_projection(waypoint: dict[str, Any]) -> dict[str, Any]:
+    """Return canonical operational fields shared by both repositories."""
+    role = waypoint.get("operationalRole")
+    category = _canonical_category(waypoint.get("category", "waypoint"))
+    role_spec = OPERATIONAL_ROLE_SPECS.get(role)
+    if role_spec:
+        category = role_spec["category"]
+        location_type = role_spec["location_type"]
+    else:
+        location_type = CATEGORY_LOCATION_TYPES.get(category, "waypoint")
+    return {
+        "operational_role": role,
+        "category": category,
+        "location_type": location_type,
+        "temperature_zone": waypoint.get("temperatureZone"),
+        "parent_location_code": waypoint.get("parentLocationCode"),
+        "project_location": role_spec.get("project_location", True)
+        if role_spec
+        else True,
+    }
+
+
+def _bottleneck_projection(
+    map_name: str, map_revision: str, zone: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "map_name": map_name,
+        "map_revision": map_revision,
+        "feature_code": zone["featureCode"],
+        "feature_type": "bottleneck",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [float(zone["mapPose"][0]), float(zone["mapPose"][1])],
+        },
+        "properties": {
+            "radius_m": float(zone["radiusM"]),
+            "mutex_group": zone["mutexGroup"],
+            **(
+                {"entry_waiting_point": zone["entryWaitingPoint"]}
+                if zone.get("entryWaitingPoint")
+                else {}
+            ),
+            **(
+                {"exit_waiting_point": zone["exitWaitingPoint"]}
+                if zone.get("exitWaitingPoint")
+                else {}
+            ),
+            **(
+                {"aruco_marker_id": int(zone["arucoMarkerId"])}
+                if zone.get("arucoMarkerId") is not None
+                else {}
+            ),
+        },
+        "active": True,
+    }
+
+
+def _fiducial_projection(
+    map_name: str,
+    map_revision: str,
+    binding: dict[str, Any],
+    location_id: int | None,
+) -> dict[str, Any]:
+    return {
+        "map_name": map_name,
+        "map_revision": map_revision,
+        "feature_code": binding["featureCode"],
+        "feature_type": "fiducial",
+        "location_id": location_id,
+        "marker_code": int(binding["markerId"]),
+        "geometry": {
+            "type": "Point",
+            "coordinates": [
+                float(binding["recognitionPose"][0]),
+                float(binding["recognitionPose"][1]),
+            ],
+        },
+        "properties": {
+            "dictionary": binding["dictionary"],
+            "target_location_code": binding["targetLocationCode"],
+            "recognition_yaw": float(binding["recognitionPose"][2]),
+            "pixel_size": float(binding["pixelSize"]),
+        },
+        "active": True,
+    }
+
 
 def _publication_identity(
     map_name: str, publication: dict[str, Any]
 ) -> dict[str, Any]:
+    """Fields that make a published revision an immutable map artifact."""
     manifest = publication.get("manifest")
     revision_identity = (
         manifest.get("revision_identity") if isinstance(manifest, dict) else None
@@ -444,6 +659,7 @@ def _assert_publication_expectations(
 
 
 def _same_point(left: object, right: object) -> bool:
+    """편집 전후의 2차원 좌표가 같아 identity를 보존할 수 있는지 판단한다."""
     if not isinstance(left, list) or not isinstance(right, list):
         return False
     if len(left) < 2 or len(right) < 2:
@@ -456,7 +672,12 @@ def _normalize_map_payload(
     payload: dict[str, Any],
     existing: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Normalize waypoint identity and discard deprecated user-authored lanes."""
+    """지도 초안에 안정적인 waypoint UUID와 operational identity를 보충한다.
+
+    좌표가 유지된 기존 항목의 UUID, location code, map pose를 가능한 한
+    재사용해 단순 재저장이 새로운 장소로 해석되지 않게 한다. P0에서
+    user-authored lane은 계약이 아니므로 legacy laneDirections는 버린다.
+    """
     normalized = deepcopy(payload)
     normalized["mapName"] = map_name
     normalized.pop("laneDirections", None)
@@ -466,6 +687,18 @@ def _normalize_map_payload(
     )
     for index, waypoint in enumerate(waypoints):
         previous = previous_waypoints[index] if index < len(previous_waypoints) else {}
+        waypoint["category"] = _canonical_category(
+            waypoint.get("category", "waypoint")
+        )
+        role = waypoint.get("operationalRole")
+        role = LEGACY_OPERATIONAL_ROLES.get(role, role)
+        if role is None and waypoint["category"] in {"pickup", "dropoff"}:
+            role = "loading_dock"
+        if role is not None:
+            waypoint["operationalRole"] = role
+        role_spec = OPERATIONAL_ROLE_SPECS.get(role)
+        if role_spec:
+            waypoint["category"] = role_spec["category"]
         waypoint["waypointUuid"] = (
             waypoint.get("waypointUuid")
             or (
@@ -509,11 +742,8 @@ def _public_draft_payload(map_name: str, draft: dict[str, Any]) -> dict[str, Any
         y = float(waypoint["y"])
         yaw = float(waypoint["yaw"])
         role = waypoint.get("operational_role")
-        category = {
-            "loading_dock": "픽업",
-            "safety_zone": "대기",
-            "charging_station": "충전",
-        }.get(role, "일반")
+        role_spec = OPERATIONAL_ROLE_SPECS.get(role)
+        category = role_spec["category"] if role_spec else "waypoint"
         rmf_name = waypoint.get("rmf_waypoint_name") or waypoint["code"]
         waypoints.append(
             {
@@ -523,6 +753,7 @@ def _public_draft_payload(map_name: str, draft: dict[str, Any]) -> dict[str, Any
                 "name": waypoint.get("display_name") or rmf_name,
                 "rmfWaypointName": rmf_name,
                 "category": category,
+                "operationalRole": role or "transit_waypoint",
                 **(
                     {"locationCode": waypoint["location_code"]}
                     if waypoint.get("location_code")
@@ -596,51 +827,8 @@ def _public_draft_from_project(project: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _public_feature_projection(
-    map_name: str,
-    map_revision: str,
-    feature: dict[str, Any],
-) -> dict[str, Any]:
-    if feature["type"] == "bottleneck":
-        return {
-            "map_name": map_name,
-            "map_revision": map_revision,
-            "feature_code": feature["feature_code"],
-            "feature_type": "bottleneck",
-            "location_id": None,
-            "marker_code": None,
-            "geometry": {
-                "type": "Point",
-                "coordinates": [float(feature["x"]), float(feature["y"])],
-            },
-            "properties": {
-                "radius_m": float(feature["radius_m"]),
-                "mutex_group": feature["mutex_group"],
-            },
-            "active": True,
-        }
-    return {
-        "map_name": map_name,
-        "map_revision": map_revision,
-        "feature_code": feature["code"],
-        "feature_type": "fiducial",
-        "location_id": None,
-        "marker_code": int(feature["marker_id"]),
-        "geometry": {
-            "type": "Point",
-            "coordinates": [float(feature["x"]), float(feature["y"])],
-        },
-        "properties": {
-            "dictionary": feature["dictionary"],
-            "target_location_code": feature["target_location_code"],
-            "recognition_yaw": float(feature["yaw"]),
-            "pixel_size": float(feature["pixel_size"]),
-        },
-        "active": True,
-    }
-
-
 def _validate_map_draft(project: dict[str, Any]) -> list[str]:
+    """식별자, 그래프, location, robot/fleet 관계의 모든 오류를 수집한다."""
     errors: list[str] = []
     waypoints = project["payload"].get("waypoints", [])
     waypoint_ids: set[str] = set()
@@ -661,8 +849,48 @@ def _validate_map_draft(project: dict[str, Any]) -> list[str]:
         if not name or name in names:
             errors.append(f"{name or '<이름 없음>'}: Waypoint 이름이 중복되거나 비었습니다")
         names.add(name)
+        projection = _waypoint_projection(waypoint)
+        category = projection["category"]
+        role = projection["operational_role"]
+        temperature_zone = projection["temperature_zone"]
+        parent_location_code = projection["parent_location_code"]
+        if category not in CANONICAL_WAYPOINT_CATEGORIES:
+            errors.append(f"{name}: category가 canonical English 값이 아닙니다")
+        if role is not None and role not in OPERATIONAL_ROLE_SPECS:
+            errors.append(f"{name}: operationalRole이 지원되지 않습니다")
+        if temperature_zone is not None and temperature_zone not in TEMPERATURE_ZONES:
+            errors.append(f"{name}: temperatureZone이 지원되지 않습니다")
+        role_spec = OPERATIONAL_ROLE_SPECS.get(role)
+        if role_spec:
+            expected_temperature = role_spec["temperature_zone"]
+            if (
+                expected_temperature != "role-dependent"
+                and temperature_zone != expected_temperature
+            ):
+                errors.append(
+                    f"{name}: temperatureZone이 operationalRole과 일치하지 않습니다"
+                )
+            expected_parent = role_spec.get("parent_location_code")
+            if expected_parent and parent_location_code != expected_parent:
+                errors.append(
+                    f"{name}: parentLocationCode는 {expected_parent}이어야 합니다"
+                )
+            if role_spec.get("parent_required") and not parent_location_code:
+                errors.append(f"{name}: parentLocationCode가 필요합니다")
+            if not role_spec.get("project_location", True) and waypoint.get(
+                "locationCode"
+            ):
+                errors.append(
+                    f"{name}: Transit Waypoint에는 locationCode를 지정할 수 없습니다"
+                )
+        if parent_location_code is not None and (
+            not isinstance(parent_location_code, str)
+            or not parent_location_code.strip()
+            or len(parent_location_code) > 96
+        ):
+            errors.append(f"{name}: parentLocationCode 형식이 잘못됐습니다")
         location_code = waypoint.get("locationCode")
-        if waypoint.get("category") != "일반" and not location_code:
+        if category != "waypoint" and not location_code:
             errors.append(f"{name}: locationCode가 필요합니다")
         if location_code and location_code in location_codes:
             errors.append(f"{location_code}: locationCode가 중복됩니다")
@@ -680,21 +908,93 @@ def _validate_map_draft(project: dict[str, Any]) -> list[str]:
                 )
             ):
                 errors.append(f"{name}: publish용 mapPose(m)가 필요합니다")
+    feature_codes: set[str] = set()
+    for index, zone in enumerate(project["payload"].get("bottleneckZones", []), start=1):
+        label = zone.get("featureCode") or f"bottleneckZones[{index}]"
+        feature_code = zone.get("featureCode")
+        if (
+            not isinstance(feature_code, str)
+            or not feature_code.strip()
+            or len(feature_code) > 128
+        ):
+            errors.append(f"{label}: featureCode 형식이 잘못됐습니다")
+        elif feature_code in feature_codes:
+            errors.append(f"{feature_code}: featureCode가 중복됩니다")
+        else:
+            feature_codes.add(feature_code)
+        if zone.get("featureType") != "bottleneck":
+            errors.append(f"{label}: featureType은 bottleneck이어야 합니다")
+        map_pose = zone.get("mapPose")
+        if (
+            not isinstance(map_pose, list)
+            or len(map_pose) != 2
+            or not all(
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(float(value))
+                for value in map_pose
+            )
+        ):
+            errors.append(f"{label}: mapPose는 유한한 [x, y]여야 합니다")
+        radius = zone.get("radiusM")
+        if (
+            not isinstance(radius, (int, float))
+            or isinstance(radius, bool)
+            or not math.isfinite(float(radius))
+            or float(radius) <= 0
+        ):
+            errors.append(f"{label}: radiusM은 0보다 큰 유한값이어야 합니다")
+        mutex_group = zone.get("mutexGroup")
+        if (
+            not isinstance(mutex_group, str)
+            or not mutex_group.strip()
+            or len(mutex_group) > 64
+        ):
+            errors.append(f"{label}: mutexGroup이 필요합니다")
+        for key in ("entryWaitingPoint", "exitWaitingPoint"):
+            waiting_code = zone.get(key)
+            if waiting_code is None:
+                continue
+            waiting = next(
+                (
+                    waypoint
+                    for waypoint in waypoints
+                    if waypoint.get("locationCode") == waiting_code
+                ),
+                None,
+            )
+            if waiting is None or waiting.get("operationalRole") != "bottleneck_waiting_point":
+                errors.append(f"{label}: {key}는 Bottleneck Waiting Point여야 합니다")
+        marker_id = zone.get("arucoMarkerId")
+        if marker_id is not None and (
+            not isinstance(marker_id, int)
+            or isinstance(marker_id, bool)
+            or marker_id < 0
+        ):
+            errors.append(f"{label}: arucoMarkerId는 0 이상의 정수여야 합니다")
     waypoint_categories = {
         (waypoint.get("rmfWaypointName") or waypoint.get("name")): waypoint.get("category")
         for waypoint in waypoints
     }
     robot_ids: set[str] = set()
+    gazebo_names: set[str] = set()
     for robot in project.get("robots", []):
         robot_id = robot.get("robot_id", "")
         if not robot_id or robot_id in robot_ids:
             errors.append(f"{robot_id or '<ID 없음>'}: 로봇 ID가 중복되거나 비었습니다")
         robot_ids.add(robot_id)
+        gz_name = robot.get("gz_name", "")
+        normalized_gz_name = gz_name.casefold() if isinstance(gz_name, str) else ""
+        if not normalized_gz_name or normalized_gz_name in gazebo_names:
+            errors.append(
+                f"{gz_name or '<gz_name 없음>'}: gz_name이 중복되거나 비었습니다"
+            )
+        gazebo_names.add(normalized_gz_name)
         station = robot.get("charger_waypoint_name")
-        required_category = "충전" if robot.get("kind") == "mobile" else "설비"
+        required_category = "charger" if robot.get("kind") == "mobile" else "equipment"
         if not station or waypoint_categories.get(station) != required_category:
             errors.append(
-                f"{robot_id}: {required_category} Waypoint 연결이 필요합니다"
+                f"{robot_id}: {'충전' if required_category == 'charger' else '설비'} Waypoint 연결이 필요합니다"
             )
         if robot.get("kind") == "mobile" and project.get("fleet") is None:
             errors.append(f"{robot_id}: mobile robot에는 fleet 설정이 필요합니다")
@@ -704,6 +1004,7 @@ def _validate_map_draft(project: dict[str, Any]) -> list[str]:
 def _validate_publication_artifacts(
     project: dict[str, Any], publication: dict[str, Any]
 ) -> list[str]:
+    """artifact 내용 해시와 현재 초안/nav graph의 일치를 검증한다."""
     errors: list[str] = []
     contents = {
         "building_sha256": publication["building_yaml_content"],
@@ -749,7 +1050,7 @@ def _validate_publication_artifacts(
         if not waypoint.get("locationCode"):
             continue
         # Workcells are fixed equipment positions, not traversable RMF graph vertices.
-        if waypoint.get("category") == "설비":
+        if _canonical_category(waypoint.get("category")) == "equipment":
             continue
         name = waypoint.get("rmfWaypointName") or waypoint.get("name")
         map_pose = waypoint.get("mapPose") or []
@@ -764,16 +1065,19 @@ def _validate_publication_artifacts(
 
 
 def _json(value: object) -> object:
+    """문자열 또는 객체로 반환될 수 있는 MySQL JSON을 객체로 통일한다."""
     return json.loads(value) if isinstance(value, str) else value
 
 
 def _mysql_datetime(value: datetime | None) -> datetime | None:
+    """aware 값을 MySQL +09:00 세션에 기록할 naive 서울 시각으로 바꾼다."""
     if value is None or value.tzinfo is None:
         return value
     return value.astimezone(SEOUL).replace(tzinfo=None)
 
 
 def _seoul_datetimes(row: dict[str, object]) -> dict[str, object]:
+    """MySQL에서 읽은 naive datetime을 Asia/Seoul aware 값으로 복원한다."""
     for key, value in row.items():
         if isinstance(value, datetime) and value.tzinfo is None:
             row[key] = value.replace(tzinfo=SEOUL)
@@ -792,12 +1096,14 @@ def _json_safe(value: object) -> object:
 
 
 class MySqlFmsRepository:
+    """행 잠금과 명시적 commit으로 FMS 상태를 원자적으로 갱신하는 운영 구현."""
     def __init__(self, database: Database):
         self.database = database
 
     def _all(
         self, sql: str, params: tuple[object, ...] = ()
     ) -> list[dict[str, object]]:
+        """읽기 쿼리 결과를 dict와 서울 시간대 값으로 정규화한다."""
         with self.database.connection() as connection:
             cursor = connection.cursor(dictionary=True)
             try:
@@ -1047,10 +1353,11 @@ class MySqlFmsRepository:
                     """
                     INSERT INTO map_project_waypoints
                       (waypoint_uuid, project_id, seq, location_code,
-                       rmf_waypoint_name, category, x, y, yaw,
+                       rmf_waypoint_name, category, operational_role,
+                       temperature_zone, parent_location_code, x, y, yaw,
                        map_x, map_y, map_yaw, active)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, 1)
+                            %s, %s, %s, %s, %s, %s, 1)
                     """,
                     (
                         waypoint["waypointUuid"],
@@ -1058,7 +1365,10 @@ class MySqlFmsRepository:
                         seq,
                         waypoint.get("locationCode"),
                         waypoint["rmfWaypointName"],
-                        waypoint.get("category", "일반"),
+                        waypoint.get("category", "waypoint"),
+                        waypoint.get("operationalRole", "transit_waypoint"),
+                        waypoint.get("temperatureZone"),
+                        waypoint.get("parentLocationCode"),
                         point[0],
                         point[1],
                         waypoint.get("yaw"),
@@ -1292,6 +1602,11 @@ class MySqlFmsRepository:
     def save_map_project(
         self, map_name: str, project: dict[str, Any], expected_revision: int | None
     ) -> dict[str, Any]:
+        """지도 초안과 모든 하위 항목을 한 트랜잭션에서 저장한다.
+
+        행 잠금과 expected revision으로 동시 편집 충돌을 감지하며, JSON 원본과
+        검색/조인용 정규화 테이블이 서로 다른 버전으로 남지 않게 함께 commit한다.
+        """
         with self.database.connection() as connection:
             cursor = connection.cursor(dictionary=True)
             try:
@@ -1371,16 +1686,20 @@ class MySqlFmsRepository:
                         """
                         INSERT INTO map_project_waypoints
                           (waypoint_uuid, project_id, seq, location_code,
-                           rmf_waypoint_name, category, x, y, yaw,
+                           rmf_waypoint_name, category, operational_role,
+                           temperature_zone, parent_location_code, x, y, yaw,
                            map_x, map_y, map_yaw, active)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
-                                %s, %s, %s, 1)
+                                %s, %s, %s, %s, %s, %s, 1)
                         """,
                         (
                             waypoint["waypointUuid"], project_id, seq,
                             waypoint.get("locationCode"), name,
-                            waypoint.get("category", "일반"), point[0], point[1],
-                            waypoint.get("yaw"),
+                            waypoint.get("category", "waypoint"),
+                            waypoint.get("operationalRole", "transit_waypoint"),
+                            waypoint.get("temperatureZone"),
+                            waypoint.get("parentLocationCode"),
+                            point[0], point[1], waypoint.get("yaw"),
                             (waypoint.get("mapPose") or [None, None])[0],
                             (waypoint.get("mapPose") or [None, None])[1],
                             (waypoint.get("mapPose") or [None, None, None])[2]
@@ -1443,6 +1762,7 @@ class MySqlFmsRepository:
         return saved
 
     def delete_map_project(self, map_name: str) -> None:
+        """실행 재현성을 위해 발행 이력이 없는 지도 초안만 삭제한다."""
         with self.database.connection() as connection:
             cursor = connection.cursor(dictionary=True)
             try:
@@ -1471,6 +1791,7 @@ class MySqlFmsRepository:
                 cursor.close()
 
     def validate_map_project(self, map_name: str) -> dict[str, Any]:
+        """현재 초안을 읽어 검증 오류를 fail-fast하지 않고 한 번에 반환한다."""
         project = self.get_map_project(map_name)
         if project is None:
             raise MapProjectNotFound
@@ -1478,17 +1799,21 @@ class MySqlFmsRepository:
         return {"valid": not errors, "errors": errors}
 
     @staticmethod
-    def _location_type(category: str) -> str:
-        return {
-            "대기": "staging", "주차": "staging", "홈": "staging",
-            "충전": "charger", "픽업": "inbound_dock",
-            "드랍오프": "outbound_dock", "설비": "workstation",
-            "일반": "waypoint",
-        }[category]
+    def _location_type(category: str, operational_role: str | None = None) -> str:
+        role_spec = OPERATIONAL_ROLE_SPECS.get(operational_role)
+        if role_spec:
+            return str(role_spec["location_type"])
+        canonical = _canonical_category(category)
+        return CATEGORY_LOCATION_TYPES[str(canonical)]
 
     def publish_map_project(
         self, map_name: str, publication: dict[str, Any]
     ) -> dict[str, Any]:
+        """검증된 초안과 세 artifact를 불변 map revision으로 발행한다.
+
+        같은 revision 재요청은 콘텐츠가 같을 때만 멱등 성공하며, 다른 콘텐츠는
+        충돌시켜 revision 이름이 언제나 같은 실행 산출물을 가리키게 한다.
+        """
         if not publication["map_revision"].startswith(f"{map_name}:"):
             raise MapRevisionContentConflict
         with self.database.connection() as connection:
@@ -1508,6 +1833,7 @@ class MySqlFmsRepository:
                 project = self._load_map_project(connection, map_name)
                 if project is None:
                     raise MapProjectNotFound
+
                 def locked_source(source_type: str, source_uuid: object):
                     cursor.execute(
                         """
@@ -1525,9 +1851,6 @@ class MySqlFmsRepository:
                 _assert_publication_expectations(
                     _public_draft_from_project(project), publication, locked_source
                 )
-                errors = _validate_map_draft(project)
-                if errors:
-                    raise MapProjectValidationError(errors)
                 cursor.execute(
                     "SELECT * FROM map_revisions WHERE map_revision = %s",
                     (publication["map_revision"],),
@@ -1546,8 +1869,12 @@ class MySqlFmsRepository:
                         raise MapRevisionContentConflict
                     connection.rollback()
                     result = dict(existing)
+                    result.pop("source_project_id", None)
                     result["manifest"] = _json(result["manifest"])
                     return _seoul_datetimes(result)
+                errors = _validate_map_draft(project)
+                if errors:
+                    raise MapProjectValidationError(errors)
                 errors = _validate_publication_artifacts(project, publication)
                 if errors:
                     raise MapProjectValidationError(errors)
@@ -1576,85 +1903,124 @@ class MySqlFmsRepository:
                     location_code = waypoint.get("locationCode")
                     if not location_code:
                         continue
+                    projection = _waypoint_projection(waypoint)
+                    if not projection["project_location"]:
+                        continue
                     active_codes.append(location_code)
                     map_pose = waypoint["mapPose"]
+                    parent_location_id = None
+                    parent_location_code = projection["parent_location_code"]
+                    if parent_location_code:
+                        cursor.execute(
+                            "SELECT location_id FROM locations WHERE location_code = %s",
+                            (parent_location_code,),
+                        )
+                        parent = cursor.fetchone()
+                        if parent is None:
+                            raise MapProjectValidationError(
+                                [f"{location_code}: parentLocationCode가 존재하지 않습니다"]
+                            )
+                        parent_location_id = parent["location_id"]
                     metadata = json.dumps(
                         {
                             "authoring_managed": True,
                             "active": True,
                             "waypoint_uuid": waypoint["waypointUuid"],
                             "map_revision": publication["map_revision"],
+                            "operational_role": projection["operational_role"],
+                            "rmf_category": projection["category"],
+                            "parent_location_code": parent_location_code,
                         },
                         ensure_ascii=False,
                     )
-                    location_type = self._location_type(waypoint.get("category", "일반"))
+                    location_type = projection["location_type"]
                     name = waypoint.get("name") or waypoint["rmfWaypointName"]
                     cursor.execute(
                         "SELECT location_type, map_name, metadata FROM locations WHERE location_code = %s",
                         (location_code,),
                     )
                     existing_location = cursor.fetchone()
-                    existing_metadata = (
-                        _json(existing_location["metadata"])
-                        if existing_location else {}
-                    ) or {}
                     if (
                         existing_location
-                        and existing_metadata.get("authoring_managed") is True
+                        and existing_location["map_name"] is not None
                         and existing_location["map_name"] != map_name
                     ):
                         raise MapProjectValidationError(
                             [f"{location_code}: 다른 published map이 소유합니다"]
                         )
-                    if waypoint.get("category") == "픽업" and existing_location:
+                    if (
+                        projection["operational_role"] is None
+                        and projection["category"] == "pickup"
+                        and existing_location
+                    ):
                         location_type = existing_location["location_type"]
                     cursor.execute(
                         """
                         INSERT INTO locations
-                          (location_code, name, location_type, map_name,
+                          (parent_location_id, location_code, name, location_type,
+                           temperature_zone, map_name,
                            rmf_waypoint_name, pose_x, pose_y, pose_yaw, metadata)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON DUPLICATE KEY UPDATE
-                          name = %s, location_type = %s, map_name = %s,
+                          parent_location_id = %s, name = %s, location_type = %s,
+                          temperature_zone = %s, map_name = %s,
                           rmf_waypoint_name = %s, pose_x = %s, pose_y = %s,
                           pose_yaw = %s, metadata = %s
                         """,
                         (
-                            location_code, name, location_type, map_name,
+                            parent_location_id, location_code, name, location_type,
+                            projection["temperature_zone"], map_name,
                             waypoint["rmfWaypointName"], map_pose[0], map_pose[1],
                             map_pose[2] if len(map_pose) >= 3 else None, metadata,
-                            name, location_type, map_name, waypoint["rmfWaypointName"],
+                            parent_location_id, name, location_type,
+                            projection["temperature_zone"], map_name,
+                            waypoint["rmfWaypointName"],
                             map_pose[0], map_pose[1],
                             map_pose[2] if len(map_pose) >= 3 else None, metadata,
                         ),
                     )
-                for public_feature in project["payload"].get(
-                    "publicFeatures", []
-                ):
-                    feature = _public_feature_projection(
-                        map_name, publication["map_revision"], public_feature
+                for zone in project["payload"].get("bottleneckZones", []):
+                    feature = _bottleneck_projection(
+                        map_name, publication["map_revision"], zone
                     )
-                    if feature["feature_type"] == "fiducial":
-                        cursor.execute(
-                            "SELECT location_id FROM locations WHERE location_code = %s",
-                            (feature["properties"]["target_location_code"],),
-                        )
-                        target = cursor.fetchone()
-                        feature["location_id"] = (
-                            int(target["location_id"]) if target else None
-                        )
                     cursor.execute(
                         """
                         INSERT INTO map_features
                           (map_name, map_revision, feature_code, feature_type,
-                           location_id, marker_code, geometry, properties, active)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1)
+                           geometry, properties, active)
+                        VALUES (%s, %s, %s, 'bottleneck', %s, %s, 1)
                         """,
                         (
                             feature["map_name"],
                             feature["map_revision"],
                             feature["feature_code"],
-                            feature["feature_type"],
+                            json.dumps(feature["geometry"], ensure_ascii=False),
+                            json.dumps(feature["properties"], ensure_ascii=False),
+                        ),
+                    )
+                for binding in project["payload"].get("fiducialBindings", []):
+                    cursor.execute(
+                        "SELECT location_id FROM locations WHERE location_code = %s",
+                        (binding["targetLocationCode"],),
+                    )
+                    target = cursor.fetchone()
+                    feature = _fiducial_projection(
+                        map_name,
+                        publication["map_revision"],
+                        binding,
+                        int(target["location_id"]) if target else None,
+                    )
+                    cursor.execute(
+                        """
+                        INSERT INTO map_features
+                          (map_name, map_revision, feature_code, feature_type,
+                           location_id, marker_code, geometry, properties, active)
+                        VALUES (%s, %s, %s, 'fiducial', %s, %s, %s, %s, 1)
+                        """,
+                        (
+                            feature["map_name"],
+                            feature["map_revision"],
+                            feature["feature_code"],
                             feature["location_id"],
                             feature["marker_code"],
                             json.dumps(feature["geometry"], ensure_ascii=False),
@@ -1763,6 +2129,7 @@ class MySqlFmsRepository:
         return result
 
     def get_published_map(self, map_name: str) -> dict[str, Any] | None:
+        """해당 지도에서 가장 최근에 발행된 실행 revision을 반환한다."""
         rows = self._all(
             """
             SELECT map_revision, map_name, draft_revision, state,
@@ -1779,14 +2146,28 @@ class MySqlFmsRepository:
         rows[0]["manifest"] = _json(rows[0]["manifest"])
         return rows[0]
 
-    def list_projected_map_features(
-        self, map_revision: str
-    ) -> list[dict[str, Any]]:
+    def get_projected_location(self, location_code: str) -> dict[str, Any] | None:
+        rows = self._all(
+            """
+            SELECT location_id, parent_location_id, location_code, name,
+                   location_type, temperature_zone, map_name,
+                   rmf_waypoint_name, pose_x, pose_y, pose_yaw, metadata
+            FROM locations WHERE location_code = %s
+            """,
+            (location_code,),
+        )
+        if not rows:
+            return None
+        rows[0]["metadata"] = _json(rows[0]["metadata"])
+        return rows[0]
+
+    def list_projected_map_features(self, map_revision: str) -> list[dict[str, Any]]:
         rows = self._all(
             """
             SELECT map_name, map_revision, feature_code, feature_type,
-                   location_id, marker_code, geometry, properties, active
-            FROM map_features WHERE map_revision = %s ORDER BY feature_id
+                   geometry, properties, active
+            FROM map_features WHERE map_revision = %s
+            ORDER BY feature_code
             """,
             (map_revision,),
         )
@@ -1796,8 +2177,104 @@ class MySqlFmsRepository:
             row["active"] = bool(row["active"])
         return rows
 
+    def record_map_project_changes(
+        self, map_name: str, changes: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                cursor.execute(
+                    "SELECT 1 FROM map_projects WHERE map_name = %s",
+                    (map_name,),
+                )
+                if cursor.fetchone() is None:
+                    raise MapProjectNotFound
+                events: list[dict[str, Any]] = []
+                for change in changes:
+                    event_uuid = str(uuid.uuid4())
+                    occurred_at = datetime.now(SEOUL)
+                    payload = {"map_name": map_name, "change": deepcopy(change)}
+                    cursor.execute(
+                        """
+                        INSERT INTO operation_events
+                          (event_uuid, occurred_at, severity, category,
+                           event_type, message, payload)
+                        VALUES (%s, %s, 'info', 'system',
+                                'MAP_PROJECT_CHANGED', %s, %s)
+                        """,
+                        (
+                            event_uuid,
+                            _mysql_datetime(occurred_at),
+                            change["summary"],
+                            json.dumps(payload, ensure_ascii=False),
+                        ),
+                    )
+                    events.append(
+                        {
+                            "event_id": int(cursor.lastrowid),
+                            "event_uuid": event_uuid,
+                            "occurred_at": occurred_at,
+                            "actor_worker_id": None,
+                            "device_id": None,
+                            "job_id": None,
+                            "job_step_id": None,
+                            "incident_id": None,
+                            "severity": "info",
+                            "category": "system",
+                            "event_type": "MAP_PROJECT_CHANGED",
+                            "message": change["summary"],
+                            "payload": payload,
+                        }
+                    )
+                connection.commit()
+                return events
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                cursor.close()
+
+    def list_operation_events(
+        self,
+        from_at: datetime | None,
+        to_at: datetime | None,
+        limit: int,
+        before_at: datetime | None = None,
+        before_event_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        conditions: list[str] = []
+        params: list[object] = []
+        if from_at is not None:
+            conditions.append("occurred_at >= %s")
+            params.append(_mysql_datetime(from_at))
+        if to_at is not None:
+            conditions.append("occurred_at < %s")
+            params.append(_mysql_datetime(to_at))
+        if before_at is not None and before_event_id is not None:
+            cursor_at = _mysql_datetime(before_at)
+            conditions.append(
+                "(occurred_at < %s OR (occurred_at = %s AND event_id < %s))"
+            )
+            params.extend((cursor_at, cursor_at, before_event_id))
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        rows = self._all(
+            """
+            SELECT event_id, event_uuid, occurred_at, actor_worker_id,
+                   device_id, job_id, job_step_id, incident_id, severity,
+                   category, event_type, message, payload
+            FROM operation_events
+            """
+            + where
+            + " ORDER BY occurred_at DESC, event_id DESC LIMIT %s",
+            tuple([*params, limit]),
+        )
+        for row in rows:
+            row["payload"] = _json(row["payload"])
+        return rows
+
     @staticmethod
     def _project_robot_state(status: dict[str, Any]) -> tuple[str, str]:
+        """원시 telemetry 신호를 운영 화면용 state와 health로 축약한다."""
         if status["safety_state"] != 0:
             return "estop", "safety_hold"
         if not status["telemetry_valid"]:
@@ -1809,6 +2286,7 @@ class MySqlFmsRepository:
         return "idle", "ok"
 
     def ingest_robot_status(self, status: dict[str, Any]) -> None:
+        """검증된 로봇 상태를 장치의 최신 projection으로 upsert한다."""
         state, health = self._project_robot_state(status)
         context = status["task_context"]
         details = {
@@ -1870,6 +2348,11 @@ class MySqlFmsRepository:
                 cursor.close()
 
     def ingest_task_event(self, event: dict[str, Any]) -> dict[str, Any]:
+        """실행 문맥과 최신 telemetry를 확인해 Job Step을 전이한다.
+
+        event UUID는 멱등 identity다. 특히 `arrived`는 같은 session/map/context의
+        최근 상태와 실제 정지·안전·navigation 조건도 만족해야 성공한다.
+        """
         from .outcomes import OutcomeClassifier
 
         context = event["task_context"]
@@ -2102,6 +2585,7 @@ class MySqlFmsRepository:
         note: str | None,
         idempotency_key: str,
     ) -> dict[str, object]:
+        """lot 행을 잠근 뒤 수량, 감사 이벤트, 멱등 응답을 함께 저장한다."""
         event_uuid = str(
             uuid.uuid5(uuid.NAMESPACE_URL, f"trihouse:inventory-adjust:{idempotency_key}")
         )
@@ -2717,6 +3201,7 @@ class MySqlFmsRepository:
                 cursor.close()
 
     def create_job(self, job: dict[str, Any]) -> dict[str, Any]:
+        """Job과 순서 있는 Step, 최초 `job.created` 이벤트를 원자적으로 만든다."""
         with self.database.connection() as connection:
             cursor = connection.cursor(dictionary=True)
             try:
@@ -2845,6 +3330,10 @@ class MySqlFmsRepository:
                 expected_charger = expected_chargers.get(assignment["mobile_id"])
                 if expected_charger != assignment["charger_code"]:
                     raise ResourceAssignmentConflict("FIXED_CHARGER_MISMATCH")
+                if assignment["packing_dock_code"] == assignment["charger_code"]:
+                    raise ResourceAssignmentConflict(
+                        "PACKING_DOCK_CHARGER_MUST_DIFFER"
+                    )
 
                 device_ids = sorted((assignment["mobile_id"], assignment["omx_id"]))
                 cursor.execute(
@@ -2881,7 +3370,8 @@ class MySqlFmsRepository:
                 )
                 cursor.execute(
                     """
-                    SELECT location_id, location_code, map_name
+                    SELECT location_id, location_code, location_type,
+                           map_name, state, metadata
                     FROM locations
                     WHERE location_code IN (%s, %s)
                     ORDER BY location_code
@@ -2894,6 +3384,45 @@ class MySqlFmsRepository:
                     row["map_name"] != "trihouse_test_01" for row in locations.values()
                 ):
                     raise ResourceAssignmentConflict("CANONICAL_MAP_RESOURCE_REQUIRED")
+                packing = locations[assignment["packing_dock_code"]]
+                charger = locations[assignment["charger_code"]]
+                packing_metadata = _json(packing.get("metadata")) or {}
+                charger_metadata = _json(charger.get("metadata")) or {}
+                cursor.execute(
+                    """
+                    SELECT manifest FROM map_revisions
+                    WHERE map_name = 'trihouse_test_01' AND state = 'published'
+                    ORDER BY published_at DESC, map_revision DESC LIMIT 1
+                    """
+                )
+                revision_row = cursor.fetchone()
+                manifest = _json(revision_row.get("manifest")) if revision_row else {}
+                role_by_code = {
+                    waypoint.get("location_code"): waypoint.get("operational_role")
+                    for waypoint in (manifest or {}).get("draft_snapshot", {}).get(
+                        "waypoints", []
+                    )
+                }
+                packing_role = packing_metadata.get("operational_role") or role_by_code.get(
+                    assignment["packing_dock_code"]
+                )
+                charger_role = charger_metadata.get("operational_role") or role_by_code.get(
+                    assignment["charger_code"]
+                )
+                if packing["location_type"] not in {
+                    "outbound_dock",
+                    "loading_dock",
+                    "staging",
+                } or packing_role != "loading_dock":
+                    raise ResourceAssignmentConflict("PACKING_DOCK_TYPE_MISMATCH")
+                if packing["state"] != "available":
+                    raise ResourceAssignmentConflict("PACKING_DOCK_UNAVAILABLE")
+                if charger["location_type"] not in {"charger", "staging"} or (
+                    charger_role != "charging_station"
+                ):
+                    raise ResourceAssignmentConflict("CHARGER_TYPE_MISMATCH")
+                if charger["state"] != "available":
+                    raise ResourceAssignmentConflict("CHARGER_UNAVAILABLE")
 
                 resource_params = (
                     assignment["mobile_id"],
@@ -2902,7 +3431,7 @@ class MySqlFmsRepository:
                 )
                 cursor.execute(
                     """
-                    SELECT reservation_id FROM reservations
+                    SELECT reservation_id, job_id FROM reservations
                     WHERE state IN ('reserved','in_use')
                       AND (device_id IN (%s, %s) OR location_id = %s)
                     ORDER BY active_resource_key
@@ -2910,7 +3439,9 @@ class MySqlFmsRepository:
                     """,
                     resource_params,
                 )
-                conflicts = list(cursor.fetchall())
+                conflicts = [
+                    row for row in cursor.fetchall() if int(row["job_id"]) != job_id
+                ]
                 if conflicts:
                     raise ResourceUnavailable("one or more resources are already reserved")
 
@@ -2944,13 +3475,33 @@ class MySqlFmsRepository:
                     UPDATE job_steps
                     SET assigned_device_id = CASE executor_type
                           WHEN 'mobile' THEN %s WHEN 'arm' THEN %s ELSE NULL END,
-                        assignment_revision = %s
+                        assignment_revision = %s,
+                        target_location_id = CASE WHEN
+                          (action_type = 'navigate' AND
+                           JSON_UNQUOTE(JSON_EXTRACT(input, '$.branch')) = 'packing_navigate')
+                          OR (action_type = 'handover' AND
+                              JSON_EXTRACT(input, '$.packing_dock_location_id') IS NOT NULL)
+                          OR (action_type = 'wait' AND
+                              JSON_UNQUOTE(JSON_EXTRACT(input, '$.wait_for')) = 'worker_completion')
+                          THEN %s ELSE target_location_id END,
+                        input = CASE WHEN
+                          (action_type = 'navigate' AND
+                           JSON_UNQUOTE(JSON_EXTRACT(input, '$.branch')) = 'packing_navigate')
+                          OR (action_type = 'handover' AND
+                              JSON_EXTRACT(input, '$.packing_dock_location_id') IS NOT NULL)
+                          OR (action_type = 'wait' AND
+                              JSON_UNQUOTE(JSON_EXTRACT(input, '$.wait_for')) = 'worker_completion')
+                          THEN JSON_SET(COALESCE(input, JSON_OBJECT()),
+                               '$.packing_dock_location_id', %s)
+                          ELSE input END
                     WHERE job_id = %s
                     """,
                     (
                         assignment["mobile_id"],
                         assignment["omx_id"],
                         revision,
+                        packing["location_id"],
+                        packing["location_id"],
                         job_id,
                     ),
                 )
@@ -3001,6 +3552,329 @@ class MySqlFmsRepository:
                     raise ResourceUnavailable(
                         "one or more resources were reserved concurrently"
                     ) from error
+                raise
+            finally:
+                cursor.close()
+
+    def record_load_attempt(
+        self, job_step_id: int, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """Append complete load evidence and refresh its restart-safe item projection."""
+        event_uuid = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"trihouse:load-attempt:{idempotency_key}")
+        )
+        command_uuid = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"trihouse:load-command:{idempotency_key}")
+        )
+        canonical = deepcopy(request)
+        response = {
+            **canonical,
+            "departure_allowed": canonical["result"] == "LOAD_CONFIRMED",
+        }
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                cursor.execute(
+                    """
+                    SELECT js.job_step_id, js.job_id, js.action_type, js.input,
+                           js.assignment_revision, jobs.context,
+                           item.job_item_id, item.metadata
+                    FROM job_steps js
+                    JOIN jobs ON jobs.job_id = js.job_id
+                    JOIN job_items item ON item.job_id = js.job_id
+                                         AND item.job_item_id = %s
+                    WHERE js.job_step_id = %s
+                    FOR UPDATE
+                    """,
+                    (canonical["item_id"], job_step_id),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise JobStepNotFound
+                cursor.execute(
+                    "SELECT parameters FROM job_step_attempts WHERE event_uuid=%s",
+                    (event_uuid,),
+                )
+                replay = cursor.fetchone()
+                if replay is not None:
+                    parameters = _json(replay["parameters"]) or {}
+                    if parameters.get("request") != canonical:
+                        raise IdempotencyConflict
+                    return parameters["response"]
+
+                step_input = _json(row.get("input")) or {}
+                context = _json(row.get("context")) or {}
+                assignment = context.get("assignment") or {}
+                expected = (
+                    int(row["job_id"]),
+                    step_input.get("handover_group_id"),
+                    int(row["assignment_revision"]),
+                    assignment.get("mobile_id"),
+                    assignment.get("omx_id"),
+                )
+                actual = (
+                    int(canonical["job_id"]),
+                    canonical["handover_group_id"],
+                    int(canonical["assignment_revision"]),
+                    canonical["pinky_id"],
+                    canonical["omx_id"],
+                )
+                if row["action_type"] != "load" or expected != actual:
+                    raise ResourceAssignmentConflict("LOAD_ATTEMPT_IDENTITY_MISMATCH")
+
+                metadata = _json(row.get("metadata")) or {}
+                if metadata.get("drop_hold"):
+                    raise PickRecoveryConflict("ACTIVE_DROP_HOLD")
+                cursor.execute(
+                    """
+                    SELECT COALESCE(MAX(attempt_no), 0) + 1 AS attempt_no
+                    FROM job_step_attempts
+                    WHERE job_step_id=%s AND assignment_revision=%s
+                      AND actor_role='omx'
+                    """,
+                    (job_step_id, canonical["assignment_revision"]),
+                )
+                attempt_no = int(cursor.fetchone()["attempt_no"])
+                success = canonical["result"] == "LOAD_CONFIRMED"
+                failure_domain = {
+                    "LOAD_CONFIRMED": "none",
+                    "DROP_DETECTED": "safety",
+                    "LOAD_UNCERTAIN": "perception",
+                    "GRASP_RETAINED": "manipulation",
+                }[canonical["result"]]
+                cursor.execute(
+                    """
+                    INSERT INTO job_step_attempts
+                      (attempt_uuid, job_step_id, assignment_revision, actor_role,
+                       actor_device_id, attempt_no, event_uuid, command_uuid,
+                       state, outcome, success, method_code, outcome_reason_code,
+                       failure_domain, parameters, criteria, metrics,
+                       before_observation, after_observation, evidence_refs,
+                       policy_source, policy_name, policy_version,
+                       model_name, model_version, started_at, completed_at)
+                    VALUES (%s,%s,%s,'omx',%s,%s,%s,%s,'finished',%s,%s,
+                            'OMX_LOAD_CONTRACT_FIXTURE',%s,%s,%s,%s,%s,%s,%s,%s,
+                            'rule',%s,%s,%s,%s,NOW(6),NOW(6))
+                    """,
+                    (
+                        canonical["attempt_id"], job_step_id,
+                        canonical["assignment_revision"], canonical["omx_id"],
+                        attempt_no, event_uuid, command_uuid,
+                        "succeeded" if success else "failed", success,
+                        canonical["result"], failure_domain,
+                        json.dumps(
+                            {
+                                "record_kind": "load_attempt",
+                                "request": canonical,
+                                "response": response,
+                                "item_id": canonical["item_id"],
+                                "handover_group_id": canonical["handover_group_id"],
+                                "pinky_id": canonical["pinky_id"],
+                                "omx_id": canonical["omx_id"],
+                            }, ensure_ascii=False,
+                        ),
+                        json.dumps(canonical["criteria"], ensure_ascii=False),
+                        json.dumps(canonical["metrics"], ensure_ascii=False),
+                        json.dumps(canonical["observations"], ensure_ascii=False),
+                        json.dumps({"result": canonical["result"]}, ensure_ascii=False),
+                        json.dumps(canonical["evidence_refs"], ensure_ascii=False),
+                        canonical["policy_name"], canonical["policy_version"],
+                        canonical["model_name"], canonical["model_version"],
+                    ),
+                )
+                metadata.update(
+                    {
+                        "load_result": canonical["result"],
+                        "load_attempt_uuid": canonical["attempt_id"],
+                        "load_handover_group_id": canonical["handover_group_id"],
+                        "load_assignment_revision": canonical["assignment_revision"],
+                        "drop_hold": canonical["result"] == "DROP_DETECTED",
+                        "object_recovered": False,
+                        "area_clear": False,
+                    }
+                )
+                cursor.execute(
+                    """
+                    UPDATE job_items SET metadata=%s,
+                      verification_state=CASE WHEN %s THEN 'matched'
+                                              ELSE verification_state END
+                    WHERE job_item_id=%s
+                    """,
+                    (
+                        json.dumps(metadata, ensure_ascii=False), success,
+                        canonical["item_id"],
+                    ),
+                )
+                connection.commit()
+                return response
+            except Exception as error:
+                connection.rollback()
+                if getattr(error, "errno", None) == 1062:
+                    raise IdempotencyConflict from error
+                raise
+            finally:
+                cursor.close()
+
+    def record_pick_recovery(
+        self, job_step_id: int, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """Persist an operator choice or an explicit DROP-clearance fact."""
+        if ("choice" in request) == ("fact" in request):
+            raise PickRecoveryConflict("ONE_RECOVERY_ACTION_REQUIRED")
+        canonical = deepcopy(request)
+        event_uuid = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"trihouse:pick-recovery:{idempotency_key}")
+        )
+        command_uuid = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"trihouse:recovery-command:{idempotency_key}")
+        )
+        attempt_uuid = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"trihouse:recovery-attempt:{idempotency_key}")
+        )
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                cursor.execute(
+                    """
+                    SELECT js.job_id, js.action_type, js.assignment_revision,
+                           item.metadata, worker.active AS worker_active
+                    FROM job_steps js
+                    JOIN job_items item ON item.job_id=js.job_id
+                                       AND item.job_item_id=%s
+                    LEFT JOIN workers worker ON worker.worker_id=%s
+                    WHERE js.job_step_id=%s
+                    FOR UPDATE
+                    """,
+                    (canonical["item_id"], canonical["operator_id"], job_step_id),
+                )
+                row = cursor.fetchone()
+                if row is None or row["action_type"] != "load":
+                    raise JobStepNotFound
+                cursor.execute(
+                    "SELECT parameters FROM job_step_attempts WHERE event_uuid=%s",
+                    (event_uuid,),
+                )
+                replay = cursor.fetchone()
+                if replay is not None:
+                    parameters = _json(replay["parameters"]) or {}
+                    if parameters.get("request") != canonical:
+                        raise IdempotencyConflict
+                    return parameters["response"]
+                if int(row["job_id"]) != int(canonical["job_id"]):
+                    raise PickRecoveryConflict("RECOVERY_JOB_MISMATCH")
+                if not row.get("worker_active"):
+                    raise PickRecoveryConflict("ACTIVE_OPERATOR_REQUIRED")
+
+                metadata = _json(row.get("metadata")) or {}
+                retry_no = int(metadata.get("pick_retry_count", 0))
+                if "choice" in canonical:
+                    if metadata.get("drop_hold"):
+                        raise PickRecoveryConflict("ACTIVE_DROP_HOLD")
+                    if canonical["choice"] == "재시도":
+                        if retry_no >= 2:
+                            raise PickRecoveryConflict("RETRY_LIMIT_REACHED")
+                        if metadata.get("load_result") not in {
+                            "DROP_DETECTED", "LOAD_UNCERTAIN", "GRASP_RETAINED",
+                        }:
+                            raise PickRecoveryConflict("RETRY_NOT_AVAILABLE")
+                        retry_no += 1
+                        metadata.update(
+                            {
+                                "pick_retry_count": retry_no,
+                                "reobserve_qr_aruco": True,
+                                "act_episode_reset": True,
+                                "load_result": None,
+                            }
+                        )
+                        method_code = "PICK_RETRY_SELECTED"
+                    elif canonical["choice"] == "포장대에서 처리":
+                        metadata["fulfillment_state"] = "MANUAL_FULFILLMENT_REQUIRED"
+                        method_code = "MANUAL_FULFILLMENT_REQUIRED"
+                    else:
+                        raise PickRecoveryConflict("UNSUPPORTED_RECOVERY_CHOICE")
+                else:
+                    if not metadata.get("drop_hold"):
+                        raise PickRecoveryConflict("NO_ACTIVE_DROP_HOLD")
+                    if canonical["fact"] == "object-recovered":
+                        metadata["object_recovered"] = True
+                        method_code = "DROP_OBJECT_RECOVERED"
+                    elif canonical["fact"] == "area-clear":
+                        metadata["area_clear"] = True
+                        method_code = "DROP_AREA_CLEAR"
+                    else:
+                        raise PickRecoveryConflict("UNSUPPORTED_RECOVERY_FACT")
+                    metadata["drop_hold"] = not (
+                        metadata.get("object_recovered") and metadata.get("area_clear")
+                    )
+
+                response = {
+                    "job_id": int(canonical["job_id"]),
+                    "item_id": int(canonical["item_id"]),
+                    "retry_no": retry_no,
+                    "drop_hold": bool(metadata.get("drop_hold")),
+                    "manual_required": metadata.get("fulfillment_state")
+                    == "MANUAL_FULFILLMENT_REQUIRED",
+                    "reobserve_qr_aruco": bool(metadata.get("reobserve_qr_aruco")),
+                    "reset_act_episode": bool(metadata.get("act_episode_reset")),
+                }
+                cursor.execute(
+                    """
+                    SELECT COALESCE(MAX(attempt_no),0)+1 AS attempt_no
+                    FROM job_step_attempts
+                    WHERE job_step_id=%s AND assignment_revision=%s
+                      AND actor_role='fms'
+                    """,
+                    (job_step_id, row["assignment_revision"]),
+                )
+                attempt_no = int(cursor.fetchone()["attempt_no"])
+                cursor.execute(
+                    """
+                    INSERT INTO job_step_attempts
+                      (attempt_uuid, job_step_id, assignment_revision, actor_role,
+                       attempt_no, event_uuid, command_uuid, state, outcome, success,
+                       method_code, outcome_reason_code, failure_domain, parameters,
+                       criteria, metrics, before_observation, after_observation,
+                       evidence_refs, policy_source, policy_name, policy_version,
+                       started_at, completed_at)
+                    VALUES (%s,%s,%s,'fms',%s,%s,%s,'finished','succeeded',TRUE,
+                            %s,%s,'none',%s,%s,%s,%s,%s,%s,'operator',
+                            'pick-recovery-contract','1',NOW(6),NOW(6))
+                    """,
+                    (
+                        attempt_uuid, job_step_id, row["assignment_revision"],
+                        attempt_no, event_uuid, command_uuid, method_code, method_code,
+                        json.dumps(
+                            {
+                                "record_kind": "pick_recovery",
+                                "request": canonical,
+                                "response": response,
+                            }, ensure_ascii=False,
+                        ),
+                        json.dumps({"operator_action_explicit": True}),
+                        json.dumps({"retry_no": retry_no}),
+                        json.dumps({"load_result": metadata.get("load_result")}),
+                        json.dumps(metadata, ensure_ascii=False),
+                        json.dumps([], ensure_ascii=False),
+                    ),
+                )
+                cursor.execute(
+                    """
+                    UPDATE job_items SET metadata=%s,
+                      verification_state=CASE WHEN %s THEN 'manual_review'
+                                              ELSE verification_state END
+                    WHERE job_item_id=%s
+                    """,
+                    (
+                        json.dumps(metadata, ensure_ascii=False),
+                        response["manual_required"], canonical["item_id"],
+                    ),
+                )
+                connection.commit()
+                return response
+            except Exception as error:
+                connection.rollback()
+                if getattr(error, "errno", None) == 1062:
+                    raise IdempotencyConflict from error
                 raise
             finally:
                 cursor.close()
@@ -3236,6 +4110,49 @@ class MySqlFmsRepository:
                     (job_id,),
                 )
                 reservations = [dict(row) for row in cursor.fetchall()]
+
+                cursor.execute(
+                    """
+                    SELECT attempt.outcome_reason_code, attempt.parameters
+                    FROM job_step_attempts attempt
+                    JOIN job_steps step ON step.job_step_id=attempt.job_step_id
+                    WHERE step.job_id=%s
+                    ORDER BY attempt.attempt_uuid
+                    FOR UPDATE
+                    """,
+                    (job_id,),
+                )
+                attempt_rows = [dict(row) for row in cursor.fetchall()]
+                confirmed_item_ids: set[int] = set()
+                manual_item_ids: set[int] = set()
+                for attempt in attempt_rows:
+                    parameters = _json(attempt.get("parameters")) or {}
+                    item_id = parameters.get("item_id") or parameters.get(
+                        "request", {}
+                    ).get("item_id")
+                    if item_id is None:
+                        continue
+                    if attempt["outcome_reason_code"] == "LOAD_CONFIRMED":
+                        confirmed_item_ids.add(int(item_id))
+                    if attempt["outcome_reason_code"] == "MANUAL_FULFILLMENT_REQUIRED":
+                        manual_item_ids.add(int(item_id))
+
+                if any(item["metadata"].get("drop_hold") for item in items):
+                    raise WorkerCompletionConflict("ACTIVE_DROP_HOLD")
+                for item in items:
+                    item_id = int(item["job_item_id"])
+                    metadata = item["metadata"]
+                    load_confirmed = (
+                        metadata.get("load_result") == "LOAD_CONFIRMED"
+                        and item_id in confirmed_item_ids
+                    )
+                    manual_required = (
+                        metadata.get("fulfillment_state")
+                        == "MANUAL_FULFILLMENT_REQUIRED"
+                        and item_id in manual_item_ids
+                    )
+                    if not (load_confirmed or manual_required):
+                        raise WorkerCompletionConflict("LOAD_CONFIRMATION_REQUIRED")
 
                 manual_ids = tuple(
                     int(item["job_item_id"])
@@ -3492,6 +4409,11 @@ class MySqlFmsRepository:
     def dispatch_step(
         self, job_step_id: int, request: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
+        """현재 실행 가능한 Step을 멱등 outbox 메시지로 만든다.
+
+        앞 Step의 성공 여부, retry 상태, 기존 활성 dispatch를 잠금 아래 확인해
+        하나의 Step이 중복 실행자에게 전달되지 않도록 한다.
+        """
         with self.database.connection() as connection:
             cursor = connection.cursor(dictionary=True)
             try:
@@ -3547,6 +4469,65 @@ class MySqlFmsRepository:
                     if payload.get("request") != request_fingerprint:
                         raise IdempotencyConflict
                     return self._dispatch_record(existing, step, idempotency_key, payload)
+                cursor.execute(
+                    """
+                    SELECT item.job_item_id, item.metadata
+                    FROM job_items item
+                    JOIN inventory_lots lot ON lot.lot_id=item.lot_id
+                    WHERE item.job_id=%s AND EXISTS (
+                      SELECT 1 FROM job_steps load_step
+                      WHERE load_step.job_id=item.job_id
+                        AND load_step.action_type='load'
+                        AND load_step.step_no < %s
+                        AND JSON_UNQUOTE(JSON_EXTRACT(load_step.input, '$.temperature_zone'))
+                            = lot.temperature_zone
+                    )
+                    ORDER BY item.job_item_id
+                    FOR UPDATE
+                    """,
+                    (step["job_id"], step["step_no"]),
+                )
+                gated_items = [dict(row) for row in cursor.fetchall()]
+                if gated_items:
+                    cursor.execute(
+                        """
+                        SELECT attempt.outcome_reason_code, attempt.parameters
+                        FROM job_step_attempts attempt
+                        JOIN job_steps attempted_step
+                          ON attempted_step.job_step_id=attempt.job_step_id
+                        WHERE attempted_step.job_id=%s
+                        ORDER BY attempt.attempt_uuid
+                        FOR UPDATE
+                        """,
+                        (step["job_id"],),
+                    )
+                    load_confirmed: set[int] = set()
+                    manual_required: set[int] = set()
+                    for attempt in cursor.fetchall():
+                        parameters = _json(attempt.get("parameters")) or {}
+                        item_id = parameters.get("item_id") or parameters.get(
+                            "request", {}
+                        ).get("item_id")
+                        if item_id is None:
+                            continue
+                        if attempt["outcome_reason_code"] == "LOAD_CONFIRMED":
+                            load_confirmed.add(int(item_id))
+                        if attempt["outcome_reason_code"] == "MANUAL_FULFILLMENT_REQUIRED":
+                            manual_required.add(int(item_id))
+                    for item in gated_items:
+                        item_id = int(item["job_item_id"])
+                        metadata = _json(item.get("metadata")) or {}
+                        if metadata.get("drop_hold"):
+                            raise JobStepNotDispatchable
+                        if not (
+                            metadata.get("load_result") == "LOAD_CONFIRMED"
+                            and item_id in load_confirmed
+                        ) and not (
+                            metadata.get("fulfillment_state")
+                            == "MANUAL_FULFILLMENT_REQUIRED"
+                            and item_id in manual_required
+                        ):
+                            raise JobStepNotDispatchable
                 retry = request.get("retry", False)
                 if (not retry and step["state"] != "pending") or (
                     retry and step["state"] != "failed"
@@ -3677,6 +4658,7 @@ class MySqlFmsRepository:
                 cursor.close()
 
     def claim_rmf_dispatches(self, worker_id: str, limit: int) -> list[dict[str, Any]]:
+        """`SKIP LOCKED`로 여러 RMF worker가 서로 다른 pending 메시지를 선점한다."""
         del worker_id  # Worker identity is currently audit-only; claim ownership is row state.
         with self.database.connection() as connection:
             cursor = connection.cursor(dictionary=True)
@@ -3730,6 +4712,10 @@ class MySqlFmsRepository:
     def record_rmf_dispatch_acceptance(
         self, message_id: str, acceptance: dict[str, Any]
     ) -> dict[str, Any]:
+        """RMF 수락과 task/device 배정을 기록한다.
+
+        동일 결과 재전송은 허용하되 기존 배정과 다른 재전송은 충돌로 처리한다.
+        """
         with self.database.connection() as connection:
             cursor = connection.cursor(dictionary=True)
             try:
@@ -3850,6 +4836,7 @@ class MySqlFmsRepository:
     def claim_command(
         self, rmf_task_id: str, request: dict[str, Any]
     ) -> dict[str, Any]:
+        """RMF 배정과 robot identity를 확인하고 실행용 task_context를 발급한다."""
         external_reference = f"rmf:{rmf_task_id}:execution:{request['execution_id']}"
         with self.database.connection() as connection:
             cursor = connection.cursor(dictionary=True)
@@ -3954,18 +4941,50 @@ class MySqlFmsRepository:
 
 
 class InMemoryFmsRepository:
-    """Deterministic repository implementation for boundary and service tests."""
+    """API 경계와 상태 전이 단위 테스트용 결정적 메모리 구현.
 
-    def __init__(self):
+    SQL을 흉내 내기보다 운영 Repository의 외부 결과와 충돌 규칙을 재현한다.
+    실제 잠금과 스키마의 검증은 MySQL integration test가 담당한다.
+    """
+
+    def __init__(self, seed_locations: list[dict[str, Any]] | None = None):
         self._jobs: dict[int, dict[str, Any]] = {}
         self._steps: dict[int, dict[str, Any]] = {}
         self._events: dict[int, list[dict[str, Any]]] = {}
         self._dispatches: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
         self._claims: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]] = {}
         self._reserved_assignment_resources: dict[str, int] = {}
+        self._assignment_lock = threading.RLock()
+        self._assignment_locations: dict[str, dict[str, Any]] = {
+            "PACKING-01-DOCK-01": {
+                "location_id": 1,
+                "location_type": "outbound_dock",
+                "state": "available",
+                "operational_role": "loading_dock",
+            },
+            "PACKING-01-DOCK-02": {
+                "location_id": 2,
+                "location_type": "outbound_dock",
+                "state": "available",
+                "operational_role": "loading_dock",
+            },
+            "TRIHOUSE-TEST-01-CHG-01": {
+                "location_id": 3,
+                "location_type": "charger",
+                "state": "available",
+                "operational_role": "charging_station",
+            },
+            "TRIHOUSE-TEST-01-CHG-02": {
+                "location_id": 4,
+                "location_type": "charger",
+                "state": "available",
+                "operational_role": "charging_station",
+            },
+        }
         self._next_job_id = 1
         self._next_step_id = 1
         self._next_event_id = 1
+        self._operation_events: list[dict[str, Any]] = []
         self._device_states: dict[str, dict[str, Any]] = {}
         self._task_events: dict[str, dict[str, Any]] = {}
         self._map_projects: dict[str, dict[str, Any]] = {}
@@ -3973,7 +4992,18 @@ class InMemoryFmsRepository:
         self._map_project_sources: dict[str, dict[str, dict[str, Any]]] = {}
         self._map_publications: dict[str, dict[str, Any]] = {}
         self._map_publications_by_revision: dict[str, dict[str, Any]] = {}
+        self._locations: dict[str, dict[str, Any]] = {
+            location["location_code"]: deepcopy(location)
+            for location in (seed_locations or [])
+        }
         self._map_features: dict[str, list[dict[str, Any]]] = {}
+        self._next_location_id = (
+            max(
+                (int(location.get("location_id", 0)) for location in self._locations.values()),
+                default=0,
+            )
+            + 1
+        )
 
     def ping(self) -> bool:
         return True
@@ -4120,7 +5150,12 @@ class InMemoryFmsRepository:
         return str(publication["map_revision"]) if publication else None
 
     def deployment_failure_events(self, map_name: str) -> list[dict[str, Any]]:
-        return []
+        return [
+            deepcopy(event)
+            for event in self._operation_events
+            if event.get("event_type") == "MAP_DEPLOYMENT_FAILED"
+            and event.get("payload", {}).get("map_name") == map_name
+        ]
 
     def store_map_project_source(
         self, map_name: str, source: dict[str, Any]
@@ -4184,7 +5219,9 @@ class InMemoryFmsRepository:
             snapshots = (
                 deepcopy(self._map_publications),
                 deepcopy(self._map_publications_by_revision),
+                deepcopy(self._locations),
                 deepcopy(self._map_features),
+                self._next_location_id,
             )
             try:
                 return self._publish_map_project_locked(map_name, publication)
@@ -4192,7 +5229,9 @@ class InMemoryFmsRepository:
                 (
                     self._map_publications,
                     self._map_publications_by_revision,
+                    self._locations,
                     self._map_features,
+                    self._next_location_id,
                 ) = snapshots
                 raise
 
@@ -4202,6 +5241,8 @@ class InMemoryFmsRepository:
         project = self._map_projects.get(map_name)
         if project is None:
             raise MapProjectNotFound
+        if not publication["map_revision"].startswith(f"{map_name}:"):
+            raise MapRevisionContentConflict
         _assert_publication_expectations(
             _public_draft_from_project(self.get_map_project(map_name)),
             publication,
@@ -4209,29 +5250,100 @@ class InMemoryFmsRepository:
                 map_name, {}
             ).get(str(source_uuid)),
         )
-        errors = _validate_map_draft(project)
-        if errors:
-            raise MapProjectValidationError(errors)
-        if not publication["map_revision"].startswith(f"{map_name}:"):
-            raise MapRevisionContentConflict
         existing_by_revision = self._map_publications_by_revision.get(
             publication["map_revision"]
         )
         if existing_by_revision:
-            if _publication_identity(
+            identity = _publication_identity(map_name, publication)
+            existing_identity = _publication_identity(
                 existing_by_revision["map_name"], existing_by_revision
-            ) != _publication_identity(map_name, publication):
+            )
+            if existing_identity != identity:
                 raise MapRevisionContentConflict
             return deepcopy(existing_by_revision)
+        errors = _validate_map_draft(project)
+        if errors:
+            raise MapProjectValidationError(errors)
         errors = _validate_publication_artifacts(project, publication)
         if errors:
             raise MapProjectValidationError(errors)
-        self._map_features[publication["map_revision"]] = [
-            _public_feature_projection(
-                map_name, publication["map_revision"], feature
+        for waypoint in project["payload"].get("waypoints", []):
+            location_code = waypoint.get("locationCode")
+            if not location_code:
+                continue
+            projection = _waypoint_projection(waypoint)
+            if not projection["project_location"]:
+                continue
+            parent_location_id = None
+            parent_location_code = projection["parent_location_code"]
+            if parent_location_code:
+                parent = self._locations.get(parent_location_code)
+                if parent is None:
+                    raise MapProjectValidationError(
+                        [f"{location_code}: parentLocationCode가 존재하지 않습니다"]
+                    )
+                parent_location_id = parent["location_id"]
+            existing_location = self._locations.get(location_code)
+            if (
+                existing_location
+                and existing_location.get("map_name") is not None
+                and existing_location.get("map_name") != map_name
+            ):
+                raise MapProjectValidationError(
+                    [f"{location_code}: 다른 published map이 소유합니다"]
+                )
+            location_type = projection["location_type"]
+            if (
+                projection["operational_role"] is None
+                and projection["category"] == "pickup"
+                and existing_location
+            ):
+                location_type = existing_location["location_type"]
+            map_pose = waypoint["mapPose"]
+            location_id = (
+                existing_location["location_id"]
+                if existing_location
+                else self._next_location_id
             )
-            for feature in project["payload"].get("publicFeatures", [])
+            if existing_location is None:
+                self._next_location_id += 1
+            self._locations[location_code] = {
+                "location_id": location_id,
+                "parent_location_id": parent_location_id,
+                "location_code": location_code,
+                "name": waypoint.get("name") or waypoint["rmfWaypointName"],
+                "location_type": location_type,
+                "temperature_zone": projection["temperature_zone"],
+                "map_name": map_name,
+                "rmf_waypoint_name": waypoint["rmfWaypointName"],
+                "pose_x": float(map_pose[0]),
+                "pose_y": float(map_pose[1]),
+                "pose_yaw": float(map_pose[2]),
+                "metadata": {
+                    "authoring_managed": True,
+                    "active": True,
+                    "waypoint_uuid": waypoint["waypointUuid"],
+                    "map_revision": publication["map_revision"],
+                    "operational_role": projection["operational_role"],
+                    "rmf_category": projection["category"],
+                    "parent_location_code": parent_location_code,
+                },
+            }
+        projected_features = [
+            _bottleneck_projection(map_name, publication["map_revision"], zone)
+            for zone in project["payload"].get("bottleneckZones", [])
         ]
+        for binding in project["payload"].get("fiducialBindings", []):
+            location = self._locations.get(binding["targetLocationCode"])
+            projected_features.append(
+                _fiducial_projection(
+                    map_name,
+                    publication["map_revision"],
+                    binding,
+                    int(location["location_id"]) if location else None,
+                )
+            )
+        self._map_features[publication["map_revision"]] = projected_features
         result = {
             **deepcopy(publication),
             "map_name": map_name,
@@ -4250,10 +5362,75 @@ class InMemoryFmsRepository:
         publication = self._map_publications.get(map_name)
         return deepcopy(publication) if publication else None
 
-    def list_projected_map_features(
-        self, map_revision: str
-    ) -> list[dict[str, Any]]:
+    def get_projected_location(self, location_code: str) -> dict[str, Any] | None:
+        location = self._locations.get(location_code)
+        return deepcopy(location) if location else None
+
+    def list_projected_map_features(self, map_revision: str) -> list[dict[str, Any]]:
         return deepcopy(self._map_features.get(map_revision, []))
+
+    def record_map_project_changes(
+        self, map_name: str, changes: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        if map_name not in self._map_projects:
+            raise MapProjectNotFound
+        events: list[dict[str, Any]] = []
+        for change in changes:
+            event = {
+                "event_id": self._next_event_id,
+                "event_uuid": str(uuid.uuid4()),
+                "occurred_at": datetime.now(SEOUL),
+                "actor_worker_id": None,
+                "device_id": None,
+                "job_id": None,
+                "job_step_id": None,
+                "incident_id": None,
+                "severity": "info",
+                "category": "system",
+                "event_type": "MAP_PROJECT_CHANGED",
+                "message": change["summary"],
+                "payload": {"map_name": map_name, "change": deepcopy(change)},
+            }
+            self._next_event_id += 1
+            self._operation_events.append(event)
+            events.append(deepcopy(event))
+        return events
+
+    def list_operation_events(
+        self,
+        from_at: datetime | None,
+        to_at: datetime | None,
+        limit: int,
+        before_at: datetime | None = None,
+        before_event_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if from_at is not None and from_at.tzinfo is None:
+            from_at = from_at.replace(tzinfo=SEOUL)
+        if to_at is not None and to_at.tzinfo is None:
+            to_at = to_at.replace(tzinfo=SEOUL)
+        if before_at is not None and before_at.tzinfo is None:
+            before_at = before_at.replace(tzinfo=SEOUL)
+        events = (
+            event
+            for event in self._operation_events
+            if (from_at is None or event["occurred_at"] >= from_at)
+            and (to_at is None or event["occurred_at"] < to_at)
+            and (
+                before_at is None
+                or before_event_id is None
+                or event["occurred_at"] < before_at
+                or (
+                    event["occurred_at"] == before_at
+                    and event["event_id"] < before_event_id
+                )
+            )
+        )
+        ordered = sorted(
+            events,
+            key=lambda event: (event["occurred_at"], event["event_id"]),
+            reverse=True,
+        )
+        return deepcopy(ordered[:limit])
 
     def list_devices(self) -> list[dict[str, object]]:
         return []
@@ -4408,59 +5585,109 @@ class InMemoryFmsRepository:
     def assign_job_resources(
         self, job_id: int, assignment: dict[str, Any]
     ) -> dict[str, Any]:
-        job = self._jobs.get(job_id)
-        if job is None:
-            raise JobNotFound
-        expected = {
-            "PK_01": "TRIHOUSE-TEST-01-CHG-01",
-            "PK_02": "TRIHOUSE-TEST-01-CHG-02",
-        }.get(assignment["mobile_id"])
-        if expected != assignment["charger_code"]:
-            raise ResourceAssignmentConflict("FIXED_CHARGER_MISMATCH")
-        context = job.setdefault("context", {})
-        current = context.get("assignment")
-        response = {"job_id": job_id, **deepcopy(assignment)}
-        if current is not None:
-            if {"job_id": job_id, **current} == response:
-                return response
-            if int(assignment["revision"]) <= int(current["revision"]):
-                raise ResourceAssignmentConflict("ASSIGNMENT_REVISION_CONFLICT")
-            for value in (
-                current["mobile_id"],
-                current["omx_id"],
-                current["packing_dock_code"],
+        with self._assignment_lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise JobNotFound
+            expected = {
+                "PK_01": "TRIHOUSE-TEST-01-CHG-01",
+                "PK_02": "TRIHOUSE-TEST-01-CHG-02",
+            }.get(assignment["mobile_id"])
+            if expected != assignment["charger_code"]:
+                raise ResourceAssignmentConflict("FIXED_CHARGER_MISMATCH")
+            if assignment["packing_dock_code"] == assignment["charger_code"]:
+                raise ResourceAssignmentConflict("PACKING_DOCK_CHARGER_MUST_DIFFER")
+            packing = self._assignment_locations.get(assignment["packing_dock_code"])
+            charger = self._assignment_locations.get(assignment["charger_code"])
+            if packing is None or charger is None:
+                raise ResourceAssignmentConflict("CANONICAL_MAP_RESOURCE_REQUIRED")
+            if packing["location_type"] not in {"outbound_dock", "loading_dock"} or packing.get(
+                "operational_role"
+            ) not in {None, "loading_dock"}:
+                raise ResourceAssignmentConflict("PACKING_DOCK_TYPE_MISMATCH")
+            if packing["state"] != "available":
+                raise ResourceAssignmentConflict("PACKING_DOCK_UNAVAILABLE")
+            if charger["location_type"] != "charger" or charger.get(
+                "operational_role"
+            ) not in {None, "charging_station"}:
+                raise ResourceAssignmentConflict("CHARGER_TYPE_MISMATCH")
+            if charger["state"] != "available":
+                raise ResourceAssignmentConflict("CHARGER_UNAVAILABLE")
+
+            context = job.setdefault("context", {})
+            current = context.get("assignment")
+            response = {"job_id": job_id, **deepcopy(assignment)}
+            if current is not None:
+                if {"job_id": job_id, **current} == response:
+                    return response
+                current_revision = int(current["revision"])
+                revision = int(assignment["revision"])
+                if revision <= current_revision:
+                    raise ResourceAssignmentConflict("ASSIGNMENT_REVISION_CONFLICT")
+                if revision != current_revision + 1:
+                    raise ResourceAssignmentConflict("ASSIGNMENT_REVISION_GAP")
+                if any(
+                    step["job_id"] == job_id
+                    and step["state"] in {"running", "succeeded"}
+                    for step in self._steps.values()
+                ):
+                    raise ResourceAssignmentConflict("ASSIGNMENT_ALREADY_EXECUTING")
+            elif int(assignment["revision"]) != 1:
+                raise ResourceAssignmentConflict("INITIAL_ASSIGNMENT_REVISION_MUST_BE_ONE")
+
+            resources = (
+                assignment["mobile_id"],
+                assignment["omx_id"],
+                assignment["packing_dock_code"],
+            )
+            if any(
+                resource in self._reserved_assignment_resources
+                and self._reserved_assignment_resources[resource] != job_id
+                for resource in resources
             ):
-                self._reserved_assignment_resources.pop(value, None)
-        elif int(assignment["revision"]) != 1:
-            raise ResourceAssignmentConflict("INITIAL_ASSIGNMENT_REVISION_MUST_BE_ONE")
-        resources = (
-            assignment["mobile_id"],
-            assignment["omx_id"],
-            assignment["packing_dock_code"],
-        )
-        if any(
-            resource in self._reserved_assignment_resources
-            and self._reserved_assignment_resources[resource] != job_id
-            for resource in resources
-        ):
-            raise ResourceUnavailable("one or more resources are already reserved")
-        for resource in resources:
-            self._reserved_assignment_resources[resource] = job_id
-        context["assignment"] = deepcopy(assignment)
-        job["assigned_mobile_id"] = assignment["mobile_id"]
-        job["state"] = "assigned"
-        for step in self._steps.values():
-            if step["job_id"] != job_id:
-                continue
-            step["assignment_revision"] = int(assignment["revision"])
-            step["assigned_device_id"] = {
-                "mobile": assignment["mobile_id"],
-                "arm": assignment["omx_id"],
-            }.get(step["executor_type"])
-        self._append_event(
-            job_id, None, "job.assignment.persisted", {"assignment": assignment}
-        )
-        return response
+                raise ResourceUnavailable("one or more resources are already reserved")
+
+            if current is not None:
+                for value in (
+                    current["mobile_id"],
+                    current["omx_id"],
+                    current["packing_dock_code"],
+                ):
+                    if self._reserved_assignment_resources.get(value) == job_id:
+                        self._reserved_assignment_resources.pop(value)
+            for resource in resources:
+                self._reserved_assignment_resources[resource] = job_id
+            context["assignment"] = deepcopy(assignment)
+            job["assigned_mobile_id"] = assignment["mobile_id"]
+            job["destination_location_id"] = packing["location_id"]
+            job["state"] = "assigned"
+            for step in self._steps.values():
+                if step["job_id"] != job_id:
+                    continue
+                step["assignment_revision"] = int(assignment["revision"])
+                step["assigned_device_id"] = {
+                    "mobile": assignment["mobile_id"],
+                    "arm": assignment["omx_id"],
+                }.get(step["executor_type"])
+                payload = step.get("input") or {}
+                is_packing = (
+                    step["action_type"] == "navigate"
+                    and payload.get("branch") == "packing_navigate"
+                ) or (
+                    step["action_type"] == "handover"
+                    and "packing_dock_location_id" in payload
+                ) or (
+                    step["action_type"] == "wait"
+                    and payload.get("wait_for") == "worker_completion"
+                )
+                if is_packing:
+                    step["target_location_id"] = packing["location_id"]
+                    payload["packing_dock_location_id"] = packing["location_id"]
+                    step["input"] = payload
+            self._append_event(
+                job_id, None, "job.assignment.persisted", {"assignment": assignment}
+            )
+            return response
 
     def get_job_timeline(self, job_id: int) -> list[dict[str, Any]] | None:
         if job_id not in self._jobs:
@@ -4470,19 +5697,23 @@ class InMemoryFmsRepository:
     def _append_event(self, job_id: int, step_id: int | None, event_type: str, payload: dict[str, Any]) -> None:
         event_id = self._next_event_id
         self._next_event_id += 1
-        self._events[job_id].append(
-            {
-                "event_id": event_id,
-                "event_uuid": str(uuid.uuid4()),
-                "occurred_at": datetime.now(SEOUL),
-                "job_step_id": step_id,
-                "severity": "info",
-                "category": "operation" if event_type == "job.created" else "rmf",
-                "event_type": event_type,
-                "message": None,
-                "payload": deepcopy(payload),
-            }
-        )
+        event = {
+            "event_id": event_id,
+            "event_uuid": str(uuid.uuid4()),
+            "occurred_at": datetime.now(SEOUL),
+            "actor_worker_id": None,
+            "device_id": None,
+            "job_id": job_id,
+            "job_step_id": step_id,
+            "incident_id": None,
+            "severity": "info",
+            "category": "operation" if event_type == "job.created" else "rmf",
+            "event_type": event_type,
+            "message": None,
+            "payload": deepcopy(payload),
+        }
+        self._events[job_id].append(event)
+        self._operation_events.append(deepcopy(event))
 
     def dispatch_step(self, job_step_id: int, request: dict[str, Any], idempotency_key: str) -> dict[str, Any]:
         step = self._steps.get(job_step_id)

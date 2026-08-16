@@ -20,6 +20,14 @@ def transport_admission_block_reason(outbox_ready: bool) -> str | None:
     return None if outbox_ready else 'task event outbox capacity reached'
 
 
+def transport_arrival_succeeded(outcome: object) -> bool:
+    """Accept only an affirmative workflow outcome in a terminal good phase."""
+    return bool(
+        outcome.accepted
+        and outcome.phase in (JobPhase.WAITING_HANDOVER, JobPhase.IDLE)
+    )
+
+
 class FleetNode(Node):
     """Translates an FMS-approved action to exactly one Nav2 goal."""
     def __init__(self) -> None:
@@ -188,7 +196,7 @@ class FleetNode(Node):
         if arrived.phase is JobPhase.HEALTH_CHECK:
             arrived = self.workflow.finish_return(health_ok=self.recovery_health_ok, cargo_present=self.cargo_confirmed)
         self._publish_navigation(goal, arrived)
-        if arrived.phase in (JobPhase.WAITING_HANDOVER, JobPhase.IDLE):
+        if transport_arrival_succeeded(arrived):
             self._publish_event(goal, TaskEvent.EVENT_ARRIVED, arrived.detail)
             if arrived.phase is JobPhase.WAITING_HANDOVER:
                 self._publish_handover(goal, HandoverState.STATE_READY, 'arrived and waiting for handover')

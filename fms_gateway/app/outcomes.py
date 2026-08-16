@@ -1,4 +1,4 @@
-"""Versioned, deterministic classification of structured execution facts."""
+"""구조화된 실행 사실을 버전이 있는 결과 원인으로 결정적으로 분류한다."""
 
 from dataclasses import dataclass
 from typing import Mapping
@@ -6,6 +6,7 @@ from typing import Mapping
 
 CATALOG_VERSION = "v1"
 
+# 외부에서 안정적으로 집계할 원인 코드와 담당 장애 영역의 매핑이다.
 REASON_DOMAINS = {
     "WAYPOINT_REACHED": "none",
     "DOCKING_POSE_VERIFIED": "none",
@@ -39,6 +40,7 @@ REASON_DOMAINS = {
 
 @dataclass(frozen=True)
 class ClassifiedOutcome:
+    """대표 원인과 부가 원인을 순서까지 보존한 불변 분류 결과."""
     primary_reason: str
     failure_domain: str
     contributing_reasons: tuple[str, ...]
@@ -46,7 +48,7 @@ class ClassifiedOutcome:
 
 
 class OutcomeClassifier:
-    """Classify facts in catalog precedence order without I/O or global state."""
+    """I/O나 전역 상태 없이 카탈로그 우선순위대로 실행 사실을 분류한다."""
 
     _ordered_fact_keys = (
         "context_reason",
@@ -59,6 +61,7 @@ class OutcomeClassifier:
     )
 
     def classify(self, facts: Mapping[str, object]) -> ClassifiedOutcome:
+        """데이터/문맥 무결성을 우선하고 그 뒤 도메인별 원인을 선택한다."""
         reasons: list[str] = []
         if not facts.get("data_complete", False):
             reasons.append("RESULT_DATA_INCOMPLETE")
@@ -71,6 +74,7 @@ class OutcomeClassifier:
             if isinstance(reason, str) and reason:
                 reasons.append(reason)
 
+        # 같은 코드가 여러 fact에 있어도 최초 우선순위만 유지한다.
         reasons = list(dict.fromkeys(reasons))
         if reasons:
             primary = reasons[0]

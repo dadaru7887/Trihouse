@@ -12,6 +12,7 @@ from .execution_result import (
 from .execution_store import ExecutionStore, TaskCommand
 from .handover_gate import HandoverGate
 from .stage_engine import JobState, StageEngine, StageState
+from .zone_handover import ReadinessFact, ZoneHandover
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class StageSpec:
     command_kind: str = ""
     target_role: ActorRole | None = None
     method_code: str = ""
+    handover_group_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.stage_id or not self.required_roles:
@@ -30,6 +32,10 @@ class StageSpec:
         command_fields = (self.command_kind, self.target_role, self.method_code)
         if any(command_fields) and not all(command_fields):
             raise ValueError("command kind, target role, and method code belong together")
+        if self.handover_group_id and self.required_roles != frozenset(
+            {ActorRole.PINKY, ActorRole.OMX}
+        ):
+            raise ValueError("handover group requires Pinky and OMX roles")
 
 
 @dataclass(frozen=True)
@@ -66,6 +72,7 @@ class TaskOrchestrator:
         self._stages = stages or StageEngine()
         self._gate = gate or HandoverGate()
         self._plans: dict[str, _JobPlan] = {}
+        self._zone_handovers: dict[str, ZoneHandover] = {}
 
     def create(self, job_id: str, *, stages: tuple[StageSpec, ...]) -> None:
         if not stages or len({stage.stage_id for stage in stages}) != len(stages):
@@ -90,6 +97,26 @@ class TaskOrchestrator:
         plan.assignment_revision = assignment_revision
         plan.actors = dict(actors)
         self._stages.assign(job_id)
+
+    def recover(
+        self,
+        job_id: str,
+        *,
+        stages: tuple[StageSpec, ...],
+        assignment_revision: int,
+        actors: dict[ActorRole, str],
+    ) -> None:
+        """Recover orchestration metadata while StageEngine retains durable state."""
+        if job_id in self._plans:
+            raise ValueError("job is already loaded")
+        self._plans[job_id] = _JobPlan(
+            stages=stages,
+            assignment_revision=assignment_revision,
+            actors=dict(actors),
+        )
+        snapshot = self._store.load_handover(job_id)
+        if snapshot is not None:
+            self._zone_handovers[job_id] = ZoneHandover.restore(snapshot)
 
     def start(self, job_id: str, *, safety_approved: bool) -> OrchestrationResult:
         if not safety_approved:
@@ -121,6 +148,9 @@ class TaskOrchestrator:
             return OrchestrationResult(False, reason_code="STALE_ASSIGNMENT")
         if plan.actors is None or plan.actors.get(event.actor_role) != event.actor_id:
             return OrchestrationResult(False, reason_code="UNEXPECTED_ACTOR")
+
+        if self._is_physical_gate(stage):
+            return OrchestrationResult(False, reason_code="READINESS_FACT_REQUIRED")
 
         is_gate = self._is_gate(stage)
         if not is_gate:
@@ -184,6 +214,41 @@ class TaskOrchestrator:
         )
         return OrchestrationResult(True, commands=commands, reason_code="STEP_COMPLETED")
 
+    def record_readiness(
+        self,
+        fact: ReadinessFact,
+        *,
+        safety_approved: bool,
+    ) -> OrchestrationResult:
+        plan = self._plans.get(fact.job_id)
+        if plan is None:
+            return OrchestrationResult(False, reason_code="CROSS_JOB_FACT")
+        stage = self._current_spec(fact.job_id)
+        if stage is None or not self._is_physical_gate(stage):
+            return OrchestrationResult(False, reason_code="UNEXPECTED_STEP")
+        handover = self._zone_handover(fact.job_id, stage)
+        decision = handover.record(fact)
+        self._store.save_handover(handover.snapshot())
+        if not decision.accepted:
+            return OrchestrationResult(
+                False,
+                duplicate=decision.reason_code == "DUPLICATE_FACT",
+                reason_code=decision.reason_code,
+            )
+        if not decision.released:
+            return OrchestrationResult(True, reason_code=decision.reason_code)
+        if self._stages.state_of(fact.job_id) is JobState.HELD or not safety_approved:
+            if self._stages.state_of(fact.job_id) is not JobState.HELD:
+                self._stages.hold(fact.job_id, reason="SAFETY_NOT_APPROVED")
+            plan.deferred_result_id = fact.fact_id
+            plan.deferred_stage_id = stage.stage_id
+            plan.deferred_command_uuid = ""
+            return OrchestrationResult(True, reason_code="GATE_RELEASED_DEFERRED")
+        commands = self._complete_and_start_next(
+            fact.job_id, stage.stage_id, fact.fact_id
+        )
+        return OrchestrationResult(True, commands=commands, reason_code="GATE_RELEASED")
+
     def hold(self, job_id: str, *, reason: str) -> None:
         self._stages.hold(job_id, reason=reason)
 
@@ -229,8 +294,8 @@ class TaskOrchestrator:
         plan = self._plan(job_id)
         if plan.actors is None:
             raise ValueError("job must be assigned before reassignment")
-        if assignment_revision <= plan.assignment_revision:
-            raise ValueError("reassignment revision must increase")
+        if assignment_revision != plan.assignment_revision + 1:
+            raise ValueError("reassignment revision must be exactly current plus one")
         old_revision = plan.assignment_revision
         self._store.invalidate_commands(
             job_id,
@@ -242,6 +307,18 @@ class TaskOrchestrator:
         plan.deferred_stage_id = ""
         plan.deferred_command_uuid = ""
         stage = self._current_spec(job_id)
+        if stage is not None and self._is_physical_gate(stage):
+            assert stage.handover_group_id and plan.actors is not None
+            handover = ZoneHandover(
+                job_id=job_id,
+                handover_group_id=stage.handover_group_id,
+                assignment_revision=assignment_revision,
+                pinky_id=pinky_id,
+                omx_id=plan.actors[ActorRole.OMX],
+            )
+            self._zone_handovers[job_id] = handover
+            self._store.save_handover(handover.snapshot())
+            return OrchestrationResult(True, reason_code="GATE_REASSIGNED")
         if stage is not None and self._is_gate(stage):
             self._gate.reassign_pinky(
                 job_id,
@@ -264,6 +341,7 @@ class TaskOrchestrator:
     def cancel(self, job_id: str) -> None:
         self._store.invalidate_commands(job_id)
         self._gate.cancel(job_id)
+        self._store.clear_handover(job_id)
         self._stages.cancel(job_id)
 
     def job_state(self, job_id: str) -> JobState:
@@ -277,6 +355,17 @@ class TaskOrchestrator:
         stage = self._spec(job_id, stage_id)
         plan = self._plan(job_id)
         assert plan.actors is not None
+        if self._is_physical_gate(stage):
+            handover = ZoneHandover(
+                job_id=job_id,
+                handover_group_id=stage.handover_group_id,
+                assignment_revision=plan.assignment_revision,
+                pinky_id=plan.actors[ActorRole.PINKY],
+                omx_id=plan.actors[ActorRole.OMX],
+            )
+            self._zone_handovers[job_id] = handover
+            self._store.save_handover(handover.snapshot())
+            return ()
         if self._is_gate(stage):
             self._gate.expect(
                 job_id,
@@ -378,6 +467,21 @@ class TaskOrchestrator:
     @staticmethod
     def _is_gate(stage: StageSpec) -> bool:
         return stage.required_roles == frozenset({ActorRole.PINKY, ActorRole.OMX})
+
+    @classmethod
+    def _is_physical_gate(cls, stage: StageSpec) -> bool:
+        return bool(stage.handover_group_id) and cls._is_gate(stage)
+
+    def _zone_handover(self, job_id: str, stage: StageSpec) -> ZoneHandover:
+        handover = self._zone_handovers.get(job_id)
+        if handover is not None:
+            return handover
+        snapshot = self._store.load_handover(job_id)
+        if snapshot is not None:
+            handover = ZoneHandover.restore(snapshot)
+            self._zone_handovers[job_id] = handover
+            return handover
+        raise ValueError(f"physical handover {stage.stage_id} was not started")
 
     @staticmethod
     def _validate_same_execution(event: CompletionEvent, fact: ExecutionFact) -> None:

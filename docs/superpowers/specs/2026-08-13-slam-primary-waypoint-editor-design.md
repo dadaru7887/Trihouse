@@ -64,6 +64,25 @@ map draft에 저장한다.
 - Gazebo/RMF 전체 실행
 - `control_system` 또는 `pinky_pro` 변경
 
+### 3.3 DB Waypoint 자동 배치
+
+SLAM 지도를 올린 뒤 같은 `map_name`의 Gateway draft에 `mapPose`가 있는
+Waypoint는 `mapPose → imagePoint` 역변환으로 지도 위에 자동 배치한다. 별도로
+Open-RMF `nav_graphs/0.yaml`을 올린 경우에는 vertex의 exact `name`과 저장된
+`rmfWaypointName`이 같은 항목만 좌표를 보완한다.
+
+매칭 우선순위는 다음과 같다.
+
+1. 같은 프로젝트 payload의 `waypointUuid`
+2. exact `rmfWaypointName`
+3. exact `locationCode`가 파일에 명시된 경우
+
+표시 이름, 한글 legacy 이름, 부분 문자열, 가장 가까운 좌표로 추측하지 않는다.
+변환 좌표가 이미지 경계 밖이면 자동으로 찍지 않고 사용자에게 누락 항목과 이유를
+보여 준다. `locations`에만 있고 map project에 귀속되지 않은 운영 위치는 현재
+Gateway API만으로 어느 지도에 속하는지 증명할 수 없으므로 자동 배치 대상이
+아니다.
+
 ## 4. 컴포넌트 경계
 
 ### 4.1 `SlamMapSource`
@@ -205,13 +224,14 @@ UI
   → map_projects / map_project_waypoints / map_project_lanes
 ```
 
-SLAM source metadata는 `map_projects.payload.mapSource`에 저장한다. 원본 지도
-이미지는 기존 `payload.drawing.bytes`에 base64로 담아 Gateway가
+SLAM source metadata는 `map_projects.payload.mapSource`에 저장한다. 편집 화면용
+PNG는 기존 `payload.drawing.bytes`에 base64로 담아 Gateway가
 `map_projects.drawing_bytes`에 projection하게 한다. 원본 YAML은
-`map_project_files`에 `kind=nav2_map_yaml`인 text file로 저장한다. 이미지
-바이트를 `map_project_files.content`에 다시 넣어 중복 보관하지 않는다. DB에서
-프로젝트를 다시 열 때 `drawing_bytes`, YAML, `mapSource`를 함께 사용해 동일한
-SLAM 편집 배경과 좌표계를 복원한다.
+`map_project_files`에 `kind=nav2_map_yaml`인 text file로, 원본 PGM/PNG는
+`kind=nav2_map_image`인 base64 text file로 저장한다. PGM은 Flutter 기본 이미지
+codec이 직접 표시하지 못하므로 편집용 PNG와 원본 보관물을 구분한다. DB에서
+프로젝트를 다시 열 때 원본 파일과 `mapSource`를 사용해 동일한 SLAM 편집 배경과
+좌표계를 복원한다.
 
 `map_project_waypoints.map_x/map_y/map_yaw`는 YAML resolution/origin으로 계산한
 값이다. 사용자가 Measurement 값을 입력해 덮어쓸 수 없다.
@@ -252,6 +272,9 @@ SLAM 편집 배경과 좌표계를 복원한다.
 - 추가와 수정 화면이 legacy category를 노출하지 않음
 - 저장 payload에 `mapSource`와 모든 Waypoint 운영 필드 포함
 - Gateway에서 재조회 후 같은 위치와 역할로 복원
+- 기존 draft의 `mapPose`를 SLAM 이미지 좌표로 자동 배치
+- nav graph vertex 이름과 exact RMF 이름이 같은 Waypoint만 좌표 보완
+- 경계 밖·이름 불일치 Waypoint는 추측하지 않고 누락 결과로 반환
 - Floorplan legacy 프로젝트가 계속 열림
 
 ### 8.3 수동 Gate

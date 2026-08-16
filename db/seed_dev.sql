@@ -5,21 +5,21 @@ INSERT INTO locations
   (location_code, name, location_type, zone_code, temperature_zone,
    map_name, rmf_waypoint_name, pose_x, pose_y, pose_yaw, state)
 VALUES
-  ('A-SLOT-01', '상온 랙 슬롯 1', 'slot', 'ambient', 'ambient',
+  ('A-SLOT-01', 'Ambient Rack Slot 01', 'slot', 'ambient', 'ambient',
    'project1', '픽업1', 4.0, 3.0, 0.0, 'available'),
-  ('OUT-DOCK-01', '출고 도크 1', 'outbound_dock', 'outbound', NULL,
+  ('OUT-DOCK-01', 'Loading Dock 01', 'loading_dock', 'outbound', NULL,
    'project1', '드랍오프1', 28.0, 6.0, 0.0, 'available'),
-  ('CHG-01', 'Pinky 충전기 1', 'charger', 'ambient', NULL,
+  ('CHG-01', 'Pinky Charging Station 01', 'charger', 'ambient', NULL,
    'project1', '충전1', 2.0, 2.0, 3.141593, 'available'),
-  ('CHG-02', 'Pinky 충전기 2', 'charger', 'ambient', NULL,
+  ('CHG-02', 'Pinky Charging Station 02', 'charger', 'ambient', NULL,
    'project1', '충전2', 2.5, 2.0, 3.141593, 'available'),
-  ('IN-WAIT-01', '입고 대기점 1', 'staging', 'ambient', NULL,
+  ('IN-WAIT-01', 'Inbound Waiting Point 01', 'staging', 'ambient', NULL,
    'project1', '대기1', NULL, NULL, NULL, 'available'),
-  ('NARROW-WAIT-01', '협로 대기점 1', 'staging', 'ambient', NULL,
+  ('NARROW-WAIT-01', 'Narrow-Aisle Waiting Point 01', 'staging', 'ambient', NULL,
    'project1', '대기3', NULL, NULL, NULL, 'available'),
-  ('OMX-WS-01', 'OMX 인계 작업장 1', 'workstation', 'ambient', 'ambient',
+  ('OMX-WS-01', 'OMX Handover Workcell 01', 'workstation', 'ambient', 'ambient',
    'project1', '설비1', 18.0, 6.0, 0.0, 'available'),
-  ('OMX-WS-02', 'OMX 인계 작업장 2', 'workstation', 'ambient', 'ambient',
+  ('OMX-WS-02', 'OMX Handover Workcell 02', 'workstation', 'ambient', 'ambient',
    'project1', '설비2', NULL, NULL, NULL, 'available')
 ON DUPLICATE KEY UPDATE
   name = VALUES(name),
@@ -32,9 +32,10 @@ ON DUPLICATE KEY UPDATE
 INSERT INTO locations
   (location_code, name, location_type, zone_code, temperature_zone, state)
 VALUES
-  ('WH-AMB-01', '상온창고', 'rack', 'ambient', 'ambient', 'available'),
-  ('WH-CHL-01', '냉장창고', 'rack', 'chilled', 'chilled', 'available'),
-  ('WH-FRZ-01', '냉동창고', 'rack', 'frozen', 'frozen', 'available')
+  ('WH-AMB-01', 'Ambient Storage', 'rack', 'ambient', 'ambient', 'available'),
+  ('WH-CHL-01', 'Chilled Storage', 'rack', 'chilled', 'chilled', 'available'),
+  ('WH-FRZ-01', 'Frozen Storage', 'rack', 'frozen', 'frozen', 'available'),
+  ('PACKING-01', 'Packing Station', 'workstation', 'packing', 'ambient', 'available')
 ON DUPLICATE KEY UPDATE
   name = VALUES(name),
   location_type = VALUES(location_type),
@@ -52,40 +53,40 @@ INSERT INTO locations
    temperature_zone, state, metadata)
 VALUES
   (@wh_amb_id,
-   'AMB-L1-S01', '상온창고 1층 구역 1', 'slot', 'ambient', 'ambient',
+   'AMB-L1-S01', 'Ambient Storage L1 Slot 01', 'slot', 'ambient', 'ambient',
    'occupied', JSON_OBJECT('shelf_level', 1, 'slot_index', 1)),
   (@wh_amb_id,
-   'AMB-L1-S02', '상온창고 1층 구역 2', 'slot', 'ambient', 'ambient',
+   'AMB-L1-S02', 'Ambient Storage L1 Slot 02', 'slot', 'ambient', 'ambient',
    'available', JSON_OBJECT('shelf_level', 1, 'slot_index', 2)),
   (@wh_amb_id,
-   'AMB-L2-S01', '상온창고 2층 구역 1', 'slot', 'ambient', 'ambient',
+   'AMB-L2-S01', 'Ambient Storage L2 Slot 01', 'slot', 'ambient', 'ambient',
    'occupied', JSON_OBJECT('shelf_level', 2, 'slot_index', 1)),
   (@wh_amb_id,
-   'AMB-L2-S02', '상온창고 2층 구역 2', 'slot', 'ambient', 'ambient',
+   'AMB-L2-S02', 'Ambient Storage L2 Slot 02', 'slot', 'ambient', 'ambient',
    'occupied', JSON_OBJECT('shelf_level', 2, 'slot_index', 2)),
   (@wh_chl_id,
-   'CHL-L1-S01', '냉장창고 1층 구역 1', 'slot', 'chilled', 'chilled',
+   'CHL-L1-S01', 'Chilled Storage L1 Slot 01', 'slot', 'chilled', 'chilled',
    'occupied', JSON_OBJECT('shelf_level', 1, 'slot_index', 1)),
   (@wh_chl_id,
-   'CHL-L1-S02', '냉장창고 1층 구역 2', 'slot', 'chilled', 'chilled',
+   'CHL-L1-S02', 'Chilled Storage L1 Slot 02', 'slot', 'chilled', 'chilled',
    'occupied', JSON_OBJECT('shelf_level', 1, 'slot_index', 2)),
   (@wh_chl_id,
-   'CHL-L2-S01', '냉장창고 2층 구역 1', 'slot', 'chilled', 'chilled',
+   'CHL-L2-S01', 'Chilled Storage L2 Slot 01', 'slot', 'chilled', 'chilled',
    'occupied', JSON_OBJECT('shelf_level', 2, 'slot_index', 1)),
   (@wh_chl_id,
-   'CHL-L2-S02', '냉장창고 2층 구역 2', 'slot', 'chilled', 'chilled',
+   'CHL-L2-S02', 'Chilled Storage L2 Slot 02', 'slot', 'chilled', 'chilled',
    'occupied', JSON_OBJECT('shelf_level', 2, 'slot_index', 2)),
   (@wh_frz_id,
-   'FRZ-L1-S01', '냉동창고 1층 구역 1', 'slot', 'frozen', 'frozen',
+   'FRZ-L1-S01', 'Frozen Storage L1 Slot 01', 'slot', 'frozen', 'frozen',
    'occupied', JSON_OBJECT('shelf_level', 1, 'slot_index', 1)),
   (@wh_frz_id,
-   'FRZ-L1-S02', '냉동창고 1층 구역 2', 'slot', 'frozen', 'frozen',
+   'FRZ-L1-S02', 'Frozen Storage L1 Slot 02', 'slot', 'frozen', 'frozen',
    'occupied', JSON_OBJECT('shelf_level', 1, 'slot_index', 2)),
   (@wh_frz_id,
-   'FRZ-L2-S01', '냉동창고 2층 구역 1', 'slot', 'frozen', 'frozen',
+   'FRZ-L2-S01', 'Frozen Storage L2 Slot 01', 'slot', 'frozen', 'frozen',
    'occupied', JSON_OBJECT('shelf_level', 2, 'slot_index', 1)),
   (@wh_frz_id,
-   'FRZ-L2-S02', '냉동창고 2층 구역 2', 'slot', 'frozen', 'frozen',
+   'FRZ-L2-S02', 'Frozen Storage L2 Slot 02', 'slot', 'frozen', 'frozen',
    'occupied', JSON_OBJECT('shelf_level', 2, 'slot_index', 2))
 ON DUPLICATE KEY UPDATE
   parent_location_id = VALUES(parent_location_id),
@@ -99,9 +100,9 @@ ON DUPLICATE KEY UPDATE
 INSERT INTO workers
   (worker_id, worker_code, name, role, allowed_zones, active, registered_at)
 VALUES
-  ('W-OP-01', 'OP-01', '개발 운영자', 'operator',
+  ('W-OP-01', 'OP-01', 'Development Operator', 'operator',
    JSON_ARRAY('ambient', 'outbound'), 1, '2026-08-03 09:00:00.000000'),
-  ('W-SAFE-01', 'SAFE-01', '개발 안전 관리자', 'safety_manager',
+  ('W-SAFE-01', 'SAFE-01', 'Development Safety Manager', 'safety_manager',
    JSON_ARRAY('ambient', 'chilled', 'frozen', 'outbound'), 1,
    '2026-08-03 09:00:00.000000')
 ON DUPLICATE KEY UPDATE

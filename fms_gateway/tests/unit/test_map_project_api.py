@@ -131,6 +131,31 @@ def test_draft_save_assigns_stable_ids_and_project1_location_codes():
     assert second.json()["lane_count"] == 0
 
 
+def test_map_name_uses_one_safe_pattern_across_authoring_boundaries():
+    client = TestClient(create_app(InMemoryFmsRepository()))
+    invalid_name = "bad.name"
+
+    for rejected_name in ("-leading-hyphen", invalid_name, "A" * 96):
+        assert client.put(
+            f"/internal/v1/map-projects/{rejected_name}", json=save_body()
+        ).status_code == 422
+    assert client.get(
+        f"/internal/v1/map-projects/{invalid_name}"
+    ).status_code == 422
+    assert client.post(
+        f"/internal/v1/map-projects/{invalid_name}/validate"
+    ).status_code == 422
+    assert client.post(
+        f"/internal/v1/map-projects/{invalid_name}/publish", json=publish_body()
+    ).status_code == 422
+    assert client.put(
+        "/internal/v1/map-projects/_safe-map_1", json=save_body()
+    ).status_code == 200
+    assert client.put(
+        f"/internal/v1/map-projects/{'A' * 95}", json=save_body()
+    ).status_code == 200
+
+
 def test_draft_list_get_and_revision_conflict_are_explicit():
     client = TestClient(create_app(InMemoryFmsRepository()))
     client.put("/internal/v1/map-projects/project1", json=save_body())
@@ -189,6 +214,38 @@ def test_publish_is_validated_idempotent_and_content_fenced():
         json={**publish_body(), "manifest": {"project": "다른 원본"}},
     )
     assert manifest_conflict.status_code == 409
+
+
+def test_publish_replay_ignores_newer_draft_revision_but_keeps_identity_fence():
+    client = TestClient(create_app(InMemoryFmsRepository()))
+    publication = publish_body()
+    client.put("/internal/v1/map-projects/project1", json=save_body())
+    first = client.post(
+        "/internal/v1/map-projects/project1/publish", json=publication
+    )
+    client.put(
+        "/internal/v1/map-projects/project1",
+        headers={"If-Match": '"1"'},
+        json=save_body(),
+    )
+
+    replay = client.post(
+        "/internal/v1/map-projects/project1/publish", json=publication
+    )
+    manifest_conflict = client.post(
+        "/internal/v1/map-projects/project1/publish",
+        json={**publication, "manifest": {"project": "different"}},
+    )
+    hash_conflict = client.post(
+        "/internal/v1/map-projects/project1/publish",
+        json={**publication, "world_sha256": "0" * 64},
+    )
+
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    assert replay.json()["draft_revision"] == 1
+    assert manifest_conflict.status_code == 409
+    assert hash_conflict.status_code == 409
 
 
 def test_publish_rejects_operational_waypoint_without_location_code():
@@ -605,7 +662,26 @@ def test_delete_without_active_removes_draft_and_unreferenced_sources(tmp_path: 
 def test_publish_failure_preserves_active_without_audit_and_delete_restores_it(
     tmp_path: Path,
 ):
-    repository = InMemoryFmsRepository()
+    parent_locations = [
+        {
+            "location_id": index,
+            "location_code": code,
+            "name": code,
+            "location_type": kind,
+            "map_name": None,
+            "metadata": {},
+        }
+        for index, (code, kind) in enumerate(
+            (
+                ("WH-AMB-01", "rack"),
+                ("WH-CHL-01", "rack"),
+                ("WH-FRZ-01", "rack"),
+                ("PACKING-01", "workstation"),
+            ),
+            start=1,
+        )
+    ]
+    repository = InMemoryFmsRepository(seed_locations=parent_locations)
     client = TestClient(create_app(repository, map_runtime_root=tmp_path))
     profile_hash = _profile_hash(client)
     staged_physical = _stage(

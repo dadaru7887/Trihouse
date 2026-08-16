@@ -1,4 +1,8 @@
-"""FastAPI entry point for the only MySQL-writing FMS process."""
+"""FMS의 유일한 MySQL 쓰기 프로세스를 구성하는 FastAPI 진입점.
+
+이 계층은 HTTP 데이터/오류 계약을 담당하고, 실제 도메인 규칙과 트랜잭션은
+Repository에 위임한다.
+"""
 
 from contextlib import asynccontextmanager
 
@@ -8,7 +12,7 @@ from pathlib import Path as FileSystemPath
 import shutil
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Path, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Path, Query, UploadFile
 
 from .config import get_map_runtime_settings, get_settings, get_tcp_settings
 from .database import Database
@@ -31,9 +35,16 @@ from .models import (
     JobDetail,
     JobAssignmentRequest,
     JobAssignmentView,
+    LoadAttemptRequest,
+    LoadAttemptView,
+    PickRecoveryRequest,
+    PickRecoveryView,
+    RecoveryFactRequest,
     JobTimeline,
     JobView,
     MapProjectDraft,
+    MapProjectChanges,
+    MapProjectChangesRecorded,
     MapProjectPublish,
     MapProjectSave,
     MapProjectSummary,
@@ -47,6 +58,7 @@ from .models import (
     PublishedMap,
     RuntimeProfileView,
     StagedMapSourceResponse,
+    OperationEventView,
     OutboundOrderCreated,
     OutboundOrderRequest,
     RmfDispatchAcceptance,
@@ -80,6 +92,7 @@ from .repositories import (
     PublishedMapProjectDeleteConflict,
     ResourceAssignmentConflict,
     ResourceUnavailable,
+    PickRecoveryConflict,
     WorkerCompletionConflict,
 )
 from .tcp_protocol import TcpIngestionServer
@@ -94,6 +107,7 @@ MapNamePath = Annotated[
 
 
 def _default_repository() -> MySqlFmsRepository:
+    """환경 설정을 사용한 운영 MySQL Repository를 만든다."""
     return MySqlFmsRepository(Database(get_settings()))
 
 
@@ -105,6 +119,10 @@ def create_app(
     map_source_max_bytes: int | None = None,
     runtime_profile_provider: RuntimeProfileProvider | None = None,
 ) -> FastAPI:
+    """HTTP API와 선택적인 로봇 TCP 수집 서버를 하나의 수명주기로 묶는다.
+
+    테스트에서 Repository를 주입하면 테스트 앱이 TCP 포트를 열지 않는다.
+    """
     owns_runtime = repository is None
     repo = repository or _default_repository()
     map_settings = get_map_runtime_settings()
@@ -129,6 +147,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        """운영 앱 시작/종료와 TCP 서버 시작/종료를 정확히 대응시킨다."""
         tcp_server = None
         source_staging.reconcile_startup(repo)
         deployments.reconcile_startup()
@@ -156,10 +175,12 @@ def create_app(
 
     @app.get("/health")
     def health() -> dict[str, str]:
+        """외부 의존성과 무관한 프로세스 생존(liveness)을 반환한다."""
         return {"status": "ok"}
 
     @app.get("/ready")
     def ready() -> dict[str, str]:
+        """DB 연결까지 가능한지 확인하는 준비 상태(readiness)를 반환한다."""
         try:
             if not repo.ping():
                 raise RuntimeError("database ping failed")
@@ -184,6 +205,7 @@ def create_app(
         adjustment: InventoryAdjustment,
         idempotency_key: str = Header(min_length=1, max_length=160),
     ):
+        """멱등 키 아래 재고를 조정하고 도메인 충돌을 404/409로 번역한다."""
         try:
             return repo.adjust_inventory(
                 lot_id,
@@ -534,7 +556,7 @@ def create_app(
     @app.get(
         "/internal/v1/map-projects/{map_name}", response_model=MapProjectDraft
     )
-    def get_map_project(map_name: str):
+    def get_map_project(map_name: MapNamePath):
         project = repo.get_map_project(map_name)
         if project is None:
             raise HTTPException(status_code=404, detail="map project not found")
@@ -544,12 +566,11 @@ def create_app(
         "/internal/v1/map-projects/{map_name}", response_model=MapProjectDraft
     )
     def save_map_project(
-        map_name: str,
+        map_name: MapNamePath,
         project: MapProjectSave,
         if_match: str | None = Header(default=None),
     ):
-        if not map_name.strip() or len(map_name) > 95:
-            raise HTTPException(status_code=422, detail="map name must be 1..95 characters")
+        """If-Match revision을 사용해 오래된 지도 편집의 덮어쓰기를 막는다."""
         expected_revision = None
         if if_match is not None:
             try:
@@ -566,7 +587,7 @@ def create_app(
             ) from error
 
     @app.delete("/internal/v1/map-projects/{map_name}", status_code=204)
-    def delete_map_project(map_name: str):
+    def delete_map_project(map_name: MapNamePath):
         try:
             repo.delete_map_project(map_name)
         except MapProjectNotFound as error:
@@ -580,7 +601,7 @@ def create_app(
         "/internal/v1/map-projects/{map_name}/validate",
         response_model=MapProjectValidation,
     )
-    def validate_map_project(map_name: str):
+    def validate_map_project(map_name: MapNamePath):
         try:
             return repo.validate_map_project(map_name)
         except MapProjectNotFound as error:
@@ -590,7 +611,8 @@ def create_app(
         "/internal/v1/map-projects/{map_name}/publish",
         response_model=PublishedMap,
     )
-    def publish_map_project(map_name: str, publication: MapProjectPublish):
+    def publish_map_project(map_name: MapNamePath, publication: MapProjectPublish):
+        """검증된 지도 초안을 콘텐츠 해시 기반 불변 revision으로 발행한다."""
         try:
             return repo.publish_map_project(map_name, publication.model_dump())
         except MapProjectNotFound as error:
@@ -607,11 +629,42 @@ def create_app(
     @app.get(
         "/internal/v1/maps/{map_name}/published", response_model=PublishedMap
     )
-    def get_published_map(map_name: str):
+    def get_published_map(map_name: MapNamePath):
         publication = repo.get_published_map(map_name)
         if publication is None:
             raise HTTPException(status_code=404, detail="published map not found")
         return publication
+
+    @app.post(
+        "/internal/v1/map-projects/{map_name}/changes",
+        response_model=MapProjectChangesRecorded,
+        status_code=201,
+    )
+    def record_map_project_changes(map_name: MapNamePath, request: MapProjectChanges):
+        try:
+            events = repo.record_map_project_changes(
+                map_name, [change.model_dump() for change in request.changes]
+            )
+        except MapProjectNotFound as error:
+            raise HTTPException(status_code=404, detail="map project not found") from error
+        return {"map_name": map_name, "events": events}
+
+    @app.get("/api/v1/operation-events", response_model=list[OperationEventView])
+    def operation_events(
+        from_at: datetime | None = Query(default=None, alias="from"),
+        to_at: datetime | None = Query(default=None, alias="to"),
+        before_at: datetime | None = Query(default=None),
+        before_event_id: int | None = Query(default=None, ge=1),
+        limit: int = Query(default=100, ge=1, le=500),
+    ):
+        if (before_at is None) != (before_event_id is None):
+            raise HTTPException(
+                status_code=422,
+                detail="before_at and before_event_id must be provided together",
+            )
+        return repo.list_operation_events(
+            from_at, to_at, limit, before_at, before_event_id
+        )
 
     @app.post("/internal/v1/jobs", response_model=JobCreated, status_code=201)
     def create_job(job: JobCreate):
@@ -626,6 +679,7 @@ def create_app(
         dispatch: StepDispatch,
         idempotency_key: str = Header(min_length=1, max_length=160),
     ):
+        """현재 실행 가능한 Job Step을 RMF/설비용 outbox 메시지로 만든다."""
         try:
             return repo.dispatch_step(
                 job_step_id, dispatch.model_dump(), idempotency_key
@@ -652,6 +706,7 @@ def create_app(
         response_model=RmfDispatchesClaimed,
     )
     def claim_rmf_dispatches(claim: RmfDispatchClaim):
+        """RMF worker가 처리할 대기 dispatch를 제한 개수만큼 선점한다."""
         return {"dispatches": repo.claim_rmf_dispatches(claim.worker_id, claim.limit)}
 
     @app.post(
@@ -659,6 +714,7 @@ def create_app(
         response_model=RmfDispatchAccepted,
     )
     def accept_rmf_dispatch(message_id: str, acceptance: RmfDispatchAcceptance):
+        """RMF의 수락 결과와 task/robot 배정을 원래 Step에 연결한다."""
         try:
             return repo.record_rmf_dispatch_acceptance(
                 message_id, acceptance.model_dump()
@@ -677,6 +733,7 @@ def create_app(
         response_model=CommandClaimed,
     )
     def claim_command(rmf_task_id: str, claim: CommandClaim):
+        """로봇 명령 실행에 사용할 서버 발급 task_context를 반환한다."""
         try:
             return repo.claim_command(rmf_task_id, claim.model_dump())
         except JobStepNotFound as error:
@@ -744,6 +801,68 @@ def create_app(
                 status_code=409,
                 detail={"code": "RESOURCE_UNAVAILABLE", "message": str(error)},
             ) from error
+
+    @app.post(
+        "/internal/v1/job-steps/{job_step_id}/load-attempts",
+        response_model=LoadAttemptView,
+    )
+    def record_load_attempt(
+        job_step_id: int,
+        attempt: LoadAttemptRequest,
+        idempotency_key: str = Header(min_length=1, max_length=160),
+    ):
+        try:
+            return repo.record_load_attempt(
+                job_step_id, attempt.model_dump(), idempotency_key
+            )
+        except JobStepNotFound as error:
+            raise HTTPException(status_code=404, detail="load step not found") from error
+        except (ResourceAssignmentConflict, PickRecoveryConflict) as error:
+            raise HTTPException(status_code=409, detail={"code": str(error)}) from error
+        except IdempotencyConflict as error:
+            raise HTTPException(
+                status_code=409, detail={"code": "IDEMPOTENCY_CONFLICT"}
+            ) from error
+
+    @app.post(
+        "/internal/v1/job-steps/{job_step_id}/pick-recovery",
+        response_model=PickRecoveryView,
+    )
+    def record_pick_recovery_choice(
+        job_step_id: int,
+        recovery: PickRecoveryRequest,
+        idempotency_key: str = Header(min_length=1, max_length=160),
+    ):
+        try:
+            return repo.record_pick_recovery(
+                job_step_id, recovery.model_dump(), idempotency_key
+            )
+        except JobStepNotFound as error:
+            raise HTTPException(status_code=404, detail="load step not found") from error
+        except PickRecoveryConflict as error:
+            raise HTTPException(status_code=409, detail={"code": str(error)}) from error
+        except IdempotencyConflict as error:
+            raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_CONFLICT"}) from error
+
+    @app.post(
+        "/internal/v1/job-steps/{job_step_id}/recovery-facts",
+        response_model=PickRecoveryView,
+    )
+    def record_recovery_fact(
+        job_step_id: int,
+        recovery: RecoveryFactRequest,
+        idempotency_key: str = Header(min_length=1, max_length=160),
+    ):
+        try:
+            return repo.record_pick_recovery(
+                job_step_id, recovery.model_dump(), idempotency_key
+            )
+        except JobStepNotFound as error:
+            raise HTTPException(status_code=404, detail="load step not found") from error
+        except PickRecoveryConflict as error:
+            raise HTTPException(status_code=409, detail={"code": str(error)}) from error
+        except IdempotencyConflict as error:
+            raise HTTPException(status_code=409, detail={"code": "IDEMPOTENCY_CONFLICT"}) from error
 
     @app.get("/api/v1/jobs/{job_id}/timeline", response_model=JobTimeline)
     def job_timeline(job_id: int):
