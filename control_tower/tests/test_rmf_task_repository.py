@@ -73,6 +73,7 @@ def test_claim_uses_skip_locked_and_only_pending_rmf_messages() -> None:
                     "pinky_fleet",
                     1_000,
                     0,
+                    "PK_01",
                 )
             ]
         ]
@@ -111,6 +112,7 @@ def test_claim_recovers_a_stale_sent_message_with_the_same_request_id() -> None:
                     "pinky_fleet",
                     2_000,
                     1,
+                    "PK_02",
                 )
             ]
         ]

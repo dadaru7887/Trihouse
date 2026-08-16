@@ -1,0 +1,209 @@
+"""RMF core 하나와 격리된 두 Pinky namespace를 띄우는 launch 계약."""
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+import pytest
+from launch import LaunchContext
+from launch.actions import DeclareLaunchArgument, GroupAction, OpaqueFunction
+from launch.utilities import perform_substitutions
+from launch_ros.actions import Node, PushRosNamespace
+
+
+ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY = ROOT.parent
+LAUNCH = ROOT / "launch" / "two_pinky_order_demo.launch.py"
+FEATURES = (
+    REPOSITORY
+    / "control_system_test"
+    / "rmf_control_ui"
+    / "data"
+    / "import"
+    / "trihouse_test_01_physical_features.jsonl"
+)
+
+sys.path.insert(0, str(REPOSITORY))
+
+
+def _module():
+    spec = importlib.util.spec_from_file_location("two_pinky_order_demo", LAUNCH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _charger_pose(location_code: str) -> tuple[float, float, float]:
+    """테스트는 launch와 같은 결과를 JSONL에서 직접 읽어 비교한다."""
+    for line in FEATURES.read_text(encoding="utf-8").splitlines():
+        record = json.loads(line)
+        if record.get("location_code") == location_code:
+            pose = record["map_pose"]
+            return pose["x"], pose["y"], pose["yaw"]
+    raise AssertionError(f"{location_code} is missing from the authoritative JSONL")
+
+
+def test_launch_declares_the_two_pinky_demo_cli() -> None:
+    description = _module().generate_launch_description()
+    names = {
+        action.name
+        for action in description.entities
+        if isinstance(action, DeclareLaunchArgument)
+    }
+
+    assert {
+        "physical_features_file", "nav_graph", "world", "nav2_params_file",
+        "fleet_config", "map_revision", "fleet_name", "fms_base_url",
+        "start_rmf_core", "start_gazebo", "start_nav2", "start_rmf_worker",
+    } <= names
+    assert any(isinstance(action, OpaqueFunction) for action in description.entities)
+
+
+def test_both_robots_are_pinned_to_their_fixed_charger() -> None:
+    module = _module()
+
+    assert module.ROBOT_CHARGERS == (
+        ("PK_01", "pinky_01", "TRIHOUSE-TEST-01-CHG-01"),
+        ("PK_02", "pinky_02", "TRIHOUSE-TEST-01-CHG-02"),
+    )
+
+
+def test_spawn_poses_come_only_from_the_authoritative_jsonl() -> None:
+    poses = _module().charger_spawn_poses(FEATURES)
+
+    assert poses["PK_01"] == pytest.approx(_charger_pose("TRIHOUSE-TEST-01-CHG-01"))
+    assert poses["PK_02"] == pytest.approx(_charger_pose("TRIHOUSE-TEST-01-CHG-02"))
+    assert poses["PK_01"] != poses["PK_02"]
+
+
+def test_no_coordinate_literal_is_written_into_the_launch_file() -> None:
+    """좌표를 launch 파일에 복제하는 회귀를 막는다."""
+    source = LAUNCH.read_text(encoding="utf-8")
+
+    for _robot, _namespace, charger in _module().ROBOT_CHARGERS:
+        x, y, yaw = _charger_pose(charger)
+        for value in (x, y, yaw):
+            assert f"{value}" not in source
+    assert "PhysicalFeatureImporter" in source
+
+
+def _runtime_actions(tmp_path: Path):
+    module = _module()
+    nav_graph = tmp_path / "0.yaml"
+    nav_graph.write_text("levels: {}\n", encoding="utf-8")
+    world = tmp_path / "trihouse_test_01.world"
+    world.write_text("<sdf/>\n", encoding="utf-8")
+    nav2_params = tmp_path / "nav2_params.yaml"
+    nav2_params.write_text("amcl: {}\n", encoding="utf-8")
+    fleet_config = tmp_path / "fleet.yaml"
+    fleet_config.write_text("rmf_fleet: {}\n", encoding="utf-8")
+
+    context = LaunchContext()
+    context.launch_configurations.update({
+        "trihouse_root": str(REPOSITORY),
+        "physical_features_file": str(FEATURES),
+        "nav_graph": str(nav_graph),
+        "world": str(world),
+        "nav2_params_file": str(nav2_params),
+        "fleet_config": str(fleet_config),
+        "map_revision": "trihouse_test_01:fixture",
+        "project_name": "trihouse_test_01",
+        "rmf_map_name": "L1",
+        "fleet_name": "trihouse_pinky",
+        "rmf_worker_id": "test-worker",
+        "fms_base_url": "http://127.0.0.1:8080",
+        "use_sim_time": "true",
+        "headless": "true",
+        "start_rmf_core": "true",
+        "start_gazebo": "false",
+        "start_nav2": "true",
+        "start_rmf_worker": "false",
+        "startup_delay_s": "0",
+    })
+    return module, context, module._runtime(context)
+
+
+def test_runtime_starts_one_rmf_core_and_two_isolated_groups(tmp_path: Path) -> None:
+    module, context, actions = _runtime_actions(tmp_path)
+
+    timers = [action for action in actions if hasattr(action, "actions")]
+    groups = [
+        entity
+        for timer in timers
+        for entity in timer.actions
+        if isinstance(entity, GroupAction)
+    ]
+    assert len(groups) == 2
+
+    namespaces = []
+    for group in groups:
+        pushes = [
+            entity
+            for entity in group.get_sub_entities()
+            if isinstance(entity, PushRosNamespace)
+        ]
+        assert len(pushes) == 1
+        namespaces.append(
+            perform_substitutions(context, pushes[0]._PushROSNamespace__namespace)
+        )
+    assert namespaces == ["pinky_01", "pinky_02"]
+
+
+def test_each_group_spawns_its_robot_at_the_imported_charger_pose(
+    tmp_path: Path,
+) -> None:
+    module, context, actions = _runtime_actions(tmp_path)
+    poses = module.charger_spawn_poses(FEATURES)
+
+    spawn_arguments = []
+    for timer in (action for action in actions if hasattr(action, "actions")):
+        for group in timer.actions:
+            if not isinstance(group, GroupAction):
+                continue
+            for entity in group.get_sub_entities():
+                if isinstance(entity, Node) and "create" in str(entity.node_executable):
+                    spawn_arguments.append(
+                        [
+                            part.perform(context) if hasattr(part, "perform") else str(part)
+                            for argument in entity._Node__arguments
+                            for part in (
+                                argument if isinstance(argument, list) else [argument]
+                            )
+                        ]
+                    )
+
+    assert len(spawn_arguments) == 2
+    for (robot_id, namespace, _charger), arguments in zip(
+        module.ROBOT_CHARGERS, spawn_arguments, strict=True
+    ):
+        x, y, yaw = poses[robot_id]
+        assert arguments[arguments.index("-name") + 1] == namespace
+        assert float(arguments[arguments.index("-x") + 1]) == pytest.approx(x)
+        assert float(arguments[arguments.index("-y") + 1]) == pytest.approx(y)
+        assert float(arguments[arguments.index("-Y") + 1]) == pytest.approx(yaw)
+
+
+def test_every_runtime_interface_stays_inside_the_robot_namespace() -> None:
+    module = _module()
+
+    assert "scan" in module.NAMESPACED_INTERFACES
+    assert "compute_path_to_pose" in module.NAMESPACED_INTERFACES
+    assert "follow_path" in module.NAMESPACED_INTERFACES
+    assert "global_costmap/costmap" in module.NAMESPACED_INTERFACES
+    assert "local_costmap/costmap" in module.NAMESPACED_INTERFACES
+    # 절대 이름은 두 로봇이 서로의 토픽을 덮어쓰게 만든다.
+    assert not any(name.startswith("/") for name in module.NAMESPACED_INTERFACES)
+
+
+def test_missing_bootstrap_graph_or_features_fails_fast(tmp_path: Path) -> None:
+    module = _module()
+    context = LaunchContext()
+    context.launch_configurations.update({
+        "physical_features_file": str(tmp_path / "absent.jsonl"),
+        "nav_graph": str(tmp_path / "absent.yaml"),
+    })
+
+    with pytest.raises(RuntimeError, match="physical-feature JSONL"):
+        module._runtime(context)

@@ -128,7 +128,8 @@ def test_worker_claims_builds_rmf_request_and_reports_assignment() -> None:
             "unix_millis_earliest_start_time": 1_786_500_000_000,
             "requester": "trihouse_control_tower",
             "fleet_name": "project1_pinky",
-            "labels": ["job_step:100", "request:message-1"],
+            "robot_name": "PK_01",
+            "labels": ["job_step:100", "request:message-1", "robot:PK_01"],
         },
     }
     assert gateway.acceptances == [
@@ -267,4 +268,42 @@ def test_worker_rejects_claim_without_assigned_device_before_ros_submit() -> Non
         accepted=False,
         detail="INVALID_RMF_DISPATCH: assigned_device_id is required",
     )
+    assert report.rejected == 1
+
+
+def test_rmf_substituting_another_pinky_never_overwrites_the_assignment() -> None:
+    """RMF가 다른 로봇을 낙찰해도 Control Tower 배정을 덮어쓰지 않는다."""
+    gateway = FakeGateway((dispatch_record(),))
+    transport = FakeTransport(
+        DispatchAcceptance(
+            True,
+            rmf_task_id="rmf-task-1",
+            rmf_status="queued",
+            assignment=RmfAssignmentWindow(
+                task_id="rmf-task-1",
+                fleet_name="project1_pinky",
+                robot_name="PK_02",
+                start_ms=1,
+                end_ms=2,
+            ),
+        )
+    )
+    worker = RmfGatewayWorker(
+        gateway,
+        transport,
+        worker_id="worker",
+        default_fleet_name="project1_pinky",
+    )
+
+    report = worker.run_once()
+
+    assert transport.submissions[0][1]["request"]["robot_name"] == "PK_01"
+    message_id, acceptance = gateway.acceptances[0]
+    assert message_id == "message-1"
+    assert acceptance.accepted is False
+    assert acceptance.assigned_device_id is None
+    assert acceptance.detail == (
+        "ASSIGNMENT_MISMATCH: expected PK_01, RMF assigned PK_02"
+    )
+    assert report.accepted == 0
     assert report.rejected == 1

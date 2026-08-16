@@ -14,6 +14,7 @@ def _pending_message(*, attempts: int = 0) -> RmfOutboxMessage:
         job_step_id=42,
         waypoint="대기1",
         fleet_name="pinky_fleet",
+        robot_name="PK_01",
         request_time_ms=1_000,
         attempts=attempts,
     )

@@ -12,6 +12,7 @@ class GoToPlaceRequest:
     job_step_id: int
     waypoint: str
     fleet_name: str
+    robot_name: str
     request_time_ms: int
     requester: str = "trihouse_control_tower"
 
@@ -24,6 +25,8 @@ class GoToPlaceRequest:
             raise ValueError("waypoint is required")
         if not self.fleet_name.strip():
             raise ValueError("fleet_name is required")
+        if not self.robot_name.strip():
+            raise ValueError("robot_name is required")
         if self.request_time_ms < 0:
             raise ValueError("request_time_ms cannot be negative")
         if not self.requester.strip():
@@ -54,7 +57,11 @@ class RmfTaskUpdate:
 
 
 def build_dispatch_request(request: GoToPlaceRequest) -> dict[str, object]:
-    """공식 compose/go_to_place 형식으로 이동 작업을 만든다."""
+    """공식 compose/go_to_place 형식으로 이동 작업을 만든다.
+
+    Control Tower가 Pinky를 최종 선택하므로 fleet과 robot을 모두 고정한다.
+    RMF는 다른 Pinky로 대체 배정할 수 없다.
+    """
     activity = {
         "category": "go_to_place",
         "description": {"one_of": [{"waypoint": request.waypoint}]},
@@ -71,9 +78,11 @@ def build_dispatch_request(request: GoToPlaceRequest) -> dict[str, object]:
             "unix_millis_earliest_start_time": request.request_time_ms,
             "requester": request.requester,
             "fleet_name": request.fleet_name,
+            "robot_name": request.robot_name,
             "labels": [
                 f"job_step:{request.job_step_id}",
                 f"request:{request.request_id}",
+                f"robot:{request.robot_name}",
             ],
         },
     }

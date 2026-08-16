@@ -20,6 +20,7 @@ def test_builds_official_compose_go_to_place_payload() -> None:
             job_step_id=42,
             waypoint="대기1",
             fleet_name="pinky_fleet",
+            robot_name="PK_01",
             request_time_ms=1_000,
         )
     )
@@ -45,7 +46,8 @@ def test_builds_official_compose_go_to_place_payload() -> None:
             "unix_millis_earliest_start_time": 1_000,
             "requester": "trihouse_control_tower",
             "fleet_name": "pinky_fleet",
-            "labels": ["job_step:42", "request:req-1"],
+            "robot_name": "PK_01",
+            "labels": ["job_step:42", "request:req-1", "robot:PK_01"],
         },
     }
 
@@ -54,7 +56,7 @@ def test_builds_official_compose_go_to_place_payload() -> None:
 def test_request_rejects_an_empty_waypoint(waypoint: str) -> None:
     """등록되지 않은 빈 목적지가 RMF 요청으로 나가는 회귀를 막는다."""
     with pytest.raises(ValueError, match="waypoint"):
-        GoToPlaceRequest("req-1", 42, waypoint, "pinky_fleet", 1_000)
+        GoToPlaceRequest("req-1", 42, waypoint, "pinky_fleet", "PK_01", 1_000)
 
 
 def test_success_response_uses_booking_id_only() -> None:

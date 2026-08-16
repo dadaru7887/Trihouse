@@ -89,6 +89,20 @@ class RmfGatewayWorker:
                 self._reject(dispatch.message_id, detail)
                 rejected += 1
                 continue
+            if (
+                result.assignment is not None
+                and result.assignment.robot_name != request.robot_name
+            ):
+                # RMF가 다른 Pinky를 낙찰하면 그 관측으로 Control Tower의
+                # jobs.assigned_mobile_id를 덮어쓰지 않는다. 배정을 유지한 채
+                # message만 거절해 잘못된 로봇의 실행을 차단한다.
+                self._reject(
+                    dispatch.message_id,
+                    f"ASSIGNMENT_MISMATCH: expected {request.robot_name}, "
+                    f"RMF assigned {result.assignment.robot_name}",
+                )
+                rejected += 1
+                continue
             if result.assignment is None:
                 # RMF가 booking을 이미 수락했으므로 FMS message를 failed로
                 # 확정하면 나중에 실제 로봇이 움직여도 추적할 수 없다. assignment
@@ -143,6 +157,7 @@ class RmfGatewayWorker:
             job_step_id=dispatch.job_step_id,
             waypoint=waypoint,
             fleet_name=fleet_name,
+            robot_name=assigned_device_id,
             request_time_ms=request_time_ms,
         )
 

@@ -36,7 +36,9 @@ class MysqlRmfTaskRepository:
                        JSON_UNQUOTE(JSON_EXTRACT(
                          im.payload, '$.fleet_name')) AS fleet_name,
                        CAST(UNIX_TIMESTAMP(im.created_at) * 1000 AS UNSIGNED),
-                       im.attempts
+                       im.attempts,
+                       COALESCE(js.assigned_device_id, j.assigned_mobile_id)
+                         AS robot_name
                 FROM integration_messages im
                 JOIN job_steps js ON js.job_step_id = im.job_step_id
                 JOIN jobs j ON j.job_id = js.job_id
@@ -56,6 +58,9 @@ class MysqlRmfTaskRepository:
                   AND l.rmf_waypoint_name IS NOT NULL
                   AND JSON_UNQUOTE(JSON_EXTRACT(
                     im.payload, '$.fleet_name')) IS NOT NULL
+                  -- Control Tower가 Pinky를 확정하기 전에는 RMF로 보내지 않는다.
+                  AND COALESCE(js.assigned_device_id, j.assigned_mobile_id)
+                    IS NOT NULL
                   AND (
                     (j.priority = 'critical'
                      AND JSON_EXTRACT(j.context, '$.urgent') = TRUE)
@@ -108,6 +113,7 @@ class MysqlRmfTaskRepository:
                         job_step_id=int(row[1]),
                         waypoint=str(row[2]),
                         fleet_name=str(row[3]),
+                        robot_name=str(row[6]),
                         request_time_ms=int(row[4]),
                         attempts=int(row[5]) + 1,
                         state="sent",

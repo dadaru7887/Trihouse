@@ -17,6 +17,7 @@ class RmfOutboxMessage:
     job_step_id: int
     waypoint: str
     fleet_name: str
+    robot_name: str
     request_time_ms: int
     attempts: int = 0
     state: str = "pending"
@@ -32,6 +33,8 @@ class RmfOutboxMessage:
             raise ValueError("waypoint is required")
         if not self.fleet_name.strip():
             raise ValueError("fleet_name is required")
+        if not self.robot_name.strip():
+            raise ValueError("robot_name is required")
         if self.request_time_ms < 0 or self.attempts < 0:
             raise ValueError("time and attempts cannot be negative")
 
@@ -101,6 +104,7 @@ class RmfTaskOutboxWorker:
                 job_step_id=message.job_step_id,
                 waypoint=message.waypoint,
                 fleet_name=message.fleet_name,
+                robot_name=message.robot_name,
                 request_time_ms=message.request_time_ms,
             )
             try:
