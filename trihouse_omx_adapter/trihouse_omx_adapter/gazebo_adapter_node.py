@@ -2,11 +2,16 @@
 
 실기 OMX endpoint를 추측하지 않는다. 이 node는 공용 HandoverState/CargoState만 발행하며,
 `mock_load_confirmed` parameter로 시연자가 적재 물리 확인을 명시적으로 켤 수 있다.
+
+P0에서는 `OmxProtocolSimulator`가 같은 프로세스에서 Gateway 명령 계약을
+검증하고 결정적 상태 전이를 만든다. 실제 OMX motion은 나가지 않는다.
 """
 
 import rclpy
 from rclpy.node import Node
 from trihouse_interfaces.msg import CargoState, HandoverState
+
+from .protocol_simulator import OmxProtocolSimulator
 
 
 def cargo_state_for_confirmation(confirmed: bool) -> int:
@@ -29,6 +34,10 @@ class GazeboOmxAdapter(Node):
         self.declare_parameter("job_step_id", "")
         self.declare_parameter("station_id", "station-1")
         self.declare_parameter("mock_load_confirmed", False)
+        # 시뮬레이터는 이 adapter가 대표하는 OMX 하나만 응답한다.
+        self.simulator = OmxProtocolSimulator(
+            omx_id=str(self.get_parameter("omx_id").value)
+        )
         self.handover_pub = self.create_publisher(HandoverState, "/trihouse/handover/state", 10)
         self.cargo_pub = self.create_publisher(CargoState, "/trihouse/cargo/state", 10)
         self.create_timer(0.5, self._publish)
