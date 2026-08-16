@@ -27,8 +27,8 @@ class OrderIntakeResult:
     order_id: str
     state: OrderIntakeState
     confirmed: tuple[RequestedItem, ...]
-    destination_id: str
-    fulfillment_mode: str
+    outstanding: tuple[RequestedItem, ...]
+    reason_code: str = ''
 
 
 class OrderIntakePolicy:
@@ -41,10 +41,8 @@ class OrderIntakePolicy:
         requested: tuple[RequestedItem, ...],
         available: Mapping[str, int],
         allow_partial: bool,
-        destination_id: str,
-        fulfillment_mode: str,
     ) -> OrderIntakeResult:
-        self._validate(order_id, requested, destination_id, fulfillment_mode)
+        self._validate(order_id, requested)
 
         confirmed = tuple(
             RequestedItem(item.item_id, min(item.quantity, max(0, available.get(item.item_id, 0))))
@@ -55,33 +53,38 @@ class OrderIntakePolicy:
             max(0, available.get(item.item_id, 0)) < item.quantity
             for item in requested
         )
+        outstanding = tuple(
+            RequestedItem(
+                item.item_id,
+                item.quantity - min(item.quantity, max(0, available.get(item.item_id, 0))),
+            )
+            for item in requested
+            if max(0, available.get(item.item_id, 0)) < item.quantity
+        )
 
         if (has_shortage and not allow_partial) or not confirmed:
             return OrderIntakeResult(
                 order_id=order_id,
                 state=OrderIntakeState.CANCELLED,
                 confirmed=(),
-                destination_id=destination_id,
-                fulfillment_mode=fulfillment_mode,
+                outstanding=(),
+                reason_code='INSUFFICIENT_STOCK',
             )
 
         return OrderIntakeResult(
             order_id=order_id,
             state=OrderIntakeState.QUEUED,
             confirmed=confirmed,
-            destination_id=destination_id,
-            fulfillment_mode=fulfillment_mode,
+            outstanding=outstanding,
         )
 
     @staticmethod
     def _validate(
         order_id: str,
         requested: tuple[RequestedItem, ...],
-        destination_id: str,
-        fulfillment_mode: str,
     ) -> None:
-        if not all((order_id, destination_id, fulfillment_mode)):
-            raise ValueError('order_id, destination_id, and fulfillment_mode are required')
+        if not order_id:
+            raise ValueError('order_id is required')
         if not requested:
             raise ValueError('at least one requested item is required')
         if len({item.item_id for item in requested}) != len(requested):

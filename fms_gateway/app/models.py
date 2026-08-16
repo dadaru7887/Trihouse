@@ -53,6 +53,53 @@ class InventoryAdjustment(BaseModel):
         return value
 
 
+class OutboundOrderItemRequest(BaseModel):
+    """One product reference and requested quantity; never a route choice."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    product_code: str = Field(min_length=1, max_length=160)
+    quantity: int = Field(ge=1, le=100000)
+
+
+class OutboundOrderRequest(BaseModel):
+    """Session-originated product-only outbound order."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    external_reference: str | None = Field(default=None, min_length=1, max_length=128)
+    requested_by: str = Field(min_length=1, max_length=64)
+    priority: Literal["normal", "high", "critical"] = "normal"
+    allow_partial_fulfillment: bool = False
+    items: list[OutboundOrderItemRequest] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def product_references_are_unique(self):
+        references = [item.product_code.strip().casefold() for item in self.items]
+        if len(references) != len(set(references)):
+            raise ValueError("product references must be unique")
+        return self
+
+
+class OutboundOrderItemView(BaseModel):
+    line_no: int
+    product_code: str
+    requested_quantity: int
+    reserved_quantity: int
+    outstanding_quantity: int
+
+
+class OutboundOrderCreated(BaseModel):
+    job_id: int
+    job_code: str
+    external_reference: str | None = None
+    state: str
+    requested_quantity: int
+    fulfillable_quantity: int
+    outstanding_quantity: int
+    items: list[OutboundOrderItemView]
+
+
 class JobView(BaseModel):
     job_id: int
     job_code: str

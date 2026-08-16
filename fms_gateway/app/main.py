@@ -45,6 +45,8 @@ from .models import (
     PublishedMap,
     RuntimeProfileView,
     StagedMapSourceResponse,
+    OutboundOrderCreated,
+    OutboundOrderRequest,
     RmfDispatchAcceptance,
     RmfDispatchAccepted,
     RmfDispatchClaim,
@@ -67,6 +69,9 @@ from .repositories import (
     MapProjectValidationError,
     MapRevisionContentConflict,
     MySqlFmsRepository,
+    OutboundOrderActiveMapUnavailable,
+    OutboundOrderInsufficientStock,
+    OutboundOrderProductNotFound,
     PublishedMapProjectDeleteConflict,
 )
 from .tcp_protocol import TcpIngestionServer
@@ -195,6 +200,40 @@ def create_app(
     @app.get("/api/v1/jobs", response_model=list[JobView])
     def jobs():
         return repo.list_jobs()
+
+    @app.post(
+        "/api/v1/orders", response_model=OutboundOrderCreated, status_code=201
+    )
+    def create_outbound_order(
+        order: OutboundOrderRequest,
+        idempotency_key: str = Header(min_length=1, max_length=160),
+    ):
+        """Create one product-only order in the caller's credentialed session."""
+        try:
+            return repo.create_outbound_order(order.model_dump(), idempotency_key)
+        except OutboundOrderInsufficientStock as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "INSUFFICIENT_STOCK",
+                    "shortages": list(error.shortages),
+                },
+            ) from error
+        except OutboundOrderProductNotFound as error:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": error.code, "product": error.product_reference},
+            ) from error
+        except OutboundOrderActiveMapUnavailable as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "ACTIVE_MAP_UNAVAILABLE", "message": str(error)},
+            ) from error
+        except IdempotencyConflict as error:
+            raise HTTPException(
+                status_code=409,
+                detail="idempotency key was already used for another request",
+            ) from error
 
     @app.get(
         "/api/v1/runtime-profiles/pinky-pro-simulation",

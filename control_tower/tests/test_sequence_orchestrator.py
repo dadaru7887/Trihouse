@@ -15,6 +15,11 @@ from control_tower.task_manager.sequence_orchestrator import (
     SequenceOrchestrator,
     StepObjective,
 )
+from control_tower.task_manager.outbound_planner import (
+    OutboundPlan,
+    PlannedItem,
+    ZoneBundle,
+)
 
 
 @dataclass
@@ -248,3 +253,30 @@ def test_cancelled_current_step_latches_replan_stop() -> None:
     assert late_success.reason_code == "RECOVERY_STEP_REQUIRED"
     assert [item[0] for item in gateway.dispatched] == [100]
     assert orchestrator.current_step_id == 100
+
+
+def test_planned_order_requests_preserve_parallel_dependencies_without_devices() -> None:
+    plan = OutboundPlan(
+        accepted=True,
+        reason_code="",
+        lines=(),
+        bundles=(
+            ZoneBundle(
+                handover_group_id="group-chilled",
+                temperature_zone="chilled",
+                dock_location_id=12,
+                items=(
+                    PlannedItem(1, "SKU-MILK", 3, "LOT-MILK", 8, 1, 1, 0),
+                ),
+            ),
+        ),
+        packing_dock_location_id=20,
+        charger_location_ids=(30, 31),
+    )
+
+    requests = SequenceOrchestrator.planned_step_requests(plan)
+
+    assert requests[0].input["branch"] == "omx_prepare_pick"
+    assert requests[1].input["branch"] == "pinky_navigate"
+    assert requests[2].input["dependencies"] == [10, 20]
+    assert all("assigned_device_id" not in request.input for request in requests)

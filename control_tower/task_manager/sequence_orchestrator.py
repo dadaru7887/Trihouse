@@ -14,7 +14,8 @@ from control_tower.gateway.fms_client import (
     StepDispatchResponse,
 )
 
-from .outbound_sequence import outbound_segment_template
+from .outbound_planner import OutboundPlan
+from .outbound_sequence import outbound_segment_template, planned_outbound_steps
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,22 @@ class SequenceOrchestrator:
         self._current_index = -1
         self._current_state = ""
         self._dispatch_counts: dict[int, int] = {}
+
+    @staticmethod
+    def planned_step_requests(
+        plan: OutboundPlan,
+    ) -> tuple[JobStepCreateRequest, ...]:
+        """Translate a product plan without assigning Pinky or OMX hardware."""
+        return tuple(
+            JobStepCreateRequest(
+                step_no=step.step_no,
+                action_type=step.action_type,
+                executor_type=step.executor_type,
+                target_location_id=step.target_location_id,
+                input=dict(step.input),
+            )
+            for step in planned_outbound_steps(plan)
+        )
 
     @property
     def current_step_id(self) -> int | None:

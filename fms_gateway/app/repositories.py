@@ -15,6 +15,14 @@ from zoneinfo import ZoneInfo
 import yaml
 
 from .database import Database
+from control_tower.task_manager.outbound_planner import (
+    InventoryLotSnapshot,
+    OrderLine,
+    OutboundOrder,
+    OutboundPlanner,
+    PlanningLocations,
+)
+from control_tower.task_manager.outbound_sequence import planned_outbound_steps
 
 
 SEOUL = ZoneInfo("Asia/Seoul")
@@ -30,6 +38,10 @@ class FmsRepository(Protocol):
     def list_jobs(self) -> list[dict[str, object]]: ...
 
     def create_job(self, job: dict[str, Any]) -> dict[str, Any]: ...
+
+    def create_outbound_order(
+        self, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]: ...
 
     def get_job(self, job_id: int) -> dict[str, Any] | None: ...
 
@@ -118,6 +130,23 @@ class InventoryQuantityConflict(Exception):
 
 
 class IdempotencyConflict(Exception):
+    pass
+
+
+class OutboundOrderInsufficientStock(Exception):
+    def __init__(self, shortages: tuple[dict[str, Any], ...]):
+        super().__init__("insufficient stock")
+        self.shortages = shortages
+
+
+class OutboundOrderProductNotFound(Exception):
+    def __init__(self, product_reference: str, code: str = "PRODUCT_NOT_FOUND"):
+        super().__init__(product_reference)
+        self.product_reference = product_reference
+        self.code = code
+
+
+class OutboundOrderActiveMapUnavailable(Exception):
     pass
 
 
@@ -2131,6 +2160,505 @@ class MySqlFmsRepository:
             ORDER BY j.priority_rank, j.due_at, j.created_at
             """
         )
+
+    @staticmethod
+    def _outbound_waypoint_value(waypoint: dict[str, Any], *names: str) -> Any:
+        for name in names:
+            if name in waypoint:
+                return waypoint[name]
+        return None
+
+    def _outbound_planning_locations(
+        self,
+        cursor,
+        required_zone_parents: dict[str, set[str]],
+    ) -> PlanningLocations:
+        """Resolve docks and chargers from a published manifest and location IDs."""
+        cursor.execute(
+            """
+            SELECT map_name, manifest
+            FROM map_revisions
+            WHERE state = 'published'
+            ORDER BY published_at DESC, map_revision DESC
+            FOR UPDATE
+            """
+        )
+        publications = cursor.fetchall()
+        for publication in publications:
+            manifest = _json(publication["manifest"]) or {}
+            snapshot = manifest.get("draft_snapshot") or {}
+            waypoints = snapshot.get("waypoints") or []
+            if not isinstance(waypoints, list):
+                continue
+            loading: list[tuple[str, str | None, str | None]] = []
+            charger_codes: list[str] = []
+            for waypoint in waypoints:
+                if not isinstance(waypoint, dict):
+                    continue
+                code = self._outbound_waypoint_value(
+                    waypoint, "location_code", "locationCode", "code"
+                )
+                role = self._outbound_waypoint_value(
+                    waypoint, "operational_role", "operationalRole"
+                )
+                if not isinstance(code, str) or not code:
+                    continue
+                if role == "loading_dock":
+                    loading.append(
+                        (
+                            code,
+                            self._outbound_waypoint_value(
+                                waypoint,
+                                "parent_location_code",
+                                "parentLocationCode",
+                            ),
+                            self._outbound_waypoint_value(
+                                waypoint, "temperature_zone", "temperatureZone"
+                            ),
+                        )
+                    )
+                elif role == "charging_station":
+                    charger_codes.append(code)
+            candidate_codes = sorted({code for code, _, _ in loading} | set(charger_codes))
+            if not candidate_codes:
+                continue
+            placeholders = ",".join(["%s"] * len(candidate_codes))
+            cursor.execute(
+                f"""
+                SELECT location_id, location_code, parent_location_id, map_name, metadata
+                FROM locations
+                WHERE location_code IN ({placeholders}) AND map_name = %s
+                """,
+                (*candidate_codes, publication["map_name"]),
+            )
+            location_rows: dict[str, dict[str, Any]] = {}
+            for row in cursor.fetchall():
+                metadata = _json(row.get("metadata")) or {}
+                if metadata.get("active") is False:
+                    continue
+                location_rows[str(row["location_code"])] = dict(row)
+
+            parent_codes = sorted(
+                {parent for _, parent, _ in loading if isinstance(parent, str)}
+            )
+            parent_rows: dict[str, dict[str, Any]] = {}
+            if parent_codes:
+                parent_placeholders = ",".join(["%s"] * len(parent_codes))
+                cursor.execute(
+                    f"""
+                    SELECT location_id, location_code, location_type, zone_code,
+                           temperature_zone
+                    FROM locations WHERE location_code IN ({parent_placeholders})
+                    """,
+                    tuple(parent_codes),
+                )
+                parent_rows = {
+                    str(row["location_code"]): dict(row) for row in cursor.fetchall()
+                }
+
+            zone_docks: dict[str, int] = {}
+            for zone, required_parents in required_zone_parents.items():
+                choices = sorted(
+                    (
+                        code,
+                        int(location_rows[code]["location_id"]),
+                    )
+                    for code, parent, waypoint_zone in loading
+                    if code in location_rows
+                    and parent in required_parents
+                    and waypoint_zone == zone
+                )
+                if not choices:
+                    break
+                zone_docks[zone] = choices[0][1]
+            if set(zone_docks) != set(required_zone_parents):
+                continue
+
+            packing_docks = sorted(
+                int(location_rows[code]["location_id"])
+                for code, parent, _ in loading
+                if code in location_rows
+                and isinstance(parent, str)
+                and parent in parent_rows
+                and (
+                    parent_rows[parent].get("zone_code") == "packing"
+                    or parent_rows[parent].get("location_type") == "workstation"
+                )
+            )
+            chargers = sorted(
+                int(location_rows[code]["location_id"])
+                for code in charger_codes
+                if code in location_rows
+            )
+            if packing_docks and chargers:
+                return PlanningLocations(
+                    zone_docks=zone_docks,
+                    packing_docks=tuple(packing_docks),
+                    charger_location_ids=tuple(chargers),
+                )
+        raise OutboundOrderActiveMapUnavailable(
+            "published map does not contain the required zone docks, packing docks, and chargers"
+        )
+
+    def create_outbound_order(
+        self, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """Lock FEFO lots and persist the entire accepted order in one transaction."""
+        fingerprint = json.loads(
+            json.dumps(request, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        )
+        event_uuid = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"trihouse:outbound-order:{idempotency_key}")
+        )
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                cursor.execute(
+                    """
+                    INSERT IGNORE INTO operation_events
+                      (event_uuid, occurred_at, severity, category,
+                       event_type, message, payload)
+                    VALUES (%s, NOW(6), 'info', 'operation',
+                            'order.created', 'outbound product order created', %s)
+                    """,
+                    (
+                        event_uuid,
+                        json.dumps(
+                            {
+                                "idempotency_key": idempotency_key,
+                                "request": fingerprint,
+                                "response": None,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ),
+                )
+                owns_idempotency_key = cursor.rowcount == 1
+                if not owns_idempotency_key:
+                    cursor.execute(
+                        "SELECT payload FROM operation_events WHERE event_uuid = %s",
+                        (event_uuid,),
+                    )
+                    existing = cursor.fetchone()
+                    if existing is None:
+                        raise RuntimeError("idempotency event was not readable")
+                    payload = _json(existing["payload"]) or {}
+                    if payload.get("request") != fingerprint:
+                        raise IdempotencyConflict
+                    if payload.get("response") is None:
+                        raise RuntimeError("idempotency event has no committed response")
+                    return deepcopy(payload["response"])
+
+                external_reference = request.get("external_reference")
+                if external_reference:
+                    cursor.execute(
+                        "SELECT job_id FROM jobs WHERE external_reference = %s",
+                        (external_reference,),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise IdempotencyConflict
+
+                resolved_lines: list[OrderLine] = []
+                canonical_products: set[str] = set()
+                for line_no, line in enumerate(request["items"], start=1):
+                    product_reference = str(line["product_code"]).strip()
+                    cursor.execute(
+                        "SELECT DISTINCT product_code FROM inventory_lots WHERE product_code = %s",
+                        (product_reference,),
+                    )
+                    exact = [str(row["product_code"]) for row in cursor.fetchall()]
+                    if exact:
+                        matches = exact
+                    else:
+                        cursor.execute(
+                            """
+                            SELECT DISTINCT product_code FROM inventory_lots
+                            WHERE LOWER(item_name) = LOWER(%s)
+                            ORDER BY product_code
+                            """,
+                            (product_reference,),
+                        )
+                        matches = [str(row["product_code"]) for row in cursor.fetchall()]
+                    if not matches:
+                        raise OutboundOrderProductNotFound(product_reference)
+                    if len(matches) != 1:
+                        raise OutboundOrderProductNotFound(
+                            product_reference, "AMBIGUOUS_PRODUCT"
+                        )
+                    product_code = matches[0]
+                    if product_code in canonical_products:
+                        raise OutboundOrderProductNotFound(
+                            product_reference, "DUPLICATE_PRODUCT"
+                        )
+                    canonical_products.add(product_code)
+                    resolved_lines.append(
+                        OrderLine(line_no, product_code, int(line["quantity"]))
+                    )
+
+                product_codes = sorted(canonical_products)
+                placeholders = ",".join(["%s"] * len(product_codes))
+                cursor.execute(
+                    f"""
+                    SELECT lot.lot_id, lot.lot_code, lot.product_code, lot.item_name,
+                           lot.temperature_zone, lot.location_id,
+                           lot.available_qty, lot.reserved_qty, lot.expiry_date,
+                           lot.received_at, parent.location_code AS parent_location_code,
+                           parent.temperature_zone AS parent_temperature_zone
+                    FROM inventory_lots lot
+                    JOIN locations slot ON slot.location_id = lot.location_id
+                    JOIN locations parent ON parent.location_id = slot.parent_location_id
+                    WHERE lot.product_code IN ({placeholders}) AND lot.state = 'stored'
+                    ORDER BY lot.product_code, (lot.expiry_date IS NULL), lot.expiry_date,
+                             (lot.received_at IS NULL), lot.received_at, lot.lot_id
+                    FOR UPDATE
+                    """,
+                    tuple(product_codes),
+                )
+                lot_rows = [dict(row) for row in cursor.fetchall()]
+                for row in lot_rows:
+                    if row["temperature_zone"] != row["parent_temperature_zone"]:
+                        raise OutboundOrderActiveMapUnavailable(
+                            f"lot {row['lot_code']} temperature zone disagrees "
+                            "with its parent warehouse"
+                        )
+                inventory = tuple(
+                    InventoryLotSnapshot(
+                        lot_id=int(row["lot_id"]),
+                        lot_code=str(row["lot_code"]),
+                        product_code=str(row["product_code"]),
+                        item_name=row.get("item_name"),
+                        temperature_zone=str(row["temperature_zone"]),
+                        slot_location_id=int(row["location_id"]),
+                        available_qty=int(row["available_qty"]),
+                        reserved_qty=int(row["reserved_qty"]),
+                        expiry_date=row.get("expiry_date"),
+                        received_at=row.get("received_at"),
+                    )
+                    for row in lot_rows
+                )
+                required_zone_parents: dict[str, set[str]] = {}
+                for row in lot_rows:
+                    if int(row["available_qty"]) - int(row["reserved_qty"]) <= 0:
+                        continue
+                    required_zone_parents.setdefault(
+                        str(row["temperature_zone"]), set()
+                    ).add(str(row["parent_location_code"]))
+                planning_locations = self._outbound_planning_locations(
+                    cursor, required_zone_parents
+                )
+                outbound_order = OutboundOrder(
+                    external_reference=external_reference,
+                    requested_by=str(request["requested_by"]),
+                    priority=str(request["priority"]),
+                    allow_partial_fulfillment=bool(
+                        request["allow_partial_fulfillment"]
+                    ),
+                    items=tuple(resolved_lines),
+                )
+                plan = OutboundPlanner().plan(
+                    outbound_order, inventory, planning_locations
+                )
+                if not plan.accepted:
+                    available_by_product = {
+                        code: sum(
+                            candidate.reservable_qty
+                            for candidate in inventory
+                            if candidate.product_code == code
+                        )
+                        for code in product_codes
+                    }
+                    shortages = tuple(
+                        {
+                            "line_no": line.line_no,
+                            "product_code": line.product_code,
+                            "outstanding_quantity": max(
+                                0,
+                                line.quantity
+                                - available_by_product.get(line.product_code, 0),
+                            ),
+                        }
+                        for line in resolved_lines
+                        if available_by_product.get(line.product_code, 0) < line.quantity
+                    )
+                    raise OutboundOrderInsufficientStock(shortages)
+
+                job_identity = uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"trihouse:outbound-job:{external_reference or idempotency_key}",
+                ).hex[:24]
+                job_code = f"OUT-{job_identity}"
+                context = {
+                    "source": "public_product_order",
+                    "allow_partial_fulfillment": outbound_order.allow_partial_fulfillment,
+                    "zone_order": [bundle.temperature_zone for bundle in plan.bundles],
+                    "requested_quantity": plan.requested_quantity,
+                    "fulfillable_quantity": plan.fulfillable_quantity,
+                    "outstanding_quantity": plan.outstanding_quantity,
+                }
+                cursor.execute(
+                    """
+                    INSERT INTO jobs
+                      (job_code, operation_type, priority, requested_by,
+                       external_reference, destination_location_id, context)
+                    VALUES (%s, 'outbound', %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        job_code,
+                        outbound_order.priority,
+                        outbound_order.requested_by,
+                        external_reference,
+                        plan.packing_dock_location_id,
+                        json.dumps(context, ensure_ascii=False),
+                    ),
+                )
+                job_id = int(cursor.lastrowid)
+
+                for line in plan.lines:
+                    if not line.allocations:
+                        item_rows = [(None, line.requested_qty, 0, line.outstanding_qty)]
+                    else:
+                        item_rows = [
+                            (
+                                allocation.lot_id,
+                                allocation.reserved_qty
+                                + (
+                                    line.outstanding_qty
+                                    if index == len(line.allocations) - 1
+                                    else 0
+                                ),
+                                allocation.reserved_qty,
+                                line.outstanding_qty
+                                if index == len(line.allocations) - 1
+                                else 0,
+                            )
+                            for index, allocation in enumerate(line.allocations)
+                        ]
+                    for lot_id, requested_qty, reserved_qty, outstanding_qty in item_rows:
+                        metadata = {
+                            "line_no": line.line_no,
+                            "reserved_quantity": reserved_qty,
+                            "outstanding_quantity": outstanding_qty,
+                        }
+                        cursor.execute(
+                            """
+                            INSERT INTO job_items
+                              (job_id, product_code, requested_qty, lot_id, metadata)
+                            VALUES (%s, %s, %s, %s, %s)
+                            """,
+                            (
+                                job_id,
+                                line.product_code,
+                                requested_qty,
+                                lot_id,
+                                json.dumps(metadata, ensure_ascii=False),
+                            ),
+                        )
+
+                for step in planned_outbound_steps(plan):
+                    cursor.execute(
+                        """
+                        INSERT INTO job_steps
+                          (job_id, step_no, executor_type, action_type,
+                           target_location_id, input)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            job_id,
+                            step.step_no,
+                            step.executor_type,
+                            step.action_type,
+                            step.target_location_id,
+                            json.dumps(step.input, ensure_ascii=False),
+                        ),
+                    )
+
+                row_by_lot_id = {int(row["lot_id"]): row for row in lot_rows}
+                for line in plan.lines:
+                    for allocation in line.allocations:
+                        lot_row = row_by_lot_id[allocation.lot_id]
+                        reserved_after = int(lot_row["reserved_qty"]) + allocation.reserved_qty
+                        cursor.execute(
+                            """
+                            UPDATE inventory_lots SET reserved_qty = %s
+                            WHERE lot_id = %s AND reserved_qty = %s
+                              AND available_qty >= %s
+                            """,
+                            (
+                                reserved_after,
+                                allocation.lot_id,
+                                lot_row["reserved_qty"],
+                                reserved_after,
+                            ),
+                        )
+                        if cursor.rowcount != 1:
+                            raise InventoryQuantityConflict
+                        lot_row["reserved_qty"] = reserved_after
+                        cursor.execute(
+                            """
+                            INSERT INTO inventory_moves
+                              (lot_id, job_id, move_type, quantity_delta,
+                               quantity_after, reserved_delta, reserved_after,
+                               recorded_by, note)
+                            VALUES (%s, %s, 'reservation', 0, %s, %s, %s, %s, %s)
+                            """,
+                            (
+                                allocation.lot_id,
+                                job_id,
+                                lot_row["available_qty"],
+                                allocation.reserved_qty,
+                                reserved_after,
+                                outbound_order.requested_by,
+                                f"outbound order line {line.line_no}",
+                            ),
+                        )
+
+                response_items = [
+                    {
+                        "line_no": line.line_no,
+                        "product_code": line.product_code,
+                        "requested_quantity": line.requested_qty,
+                        "reserved_quantity": line.reserved_qty,
+                        "outstanding_quantity": line.outstanding_qty,
+                    }
+                    for line in plan.lines
+                ]
+                response = {
+                    "job_id": job_id,
+                    "job_code": job_code,
+                    "external_reference": external_reference,
+                    "state": "queued",
+                    "requested_quantity": plan.requested_quantity,
+                    "fulfillable_quantity": plan.fulfillable_quantity,
+                    "outstanding_quantity": plan.outstanding_quantity,
+                    "items": response_items,
+                }
+                cursor.execute(
+                    """
+                    UPDATE operation_events
+                    SET actor_worker_id = %s, job_id = %s, payload = %s
+                    WHERE event_uuid = %s
+                    """,
+                    (
+                        outbound_order.requested_by,
+                        job_id,
+                        json.dumps(
+                            {
+                                "idempotency_key": idempotency_key,
+                                "request": fingerprint,
+                                "response": response,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        event_uuid,
+                    ),
+                )
+                connection.commit()
+                return response
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                cursor.close()
 
     def create_job(self, job: dict[str, Any]) -> dict[str, Any]:
         with self.database.connection() as connection:
