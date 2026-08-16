@@ -4,7 +4,35 @@
 보여야 성공인지"를 함께 적었다. 확인 문구가 안 나오면 다음 단계로 넘어가지
 말고 그 자리에서 멈춰야 원인을 찾기 쉽다.
 
-## 0. 스택이 두 층으로 나뉘는 이유
+## 0. 이 문서의 검증 상태 — 먼저 읽을 것
+
+**정직하게 적는다. 이 절차 전체를 끝까지 실행해 본 적은 아직 없다.**
+작성 환경에 Docker 데몬 접근 권한이 없어 컨테이너를 띄우지 못했고, 그래서
+Gazebo 에서 로봇이 실제로 움직이는 것도 확인하지 못했다.
+
+| 항목 | 상태 |
+|---|---|
+| compose 4개 파일이 하나의 project 로 병합됨 | `docker compose config` 로 **확인** |
+| `flutter build web` 성공 | **확인** |
+| Gateway `/api/v1/operations/ws` 라우트 동작 | 테스트로 **확인** |
+| RMF core 노드 6개가 이 ROS 설치에 존재 | `ros2 pkg executables` 로 **확인** |
+| 기동 스크립트의 PYTHONPATH 로 OMX/worker 모듈 import | **확인** |
+| 포트 3308/8080/3100 이 비어 있음 | **확인** (3306·3307 은 이미 사용 중) |
+| seed 상품 코드 (`SKU-ORANGE` 등) 존재 | **확인** |
+| Docker 이미지 실제 빌드 (`up`) | **미실행** |
+| ROS 층 실제 기동 (`ros`) | **미실행** |
+| Gazebo 에서 두 Pinky 주행 | **미실행** |
+| `doctor` 가 11개 모두 healthy | **미실행** |
+
+즉 **명령과 경로는 실물과 대조해 고쳤지만, 처음 실행할 때 한두 군데는 더
+막힐 수 있다.** 특히 4절(지도 발행)과 5절(ROS 기동)이 가장 불확실하다.
+막히면 10절 문제 해결표를 먼저 보고, 그래도 안 되면 `control_system` 의
+같은 기능 구현을 참고하면 된다 — RMF core 구성은 이미 거기서 가져왔다
+(`control_system/rmf_maps/project1/project1.launch.xml`).
+
+---
+
+## 1. 스택이 두 층으로 나뉘는 이유
 
 | 층 | 무엇이 도는가 | 띄우는 명령 |
 |---|---|---|
@@ -22,9 +50,9 @@ ROS 쪽은 `rclpy`, DDS 멀티캐스트, GPU 가 필요해 컨테이너로 옮�
 
 ---
 
-## 1. 사전 준비 (최초 1회)
+## 2. 사전 준비 (최초 1회)
 
-### 1.1 비밀번호 환경 파일
+### 2.1 비밀번호 환경 파일
 
 `compose.yaml` 과 `compose.control.yaml` 이 `${MYSQL_ROOT_PASSWORD}`,
 `${FMS_DB_PASSWORD}` 를 요구한다. 저장소 루트에 `.env` 를 만든다.
@@ -36,16 +64,27 @@ MYSQL_ROOT_PASSWORD=change_me_root
 FMS_DB_USER=fms_gateway
 FMS_DB_PASSWORD=change_me_gateway
 FMS_DB_DATABASE=trihouse_fms
-FMS_DB_PORT=3306
+# 이 호스트에는 3306(개발 MySQL)과 3307(테스트 MySQL)이 이미 떠 있다.
+# 겹치면 `up` 이 포트 바인딩에서 실패한다.
+FMS_DB_PORT=3308
 FMS_API_PORT=8080
 CONTROL_UI_PORT=3100
 EOF
 chmod 600 .env
 ```
 
+쓰려는 포트가 비어 있는지 먼저 확인한다.
+
+```bash
+for port in 3308 8080 3100; do
+  (timeout 2 bash -c "cat </dev/null >/dev/tcp/127.0.0.1/$port" 2>/dev/null \
+     && echo "$port 사용 중 — .env 에서 바꾸세요") || echo "$port 사용 가능"
+done
+```
+
 `.env` 는 커밋하지 않는다.
 
-### 1.2 Docker 권한 확인
+### 2.2 Docker 권한 확인
 
 ```bash
 docker info >/dev/null && echo "docker OK"
@@ -58,7 +97,7 @@ docker info >/dev/null && echo "docker OK"
 sudo usermod -aG docker "$USER"
 ```
 
-### 1.3 ROS 워크스페이스 빌드
+### 2.3 ROS 워크스페이스 빌드
 
 ```bash
 cd /home/syw/Trihouse
@@ -72,7 +111,7 @@ colcon build --symlink-install \
 성공하면 `install/setup.bash` 가 생긴다. 기동 스크립트가 이 오버레이를
 자동으로 얹는다.
 
-### 1.4 좌표 원본 확인
+### 2.4 좌표 원본 확인
 
 P0 좌표는 **오직** 아래 파일에서만 온다. 13줄이어야 하고, 병목 2건은
 `source_diameter_m: 0.2` / `radius_m: 0.1` 을 갖고 있어야 한다.
@@ -117,7 +156,7 @@ PY
 
 ---
 
-## 2. Docker 층 기동
+## 3. Docker 층 기동
 
 ```bash
 cd /home/syw/Trihouse
@@ -151,28 +190,35 @@ xdg-open http://127.0.0.1:3100
 
 ---
 
-## 3. DB 가 실시간으로 반영되는지 확인
+## 4. DB 가 실시간으로 반영되는지 확인
 
 터미널을 **두 개** 쓴다.
 
-### 3.1 터미널 A — DB 를 계속 들여다본다
+### 4.1 터미널 A — DB 를 계속 들여다본다
+
+`watch` 안에서 따옴표를 중첩하면 깨지기 쉬우니 작은 스크립트를 하나 만든다.
 
 ```bash
 cd /home/syw/Trihouse
-set -a; . ./.env; set +a
+cat > /tmp/trihouse_db_counts.sh <<'EOF'
+#!/usr/bin/env bash
+set -a; . /home/syw/Trihouse/.env; set +a
+docker compose --project-name trihouse_p0 exec -T mysql \
+  mysql -u"$FMS_DB_USER" -p"$FMS_DB_PASSWORD" "$FMS_DB_DATABASE" -e \
+  "SELECT
+     (SELECT COUNT(*) FROM jobs)             AS jobs,
+     (SELECT COUNT(*) FROM job_items)        AS items,
+     (SELECT COUNT(*) FROM job_steps)        AS steps,
+     (SELECT COUNT(*) FROM reservations)     AS reservations,
+     (SELECT COUNT(*) FROM operation_events) AS events;"
+EOF
+chmod +x /tmp/trihouse_db_counts.sh
 
 # 주문이 들어올 때마다 Job / Step / 예약 수가 늘어나는지 본다.
-watch -n 1 "docker compose --project-name trihouse_p0 exec -T mysql \
-  mysql -u\"\$FMS_DB_USER\" -p\"\$FMS_DB_PASSWORD\" \"\$FMS_DB_DATABASE\" -e \
-  'SELECT
-      (SELECT COUNT(*) FROM jobs)         AS jobs,
-      (SELECT COUNT(*) FROM job_items)    AS items,
-      (SELECT COUNT(*) FROM job_steps)    AS steps,
-      (SELECT COUNT(*) FROM reservations) AS reservations,
-      (SELECT COUNT(*) FROM operation_events) AS events;'"
+watch -n 1 /tmp/trihouse_db_counts.sh
 ```
 
-### 3.2 터미널 B — 주문을 넣는다
+### 4.2 터미널 B — 주문을 넣는다
 
 **UI 로 넣기:** `http://127.0.0.1:3100` → 주문 화면 → 상품 추가 → 수량 입력 →
 필요하면 `긴급` / `부분 출고 허용` 체크 → 제출.
@@ -208,13 +254,20 @@ curl -fsS "http://127.0.0.1:8080/api/v1/jobs/$JOB_ID/timeline" | python3 -m json
 구역 순서(`ambient` → `chilled` → `frozen`)와 한 구역당 Dock 방문이 한 번인지
 확인한다.
 
-### 3.3 운영 WebSocket 이 살아 있는지
+### 4.3 운영 WebSocket 이 살아 있는지
 
 관제 UI 의 운영 화면은 `/api/v1/operations/ws` 를 구독한다. 브라우저 없이
-확인하려면:
+확인하려면 `websockets` 모듈이 필요하다. 이 호스트의 시스템 파이썬은
+`externally-managed-environment` 라 `pip install --user` 가 막혀 있으므로
+일회용 venv 를 쓴다.
 
 ```bash
-python3 - <<'PY'
+python3 -m venv /tmp/trihouse-ws && /tmp/trihouse-ws/bin/pip -q install websockets
+```
+
+
+```bash
+/tmp/trihouse-ws/bin/python - <<'PY'
 import asyncio, json, websockets
 async def main():
     async with websockets.connect("ws://127.0.0.1:8080/api/v1/operations/ws") as ws:
@@ -229,7 +282,7 @@ PY
 
 ---
 
-## 4. 지도 발행 — ROS 층 전에 반드시 먼저
+## 5. 지도 발행 — ROS 층 전에 반드시 먼저
 
 fleet adapter 와 dispatch worker 는 **발행된 지도 revision** 을 작업 문맥으로
 쓴다. 발행 없이 ROS 를 띄우면 로봇이 명령을 거절한다.
@@ -249,7 +302,7 @@ export TRIHOUSE_MAP_REVISION='trihouse_test_01:<복사한_해시>'
 
 ---
 
-## 5. ROS 층 기동 — Pinky 2대 + OMX 2대
+## 6. ROS 층 기동 — Pinky 2대 + OMX 2대
 
 새 터미널에서:
 
@@ -285,7 +338,7 @@ control_tower/bringup/p0_simulation_bringup.sh --gui
 
 ---
 
-## 6. 전체 점검
+## 7. 전체 점검
 
 ```bash
 ./scripts/control_stack doctor --mode simulation
@@ -316,9 +369,9 @@ ros2 topic list | grep -E 'pinky_0[12]'
 
 ---
 
-## 7. 2 Pinky / 2 OMX 수동 시험
+## 8. 2 Pinky / 2 OMX 수동 시험
 
-### 7.1 동시 주문 두 건 → 서로 다른 로봇에 배정
+### 8.1 동시 주문 두 건 → 서로 다른 로봇에 배정
 
 ```bash
 for i in 1 2; do
@@ -354,7 +407,7 @@ docker compose --project-name trihouse_p0 exec -T mysql \
 - 충전기가 로봇에 고정이다: `PK_01 → TRIHOUSE-TEST-01-CHG-01`,
   `PK_02 → TRIHOUSE-TEST-01-CHG-02`.
 
-### 7.2 Gazebo 에서 실제 주행 보기
+### 8.2 Gazebo 에서 실제 주행 보기
 
 `--gui` 로 띄웠다면 Gazebo 창에서 두 Pinky 가 각자 충전 스테이션에서 출발해
 적재 Dock 으로 이동한다. 관제 UI 운영 화면에서는 다음이 보여야 한다.
@@ -365,7 +418,7 @@ docker compose --project-name trihouse_p0 exec -T mysql \
 
 경로/일정이 어긋나면 `PATH_SCHEDULE_MISMATCH` 배지가 뜨고 로봇은 보류된다.
 
-### 7.3 병목 통과 (지름 0.2 m, 실행 반경 0.1 m)
+### 8.3 병목 통과 (지름 0.2 m, 실행 반경 0.1 m)
 
 두 로봇이 같은 통로로 향하게 주문을 넣으면, 먼저 도착한 로봇이 통과하고 다른
 로봇은 정지한다. `긴급` 주문이어도 통과 순서는 바뀌지 않는다. 15초를 넘겨
@@ -377,7 +430,7 @@ ros2 topic echo /trihouse/bottleneck/lease --once 2>/dev/null || \
   echo "lease 토픽이 없으면 관제 UI 운영 화면의 대기 표시로 확인한다"
 ```
 
-### 7.4 OMX 적재와 작업자 완료
+### 8.4 OMX 적재와 작업자 완료
 
 OMX 시뮬레이터는 `PREPARING → PICKING → OMX_READY` 를 낸다. Pinky 가 먼저
 도착해도 같은 배정 revision 의 `PINKY_READY` 와 `OMX_READY` 가 모두 모여야
@@ -407,7 +460,7 @@ docker compose --project-name trihouse_p0 exec -T mysql \
     WHERE job_id=$JOB_ID AND action_type='return_home';"
 ```
 
-### 7.5 비상 fixture 두 건
+### 8.5 비상 fixture 두 건
 
 관제 UI 운영 화면에서 사건이 열리면 원인에 맞는 카메라가 열린다.
 
@@ -423,7 +476,7 @@ docker compose --project-name trihouse_p0 exec -T mysql \
 
 ---
 
-## 8. 정리
+## 9. 정리
 
 ```bash
 # ROS 층: 해당 터미널에서 Ctrl+C
@@ -439,7 +492,7 @@ docker compose --project-name trihouse_p0 down -v
 
 ---
 
-## 9. 자주 막히는 곳
+## 10. 자주 막히는 곳
 
 | 증상 | 원인과 조치 |
 |---|---|
@@ -454,7 +507,7 @@ docker compose --project-name trihouse_p0 down -v
 
 ---
 
-## 10. 자동 검증과의 관계
+## 11. 자동 검증과의 관계
 
 이 문서는 **수동** 절차다. 같은 동작을 자동으로 확인하려면:
 

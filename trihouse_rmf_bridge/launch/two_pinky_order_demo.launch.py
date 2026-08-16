@@ -180,10 +180,9 @@ def _runtime(context):
         actions.append(
             IncludeLaunchDescription(
                 AnyLaunchDescriptionSource(
-                    str(Path(__file__).with_name("office_energy_bridge.launch.py"))
+                    str(Path(__file__).with_name("rmf_core.launch.py"))
                 ),
                 launch_arguments={
-                    "nav_graph_file": str(nav_graph),
                     "use_sim_time": LaunchConfiguration("use_sim_time"),
                 }.items(),
             )

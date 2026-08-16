@@ -152,7 +152,7 @@ def test_the_ros_layer_is_started_by_the_control_tower_bringup() -> None:
 def test_the_bringup_starts_every_ros_component_together() -> None:
     source = _module().ROS_BRINGUP.read_text(encoding="utf-8")
 
-    assert "rmf_traffic_ros2 common.launch.xml" in source
+    assert "rmf_core.launch.py" in source
     assert "two_pinky_order_demo.launch.py" in source
     assert "trihouse_omx_adapter.simulator_node" in source
     assert "control_tower.rmf_adapter.rmf_gateway_worker_node" in source

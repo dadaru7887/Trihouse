@@ -52,8 +52,13 @@ if [[ -f "$ROOT/install/setup.bash" ]]; then
   source "$ROOT/install/setup.bash"
 fi
 
-# control_tower 와 fms_gateway 는 ROS 패키지가 아니라 저장소 경로로 import 한다.
-export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+# control_tower / fms_gateway 는 ROS 패키지가 아니라 저장소 경로로 import 한다.
+#
+# 주의: ROS 패키지는 `<pkg>/<pkg>/` 구조라서 저장소 루트만 넣으면 바깥
+# 디렉터리가 namespace package 로 먼저 잡혀
+# `python3 -m trihouse_omx_adapter.simulator_node` 가 실패한다. 안쪽 패키지
+# 디렉터리를 루트보다 앞에 둔다.
+export PYTHONPATH="$ROOT/trihouse_omx_adapter:$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 if [[ ! -f "$PHYSICAL_FEATURES_FILE" ]]; then
   echo "승인된 physical-feature JSONL 이 없습니다: $PHYSICAL_FEATURES_FILE" >&2
@@ -95,8 +100,12 @@ start() {
 }
 
 # 1) RMF core. 두 fleet adapter 가 같은 schedule 에 붙는다.
-start "rmf traffic schedule" \
-  ros2 launch rmf_traffic_ros2 common.launch.xml use_sim_time:=true
+#    `rmf_traffic_ros2` 에는 common.launch.xml 이 없다. control_system 이 검증한
+#    노드 구성을 rmf_core.launch.py 로 옮겨 두었다.
+start "rmf core" \
+  ros2 launch trihouse_rmf_bridge rmf_core.launch.py \
+    use_sim_time:=true \
+    start_visualization:="$([[ "$RVIZ" == true ]] && echo true || echo false)"
 
 sleep 3
 
@@ -125,11 +134,6 @@ if [[ "$START_WORKER" == true ]]; then
       --fms-base-url "$FMS_BASE_URL" \
       --fleet-name "$TRIHOUSE_FLEET_NAME" \
       --worker-id trihouse-rmf-worker
-fi
-
-if [[ "$RVIZ" == true ]]; then
-  start "rviz" ros2 launch rmf_visualization visualization.launch.xml \
-    use_sim_time:=true
 fi
 
 echo

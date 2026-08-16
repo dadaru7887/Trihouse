@@ -207,3 +207,77 @@ def test_missing_bootstrap_graph_or_features_fails_fast(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="physical-feature JSONL"):
         module._runtime(context)
+
+
+RMF_CORE_NODES = (
+    ("rmf_traffic_ros2", "rmf_traffic_schedule"),
+    ("rmf_traffic_ros2", "rmf_traffic_blockade"),
+    ("rmf_fleet_adapter", "door_supervisor"),
+    ("rmf_fleet_adapter", "lift_supervisor"),
+    ("rmf_fleet_adapter", "mutex_group_supervisor"),
+    ("rmf_task_ros2", "rmf_task_dispatcher"),
+)
+
+
+def _core_nodes():
+    """rmf_core.launch.py 가 실제로 만드는 (package, executable) 목록."""
+    core = LAUNCH.with_name("rmf_core.launch.py")
+    assert core.is_file()
+    spec = importlib.util.spec_from_file_location("rmf_core", core)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    context = LaunchContext()
+    context.launch_configurations.update({
+        "use_sim_time": "true", "server_uri": "", "initial_map": "L1",
+        "lane_width": "0.120", "waypoint_scale": "1.000", "text_scale": "0.600",
+        "start_visualization": "false", "building_map_file": "",
+    })
+    found = []
+    for action in module._core(context):
+        package = getattr(action, "node_package", None)
+        executable = getattr(action, "node_executable", None)
+        if package is not None and executable is not None:
+            found.append(
+                (
+                    perform_substitutions(context, package)
+                    if not isinstance(package, str)
+                    else package,
+                    perform_substitutions(context, executable)
+                    if not isinstance(executable, str)
+                    else executable,
+                )
+            )
+    return found
+
+
+def test_the_rmf_core_launch_declares_every_required_node() -> None:
+    assert set(_core_nodes()) == set(RMF_CORE_NODES)
+
+
+def test_every_rmf_core_executable_exists_in_this_ros_installation() -> None:
+    """`rmf_traffic_ros2` 에 common.launch.xml 이 없어 기동이 깨졌던 회귀를 막는다."""
+    import shutil
+    import subprocess
+
+    if shutil.which("ros2") is None:
+        pytest.skip("ROS 2 is not available on this host")
+
+    for package, executable in _core_nodes():
+        listed = subprocess.run(
+            ["ros2", "pkg", "executables", package],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert listed.returncode == 0, f"unknown package: {package}"
+        assert f"{package} {executable}" in listed.stdout.splitlines(), (
+            f"{package} has no executable named {executable}"
+        )
+
+
+def test_the_demo_includes_that_core_rather_than_the_energy_bridge() -> None:
+    source = LAUNCH.read_text(encoding="utf-8")
+
+    assert "rmf_core.launch.py" in source
+    assert "office_energy_bridge.launch.py" not in source
