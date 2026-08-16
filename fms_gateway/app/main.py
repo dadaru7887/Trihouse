@@ -4,6 +4,7 @@
 Repository에 위임한다.
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from datetime import datetime, timezone
@@ -12,11 +13,23 @@ from pathlib import Path as FileSystemPath
 import shutil
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Path, Query, UploadFile
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Path,
+    Query,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 
 from .config import get_map_runtime_settings, get_settings, get_tcp_settings
 from .database import Database
 from .ingestion import RepositoryIngestion
+from .operations_ws import OperationEventTailer
 from .map_deployment import (
     MapDeploymentCoordinator,
     MapSourceStaging,
@@ -99,6 +112,9 @@ from .tcp_protocol import TcpIngestionServer
 
 
 logger = logging.getLogger(__name__)
+
+# 운영 WebSocket 폴링 간격. 새 이벤트가 없으면 이 간격으로 다시 확인한다.
+OPERATIONS_WS_POLL_SECONDS = 0.5
 
 
 MapNamePath = Annotated[
@@ -665,6 +681,28 @@ def create_app(
         return repo.list_operation_events(
             from_at, to_at, limit, before_at, before_event_id
         )
+
+    @app.websocket("/api/v1/operations/ws")
+    async def operations_ws(websocket: WebSocket) -> None:
+        """운영 화면에 새 operation event만 순서대로 밀어 준다.
+
+        구독 시점 이전의 과거 이벤트는 다시 보내지 않는다. UI는 필요한 과거
+        구간을 `GET /api/v1/operation-events`로 따로 가져간다.
+        """
+        await websocket.accept()
+        tailer = OperationEventTailer(repo)
+        try:
+            await asyncio.to_thread(tailer.start_from_latest)
+            while True:
+                events = await asyncio.to_thread(tailer.poll)
+                for event in events:
+                    await websocket.send_json(event)
+                await asyncio.sleep(OPERATIONS_WS_POLL_SECONDS)
+        except WebSocketDisconnect:
+            return
+        except Exception:
+            logger.exception("operations WebSocket closed on an unexpected error")
+            await websocket.close(code=1011)
 
     @app.post("/internal/v1/jobs", response_model=JobCreated, status_code=201)
     def create_job(job: JobCreate):

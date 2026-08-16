@@ -37,8 +37,8 @@ export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 
 | 명령 | 결과 |
 |---|---|
-| `pytest -q db/tests control_tower/tests trihouse_rmf_bridge/test trihouse_omx_adapter/tests trihouse_pinky/test vision_edge/tests media tools tests --ignore=trihouse_rmf_bridge/test/test_office_service.py` | **572 passed**, 8 subtests passed |
-| `cd fms_gateway && pytest -q tests` (실제 MySQL) | **265 passed**, 1 skipped |
+| `pytest -q db/tests control_tower/tests trihouse_rmf_bridge/test trihouse_omx_adapter/tests trihouse_pinky/test vision_edge/tests media tests --ignore=trihouse_rmf_bridge/test/test_office_service.py` | **576 passed**, 8 subtests passed |
+| `cd fms_gateway && pytest -q tests` (실제 MySQL) | **271 passed**, 1 skipped |
 | `cd control_ui/rmf_control_ui && flutter test` | **211 passed** |
 | `cd control_ui/rmf_control_ui && flutter analyze` | **No issues found** |
 | `./scripts/control_stack doctor --mode simulation` | 실행됨, 종료 코드 1 (아래 3절 참고) |
@@ -147,6 +147,12 @@ P0 이전부터 있던 조건이며 본 계획으로 바뀌지 않았다.
 아래는 **통과하지 않았다**. 조건이 갖춰지면 그때 실행하고 이 문서를 갱신해야
 한다.
 
+0. **스택이 두 층으로 나뉜다.** `up` 은 Docker 층(MySQL, Gateway, MediaMTX,
+   RMF API/Dashboard, control_ui)만 올린다. RMF core, Gazebo, Nav2, fleet
+   adapter, OMX 시뮬레이터, RMF dispatch worker 는 rclpy 와 DDS 가 필요해
+   호스트에서 돈다. `control_stack ros` 또는
+   `control_tower/bringup/p0_simulation_bringup.sh` 가 그 층을 한 번에 띄운다.
+   수동 절차는 `docs/runbooks/2026-08-16-p0-manual-test.md` 에 있다.
 1. **`./scripts/control_stack up --mode simulation --project trihouse_test_01`
    전체 기동과 `doctor` 실측.** 이 호스트에 Docker 데몬 접근 권한이 없다.
    `doctor`를 실행한 실제 출력은 다음과 같다. 열한 개 필수 항목을 모두

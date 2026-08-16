@@ -69,7 +69,7 @@ services:
       - control_edge
 
 networks:
-  # compose.control.yaml creates this network on the same RTX 4060 host.
+  # compose.control.yaml 과 같은 이름으로 선언한다. 한 Compose project 안에서
+  # 두 파일이 같은 네트워크를 가리키므로 external 로 두지 않는다.
   control_edge:
-    external: true
     name: trihouse_control_edge

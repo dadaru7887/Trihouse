@@ -1,4 +1,14 @@
-# Compose project for the database-writing FMS Gateway API.
+# Compose project for the database-writing FMS Gateway API and the browser UI.
+#
+# `scripts/control_stack up` merges this file with compose.yaml (MySQL),
+# compose.edge_4060.yaml (MediaMTX) and compose.simulation.yaml (RMF web) into
+# **one** Compose project, so the networks below are created by that project
+# rather than imported from another one.
+#
+# ROS 2 는 이 파일에 없다. RMF core, Gazebo, Nav2, fleet adapter, OMX 시뮬레이터,
+# 그리고 `control_tower.rmf_adapter.rmf_gateway_worker_node` 는 모두 rclpy 와
+# DDS 가 필요해 호스트에서 돈다. `control_tower/bringup/p0_simulation_bringup.sh`
+# 가 그쪽을 한 번에 띄운다.
 name: trihouse_control
 
 services:
@@ -14,7 +24,7 @@ services:
     environment:
       TZ: Asia/Seoul
 
-      # Use the MySQL service name on the external database network.
+      # Use the MySQL service name on the shared database network.
       FMS_DB_HOST: mysql
       FMS_DB_PORT: 3306
       FMS_DB_DATABASE: ${FMS_DB_DATABASE:-trihouse_fms}
@@ -29,11 +39,12 @@ services:
       FMS_TCP_PORT: 8788
 
     # Bind the API to the current host by default during local development.
+    # 호스트에서 도는 ROS 노드가 이 포트로 Gateway에 접속한다.
     ports:
       - "${FMS_API_HOST:-127.0.0.1}:${FMS_API_PORT:-8080}:8080"
-      - "${FMS_TCP_HOST:-127.0.0.1}:${FMS_TCP_PORT:-8788}:8788"
+      - "${FMS_TCP_BIND:-127.0.0.1}:${FMS_TCP_PORT:-8788}:8788"
 
-    # The Gateway is the only application attached to both DB and API networks.
+    # The Gateway is the only application attached to both DB and edge networks.
     networks:
       - db_internal
       - control_edge
@@ -41,6 +52,10 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+
+    depends_on:
+      mysql:
+        condition: service_healthy
 
     healthcheck:
       test:
@@ -55,36 +70,36 @@ services:
       retries: 20
       start_period: 10s
 
-  control_tower_worker:
-    # The RMF dispatch worker that claims FMS messages and submits them to RMF.
-    image: trihouse_fms_gateway:local
+  control_ui:
+    # Flutter 웹 번들을 빌드해 nginx로 서빙한다. nginx가 같은 origin에서
+    # `/api/` 와 운영 WebSocket을 Gateway로 reverse proxy 하므로 브라우저는
+    # 주소 하나만 보면 된다. UI가 Gateway origin을 페이지 origin으로 정하기
+    # 때문에 이 구조가 필요하다.
+    build:
+      context: .
+      dockerfile: control_ui/rmf_control_ui/Dockerfile
+    image: trihouse_control_ui:local
     restart: unless-stopped
-    init: true
     environment:
       TZ: Asia/Seoul
-      FMS_BASE_URL: http://fms_gateway:8080
-      PYTHONPATH: /app
-    command:
-      - python
-      - -m
-      - control_tower.rmf_adapter.rmf_gateway_worker_node
-      - --fms-base-url
-      - http://fms_gateway:8080
-      - --fleet-name
-      - ${TRIHOUSE_FLEET_NAME:-trihouse_pinky}
-      - --worker-id
-      - trihouse-rmf-worker
+    ports:
+      - "${CONTROL_UI_HOST:-127.0.0.1}:${CONTROL_UI_PORT:-3100}:80"
     depends_on:
       fms_gateway:
         condition: service_healthy
     networks:
       - control_edge
+    healthcheck:
+      test: [CMD-SHELL, "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
 
 networks:
-  # compose.db.yaml creates this network before the control stack starts.
+  # Only MySQL and the Gateway sit here, so nothing else can reach the database.
   db_internal:
-    external: true
-    name: trihouse_db_default
+    name: trihouse_db_internal
 
   # Edge services on the same 4060 host can call the Gateway on this network.
   control_edge:

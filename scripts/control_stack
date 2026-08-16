@@ -7,11 +7,19 @@
     ./scripts/control_stack doctor --mode simulation
     ./scripts/control_stack down
 
-하나의 Compose project를 쓰고, MySQL → Gateway → Control Tower worker →
-MediaMTX → RMF core → Fleet Adapter → Gazebo → Nav2/Pinky 두 스택 + OMX
-프로토콜 시뮬레이터 두 개 → control_ui 순서로 올린다. Gazebo는 기본
-headless이며 GUI/RViz는 플래그로만 켠다. `compose.ai_5080.yaml`은 시작하지
-않는다. 시뮬레이션은 fake 모델 계약만 확인한다.
+    ./scripts/control_stack ros --mode simulation
+
+스택은 두 층으로 나뉜다.
+
+- **Docker (`up`)**: 하나의 Compose project로 MySQL → FMS Gateway → MediaMTX
+  → RMF API → RMF Dashboard → control_ui 순서로 올린다.
+- **호스트 ROS 2 (`ros`)**: RMF core, Gazebo, Pinky 두 대의 Nav2와 fleet
+  adapter, OMX 시뮬레이터 두 개, RMF dispatch worker.
+  rclpy/DDS/GPU 가 필요해 컨테이너에 넣지 않았다.
+
+`doctor`는 두 층을 함께 점검한다. Gazebo는 기본 headless이며 GUI/RViz는
+플래그로만 켠다. `compose.ai_5080.yaml`은 시작하지 않는다. 시뮬레이션은 fake
+모델 계약만 확인한다.
 """
 
 from __future__ import annotations
@@ -28,20 +36,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_PROJECT = "trihouse_p0"
 
-# 기동 순서. 앞의 서비스가 healthy가 된 뒤에 다음이 올라간다.
+# Docker 기동 순서. 앞의 서비스가 healthy가 된 뒤에 다음이 올라간다.
 STARTUP_ORDER = (
     "mysql",
     "fms_gateway",
-    "control_tower_worker",
     "mediamtx",
-    "rmf_core",
-    "fleet_adapter",
-    "gazebo",
-    "nav2_pk01",
-    "nav2_pk02",
-    "omx_01",
-    "omx_02",
+    "rmf_api",
+    "rmf_dashboard",
     "control_ui",
+)
+
+# 호스트 ROS 2 에서 도는 구성요소. rclpy/DDS/GPU 가 필요해 컨테이너로 옮기지
+# 않았다. `control_stack ros` 가 아래 스크립트로 한 번에 띄운다.
+ROS_BRINGUP = ROOT / "control_tower" / "bringup" / "p0_simulation_bringup.sh"
+ROS_NODES = (
+    "rmf_traffic_schedule",
+    "gazebo",
+    "nav2:PK_01",
+    "nav2:PK_02",
+    "omx:OMX_01",
+    "omx:OMX_02",
+    "control_tower_worker",
 )
 
 COMPOSE_FILES = (
@@ -51,7 +66,7 @@ COMPOSE_FILES = (
     "compose.simulation.yaml",
 )
 
-# doctor가 반드시 보고해야 하는 점검 항목.
+# doctor가 반드시 보고해야 하는 점검 항목. Docker와 호스트 ROS 를 모두 덮는다.
 REQUIRED_CHECKS = (
     "mysql",
     "fms_gateway",
@@ -65,6 +80,25 @@ REQUIRED_CHECKS = (
     "omx:OMX_02",
     "control_ui",
 )
+
+# Docker compose 가 책임지는 점검 항목.
+DOCKER_CHECKS = {
+    "mysql": "mysql",
+    "fms_gateway": "fms_gateway",
+    "mediamtx": "mediamtx",
+    "control_ui": "control_ui",
+}
+
+# 호스트 ROS 2 가 책임지는 점검 항목 -> 확인할 ROS 노드 이름 조각.
+ROS_CHECKS = {
+    "control_tower": "rmf_gateway_worker",
+    "rmf_schedule": "rmf_traffic_schedule",
+    "gazebo": "ros_gz",
+    "nav2:PK_01": "pinky_01",
+    "nav2:PK_02": "pinky_02",
+    "omx:OMX_01": "omx_01",
+    "omx:OMX_02": "omx_02",
+}
 
 # 시뮬레이션에서는 절대 켜지 않는다. 5080 AI 스택은 P1 대상이다.
 FORBIDDEN_IN_SIMULATION = ("compose.ai_5080.yaml",)
@@ -126,14 +160,43 @@ def cmd_down(args: argparse.Namespace) -> int:
     return _run(compose_command("down", "--remove-orphans", mode=args.mode)).returncode
 
 
+def cmd_ros(args: argparse.Namespace) -> int:
+    """호스트 ROS 2 층을 한 번에 띄운다.
+
+    Gazebo, Pinky 두 대의 Nav2/fleet adapter, OMX 시뮬레이터 두 개, RMF
+    dispatch worker가 함께 올라간다. 이 명령은 포그라운드로 돌며 Ctrl+C 로
+    전체를 내린다.
+    """
+    if not ROS_BRINGUP.is_file():
+        print(f"ROS bringup script is missing: {ROS_BRINGUP}", file=sys.stderr)
+        return 2
+    command = [str(ROS_BRINGUP)]
+    if args.gui:
+        command.append("--gui")
+    if args.rviz:
+        command.append("--rviz")
+    environment = dict(os.environ)
+    environment["TRIHOUSE_PROJECT"] = args.project
+    environment["FMS_BASE_URL"] = args.fms_base_url
+    return subprocess.run(command, env=environment, check=False).returncode
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """모든 필수 구성요소의 상태를 기계가 읽을 수 있는 JSON으로 낸다."""
     running = _running_services(args.mode)
-    checks = {name: _check_state(name, running) for name in REQUIRED_CHECKS}
+    nodes = _ros_nodes()
+    checks = {
+        name: _check_state(name, running, nodes) for name in REQUIRED_CHECKS
+    }
     report = {
         "mode": args.mode,
         "project": COMPOSE_PROJECT,
         "checks": checks,
+        # 어느 층이 책임지는 점검인지 함께 알려 준다.
+        "layers": {
+            "docker": sorted(DOCKER_CHECKS),
+            "host_ros": sorted(ROS_CHECKS),
+        },
         # 시뮬레이션은 fake 모델 계약만 확인한다. 실제 checkpoint는 P1이다.
         "act_contract": "deterministic_fake",
         "ai_5080_started": False,
@@ -163,22 +226,26 @@ def _running_services(mode: str) -> dict[str, str]:
     return states
 
 
-_CHECK_SERVICE = {
-    "control_tower": "control_tower_worker",
-    "rmf_schedule": "rmf_core",
-    "nav2:PK_01": "nav2_pk01",
-    "nav2:PK_02": "nav2_pk02",
-    "omx:OMX_01": "omx_01",
-    "omx:OMX_02": "omx_02",
-}
+def _ros_nodes() -> list[str]:
+    """호스트에서 보이는 ROS 2 노드 목록. ROS 환경이 없으면 빈 목록이다."""
+    if shutil.which("ros2") is None:
+        return []
+    completed = _run(["ros2", "node", "list"], capture=True)
+    if completed.returncode != 0:
+        return []
+    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
 
 
-def _check_state(check: str, running: dict[str, str]) -> str:
-    service = _CHECK_SERVICE.get(check, check)
-    state = running.get(service)
-    if state is None:
-        return "absent"
-    return "healthy" if state in ("healthy", "running") else state
+def _check_state(check: str, running: dict[str, str], nodes: list[str]) -> str:
+    if check in DOCKER_CHECKS:
+        state = running.get(DOCKER_CHECKS[check])
+        if state is None:
+            return "absent"
+        return "healthy" if state in ("healthy", "running") else state
+    marker = ROS_CHECKS.get(check)
+    if marker is None:
+        return "unknown"
+    return "healthy" if any(marker in node for node in nodes) else "absent"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -209,9 +276,17 @@ def build_parser() -> argparse.ArgumentParser:
     add_mode(doctor)
     doctor.set_defaults(handler=cmd_doctor)
 
-    down = subparsers.add_parser("down", help="stop the whole stack")
+    down = subparsers.add_parser("down", help="stop the docker layer")
     add_mode(down)
     down.set_defaults(handler=cmd_down)
+
+    ros = subparsers.add_parser("ros", help="start the host ROS 2 layer")
+    add_mode(ros)
+    ros.add_argument("--project", default="trihouse_test_01")
+    ros.add_argument("--gui", action="store_true", help="show the Gazebo GUI")
+    ros.add_argument("--rviz", action="store_true", help="also start RViz")
+    ros.add_argument("--fms-base-url", default="http://127.0.0.1:8080")
+    ros.set_defaults(handler=cmd_ros)
     return parser
 
 

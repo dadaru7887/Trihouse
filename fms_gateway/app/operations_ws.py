@@ -1,157 +1,135 @@
 """운영 화면이 구독하는 공개 WebSocket 투영.
 
-UI는 DB·RMF·ROS를 직접 보지 않는다. 이 모듈이 한 개의 불변 스냅숏과 그
-뒤의 증분 이벤트만 직렬화한다. 지도 화면의 1차 정보는 Nav2가 실제로 계산한
-전역/지역 경로와 로봇이 지나온 궤적이며, 내부 bootstrap graph는 절대
-내보내지 않는다. RMF timed trajectory는 진단 토글용 선택 필드다.
+UI는 DB·RMF·ROS를 직접 보지 않는다. 이 모듈은 `operation_events` 행을
+`OperationEventView`와 **같은 모양**으로 직렬화해 새 이벤트만 순서대로
+내보낸다. UI의 `OperationsEventDto.fromJson`이 그대로 읽는 계약이다.
+
+`list_operation_events`는 최신순으로 페이지를 돌려주므로, tailer가 마지막으로
+보낸 `event_id` 이후 것만 골라 오름차순으로 다시 정렬해 보낸다. 같은 이벤트를
+두 번 보내지 않는다.
+
+내부 bootstrap graph, nav graph, lane 같은 저작 레이어는 어떤 메시지에도
+싣지 않는다. 지도 화면의 1차 정보는 Nav2가 실제로 계산한 경로와 로봇이 지나온
+궤적이며, 그 값들은 이벤트 `payload`로 전달된다.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-from dataclasses import dataclass, field
-from typing import Any, Protocol
+from datetime import datetime
+from typing import Any, Iterable, Protocol
 
 
-# UI가 구독할 수 있는 이벤트 종류. 목록 밖의 이름은 내보내지 않는다.
-OPERATIONS_EVENT_KINDS = (
-    "SNAPSHOT",
-    "ROBOT_UPDATED",
-    "PATH_UPDATED",
-    "PATH_SCHEDULE_MISMATCH",
-    "COSTMAP_UPDATED",
-    "BOTTLENECK_LEASE",
-    "RMF_CONFLICT",
-    "RMF_DELAY",
-    "CAMERA_STATUS",
-    "JOB_UPDATED",
-    "INCIDENT_OPEN",
-    "INCIDENT_DECIDED",
+# UI가 해석하는 이벤트 필드. `OperationEventView`와 1:1로 맞춘다.
+EVENT_FIELDS = (
+    "event_id",
+    "event_uuid",
+    "occurred_at",
+    "actor_worker_id",
+    "device_id",
+    "job_id",
+    "job_step_id",
+    "incident_id",
+    "severity",
+    "category",
+    "event_type",
+    "message",
+    "payload",
 )
 
 # 운영자 레이어가 아니므로 어떤 메시지에도 실리지 않는다.
 FORBIDDEN_PROJECTION_KEYS = ("bootstrap_graph", "nav_graph", "lanes")
 
-
-class OperationsSource(Protocol):
-    def snapshot(self) -> Any: ...
-
-    def drain_events(self) -> tuple[Any, ...]: ...
+# 한 번에 훑는 최신 이벤트 수. 폴링 간격 안에 이보다 많이 쌓이면 다음 폴링이
+# 이어서 가져간다.
+DEFAULT_PAGE_SIZE = 200
 
 
-@dataclass
-class OperationsBroadcaster:
-    """구독자에게 스냅숏 한 번과 이후 증분 이벤트를 보낸다."""
+class OperationEventSource(Protocol):
+    def list_operation_events(
+        self,
+        from_at: datetime | None,
+        to_at: datetime | None,
+        limit: int,
+        before_at: datetime | None = None,
+        before_event_id: int | None = None,
+    ) -> list[dict[str, Any]]: ...
 
-    source: OperationsSource
-    _subscribers: list[asyncio.Queue] = field(default_factory=list)
 
-    def subscribe(self) -> asyncio.Queue:
-        queue: asyncio.Queue = asyncio.Queue()
-        queue.put_nowait(self.snapshot_message())
-        self._subscribers.append(queue)
-        return queue
+def serialize_event(event: dict[str, Any]) -> dict[str, Any]:
+    """한 행을 UI가 읽는 JSON 안전 형태로 바꾼다."""
+    payload = {field: event.get(field) for field in EVENT_FIELDS}
+    occurred_at = payload.get("occurred_at")
+    if isinstance(occurred_at, datetime):
+        payload["occurred_at"] = occurred_at.isoformat()
+    raw = payload.get("payload")
+    if isinstance(raw, (str, bytes, bytearray)):
+        try:
+            payload["payload"] = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            payload["payload"] = None
+    return _guard(payload)
 
-    def unsubscribe(self, queue: asyncio.Queue) -> None:
-        if queue in self._subscribers:
-            self._subscribers.remove(queue)
 
-    def snapshot_message(self) -> dict[str, Any]:
-        return _guard({"kind": "SNAPSHOT", "payload": _project(self.source.snapshot())})
+class OperationEventTailer:
+    """마지막으로 보낸 event_id 이후의 이벤트만 오름차순으로 돌려준다."""
 
-    def publish_pending(self) -> list[dict[str, Any]]:
-        """모아 둔 이벤트를 구독자 전원에게 같은 순서로 보낸다."""
-        messages = [
-            _guard({"kind": event.kind, "entity_id": event.entity_id})
-            for event in self.source.drain_events()
-            if event.kind in OPERATIONS_EVENT_KINDS
+    def __init__(
+        self,
+        source: OperationEventSource,
+        *,
+        page_size: int = DEFAULT_PAGE_SIZE,
+        last_event_id: int = 0,
+    ) -> None:
+        if page_size <= 0:
+            raise ValueError("page_size must be positive")
+        self._source = source
+        self._page_size = page_size
+        self._last_event_id = last_event_id
+
+    @property
+    def last_event_id(self) -> int:
+        return self._last_event_id
+
+    def start_from_latest(self) -> None:
+        """구독 시점 이전의 과거 이벤트를 다시 흘려보내지 않는다."""
+        newest = self._source.list_operation_events(None, None, 1)
+        if newest:
+            self._last_event_id = int(newest[0]["event_id"])
+
+    def poll(self) -> list[dict[str, Any]]:
+        events = self._source.list_operation_events(None, None, self._page_size)
+        fresh = [
+            event
+            for event in events
+            if int(event["event_id"]) > self._last_event_id
         ]
-        for queue in self._subscribers:
-            for message in messages:
-                queue.put_nowait(message)
-        return messages
-
-
-def _project(snapshot: Any) -> dict[str, Any]:
-    return {
-        "robots": [
-            {
-                "robot_id": robot.robot_id,
-                "x": robot.x,
-                "y": robot.y,
-                "yaw": robot.yaw,
-                "battery_percent": robot.battery_percent,
-                "safety_state": robot.safety_state,
-                "job_id": robot.job_id,
-                "stage": robot.stage,
-                "error": robot.error,
-            }
-            for robot in snapshot.robots
-        ],
-        "paths": [
-            {
-                "robot_id": path.robot_id,
-                "map_revision": path.map_revision,
-                "nav2_global_path": [list(point) for point in path.nav2_global_path],
-                "nav2_local_path": [list(point) for point in path.nav2_local_path],
-                "actual_trail": [list(point) for point in path.actual_trail],
-                # 진단 토글이 켜졌을 때만 UI가 그린다.
-                "rmf_timed_trajectory": [
-                    list(point) for point in path.rmf_timed_trajectory
-                ],
-                "goal_pose": list(path.goal_pose),
-            }
-            for path in getattr(snapshot, "paths", ())
-        ],
-        "cameras": [
-            {
-                "camera_id": camera.camera_id,
-                "role": camera.role,
-                "attached_to": camera.attached_to,
-                "mediamtx_path": camera.mediamtx_path,
-                # P1 캘리브레이션 전까지 좌표는 없다.
-                "map_pose": camera.map_pose,
-            }
-            for camera in getattr(snapshot, "cameras", ())
-        ],
-        "jobs": [
-            {
-                "job_id": job.job_id,
-                "order_id": job.order_id,
-                "item_ids": list(job.item_ids),
-                "robot_id": job.robot_id,
-                "stage": job.stage,
-                "state": job.state,
-            }
-            for job in snapshot.jobs
-        ],
-        "incidents": [
-            {
-                "incident_id": incident.incident_id,
-                "camera_id": incident.camera_id,
-                "location_id": incident.location_id,
-                "occurred_at_s": incident.occurred_at_s,
-                "acknowledged": incident.acknowledged,
-            }
-            for incident in snapshot.incidents
-        ],
-        "bootstrap_graph_visible": False,
-    }
+        if not fresh:
+            return []
+        fresh.sort(key=lambda event: int(event["event_id"]))
+        self._last_event_id = int(fresh[-1]["event_id"])
+        return [serialize_event(event) for event in fresh]
 
 
 def _guard(message: dict[str, Any]) -> dict[str, Any]:
     """운영자에게 내보내면 안 되는 키가 실렸는지 확인한다."""
-    encoded = json.dumps(message, ensure_ascii=False)
+    encoded = json.dumps(message, ensure_ascii=False, default=str)
     for key in FORBIDDEN_PROJECTION_KEYS:
         if f'"{key}"' in encoded:
             raise ValueError(f"{key} must never be projected to the operations UI")
     return message
 
 
+def guard_all(messages: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [_guard(message) for message in messages]
+
+
 __all__ = [
+    "DEFAULT_PAGE_SIZE",
+    "EVENT_FIELDS",
     "FORBIDDEN_PROJECTION_KEYS",
-    "OPERATIONS_EVENT_KINDS",
-    "OperationsBroadcaster",
-    "OperationsSource",
+    "OperationEventSource",
+    "OperationEventTailer",
+    "guard_all",
+    "serialize_event",
 ]

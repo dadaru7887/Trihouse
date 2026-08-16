@@ -50,7 +50,7 @@ def test_every_documented_subcommand_exists(run_control_stack) -> None:
     completed = run_control_stack("--help")
 
     assert completed.returncode == 0
-    for command in ("up", "status", "logs", "doctor", "down"):
+    for command in ("up", "status", "logs", "doctor", "down", "ros"):
         assert command in completed.stdout
 
 
@@ -74,6 +74,17 @@ def test_doctor_reports_the_fake_model_contract_and_no_ai_stack(
     assert report["act_contract"] == "deterministic_fake"
     # compose.ai_5080.yaml은 시뮬레이션에서 시작하지 않는다.
     assert report["ai_5080_started"] is False
+
+
+def test_doctor_says_which_layer_owns_each_check(run_control_stack) -> None:
+    report = json.loads(run_control_stack("doctor", "--mode", "simulation").stdout)
+
+    assert set(report["layers"]) == {"docker", "host_ros"}
+    assert "control_ui" in report["layers"]["docker"]
+    assert "gazebo" in report["layers"]["host_ros"]
+    assert set(report["layers"]["docker"]) | set(report["layers"]["host_ros"]) == set(
+        report["checks"]
+    )
 
 
 def test_doctor_fails_while_a_required_service_is_absent(run_control_stack) -> None:
@@ -110,32 +121,58 @@ def test_the_ai_5080_stack_is_never_composed_in_simulation() -> None:
     )
 
 
-def test_services_start_in_the_designed_dependency_order() -> None:
+def test_docker_services_start_in_the_designed_dependency_order() -> None:
     order = _module().STARTUP_ORDER
 
     assert order == (
-        "mysql", "fms_gateway", "control_tower_worker", "mediamtx", "rmf_core",
-        "fleet_adapter", "gazebo", "nav2_pk01", "nav2_pk02", "omx_01", "omx_02",
+        "mysql", "fms_gateway", "mediamtx", "rmf_api", "rmf_dashboard",
         "control_ui",
     )
+    # UI 는 Gateway 를 reverse proxy 하므로 Gateway 뒤에 와야 한다.
     assert order.index("mysql") < order.index("fms_gateway")
-    assert order.index("fms_gateway") < order.index("control_tower_worker")
-    assert order.index("rmf_core") < order.index("fleet_adapter")
-    assert order.index("gazebo") < order.index("nav2_pk01")
-    assert order.index("omx_02") < order.index("control_ui")
+    assert order.index("fms_gateway") < order.index("control_ui")
+
+
+def test_the_ros_layer_is_started_by_the_control_tower_bringup() -> None:
+    """rclpy 가 필요한 구성요소는 Docker 가 아니라 호스트에서 돈다."""
+    module = _module()
+
+    assert module.ROS_BRINGUP.is_file()
+    assert module.ROS_BRINGUP.stat().st_mode & 0o111
+    assert module.ROS_BRINGUP.parts[-3:] == (
+        "control_tower", "bringup", "p0_simulation_bringup.sh",
+    )
+    # 두 층이 겹치지 않아야 한다.
+    assert set(module.DOCKER_CHECKS) & set(module.ROS_CHECKS) == set()
+    assert set(module.DOCKER_CHECKS) | set(module.ROS_CHECKS) == set(
+        module.REQUIRED_CHECKS
+    )
+
+
+def test_the_bringup_starts_every_ros_component_together() -> None:
+    source = _module().ROS_BRINGUP.read_text(encoding="utf-8")
+
+    assert "rmf_traffic_ros2 common.launch.xml" in source
+    assert "two_pinky_order_demo.launch.py" in source
+    assert "trihouse_omx_adapter.simulator_node" in source
+    assert "control_tower.rmf_adapter.rmf_gateway_worker_node" in source
+    for omx in ("OMX_01", "OMX_02"):
+        assert omx in source
 
 
 def test_gazebo_is_headless_unless_a_flag_asks_for_the_gui() -> None:
-    module = _module()
-    parser = module.build_parser()
+    parser = _module().build_parser()
 
-    default = parser.parse_args(["up", "--mode", "simulation"])
-    assert default.gui is False
-    assert default.rviz is False
+    for command in ("up", "ros"):
+        default = parser.parse_args([command, "--mode", "simulation"])
+        assert default.gui is False
+        assert default.rviz is False
 
-    explicit = parser.parse_args(["up", "--mode", "simulation", "--gui", "--rviz"])
-    assert explicit.gui is True
-    assert explicit.rviz is True
+        explicit = parser.parse_args(
+            [command, "--mode", "simulation", "--gui", "--rviz"]
+        )
+        assert explicit.gui is True
+        assert explicit.rviz is True
 
 
 def test_up_defaults_to_the_canonical_p0_project() -> None:

@@ -1,134 +1,179 @@
-"""운영 WebSocket 투영이 실제 경로를 1차 정보로 내보내는지 검증한다."""
+"""운영 WebSocket이 UI가 읽는 이벤트 계약 그대로 흘려보내는지 검증한다."""
 
-import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi.testclient import TestClient
 
-from control_tower.gateway.operations_feed import (
-    IncidentView,
-    JobView,
-    OperationsFeed,
-    PathProjection,
-    RobotView,
-)
+from fms_gateway.app.main import create_app
+from fms_gateway.app.models import OperationEventView
 from fms_gateway.app.operations_ws import (
+    EVENT_FIELDS,
     FORBIDDEN_PROJECTION_KEYS,
-    OPERATIONS_EVENT_KINDS,
-    OperationsBroadcaster,
+    OperationEventTailer,
+    serialize_event,
 )
+from fms_gateway.app.repositories import InMemoryFmsRepository
 
 
-@pytest.fixture
-def feed() -> OperationsFeed:
-    feed = OperationsFeed(path_tolerance_m=0.25)
-    feed.upsert_robot(
-        RobotView(
-            robot_id="PK_01", x=1.0, y=2.0, yaw=0.5, battery_percent=91.0,
-            safety_state="normal", job_id="J-1", stage="navigate", error="",
+SEOUL = timezone(timedelta(hours=9))
+
+
+def _event(event_id: int, **overrides) -> dict:
+    event = {
+        "event_id": event_id,
+        "event_uuid": f"00000000-0000-0000-0000-{event_id:012d}",
+        "occurred_at": datetime(2026, 8, 16, 12, 0, event_id, tzinfo=SEOUL),
+        "actor_worker_id": None,
+        "device_id": "PK_01",
+        "job_id": 7,
+        "job_step_id": 11,
+        "incident_id": None,
+        "severity": "info",
+        "category": "operations",
+        "event_type": "PATH_UPDATED",
+        "message": None,
+        "payload": {"robot_id": "PK_01"},
+    }
+    event.update(overrides)
+    return event
+
+
+class FakeSource:
+    """`list_operation_events`처럼 최신순으로 돌려준다."""
+
+    def __init__(self, events: list[dict] | None = None) -> None:
+        self.events = list(events or [])
+        self.calls: list[int] = []
+
+    def list_operation_events(
+        self, from_at, to_at, limit, before_at=None, before_event_id=None
+    ) -> list[dict]:
+        self.calls.append(limit)
+        newest_first = sorted(
+            self.events, key=lambda event: event["event_id"], reverse=True
         )
-    )
-    feed.upsert_job(
-        JobView(
-            job_id="J-1", order_id="O-1", item_ids=("I-1",),
-            robot_id="PK_01", stage="navigate", state="running",
-        )
-    )
-    feed.upsert_path(
-        PathProjection(
-            robot_id="PK_01",
-            map_revision="trihouse_test_01:7",
-            nav2_global_path=((0.0, 0.0), (4.0, 0.0)),
-            nav2_local_path=((1.0, 0.0),),
-            actual_trail=((0.0, 0.0), (1.0, 0.0)),
-            rmf_timed_trajectory=((0.0, 0.0, 0.0), (3.0, 4.0, 0.0)),
-            goal_pose=(4.0, 0.0, 0.0),
-        )
-    )
-    feed.open_incident(
-        IncidentView(
-            incident_id="INC-1", camera_id="CAM-PK-01", location_id="WH-AMB-01",
-            occurred_at_s=10.0, acknowledged=False,
-        )
-    )
-    return feed
+        return newest_first[:limit]
 
 
-def test_snapshot_carries_actual_paths_cameras_and_no_bootstrap_graph(
-    feed: OperationsFeed,
-) -> None:
-    message = OperationsBroadcaster(feed).snapshot_message()
-    payload = message["payload"]
-
-    assert message["kind"] == "SNAPSHOT"
-    assert payload["paths"][0]["nav2_global_path"] == [[0.0, 0.0], [4.0, 0.0]]
-    assert payload["paths"][0]["actual_trail"] == [[0.0, 0.0], [1.0, 0.0]]
-    assert payload["paths"][0]["rmf_timed_trajectory"]
-    assert payload["bootstrap_graph_visible"] is False
-    assert len(payload["cameras"]) == 6
-    assert all(camera["map_pose"] is None for camera in payload["cameras"])
-    assert payload["robots"][0]["battery_percent"] == 91.0
-    assert payload["incidents"][0]["incident_id"] == "INC-1"
+# --- 직렬화 계약 ---------------------------------------------------------------
 
 
-def test_projection_never_leaks_an_operator_bootstrap_layer(
-    feed: OperationsFeed,
-) -> None:
-    encoded = str(OperationsBroadcaster(feed).snapshot_message())
+def test_serialized_event_matches_the_public_view_model() -> None:
+    serialized = serialize_event(_event(1))
 
+    assert set(serialized) == set(EVENT_FIELDS)
+    # UI의 OperationsEventDto가 읽는 필드와 정확히 같아야 한다.
+    assert set(serialized) == set(OperationEventView.model_fields)
+
+
+def test_timestamps_are_serialized_as_iso_strings() -> None:
+    serialized = serialize_event(_event(1))
+
+    assert isinstance(serialized["occurred_at"], str)
+    assert datetime.fromisoformat(serialized["occurred_at"]).tzinfo is not None
+
+
+def test_a_json_string_payload_is_decoded_for_the_ui() -> None:
+    serialized = serialize_event(_event(1, payload='{"robot_id": "PK_02"}'))
+
+    assert serialized["payload"] == {"robot_id": "PK_02"}
+
+
+def test_an_undecodable_payload_becomes_null_instead_of_raw_text() -> None:
+    serialized = serialize_event(_event(1, payload="{not json"))
+
+    assert serialized["payload"] is None
+
+
+def test_an_operator_authoring_layer_is_never_projected() -> None:
     for key in FORBIDDEN_PROJECTION_KEYS:
-        assert f"'{key}'" not in encoded
+        with pytest.raises(ValueError, match=key):
+            serialize_event(_event(1, payload={key: ["do-not-ship"]}))
 
 
-def test_subscriber_receives_the_snapshot_then_incremental_events(
-    feed: OperationsFeed,
-) -> None:
-    broadcaster = OperationsBroadcaster(feed)
-    queue = broadcaster.subscribe()
-    feed.drain_events()  # 구독 전 이벤트는 스냅숏에 이미 반영되어 있다.
+# --- tailer ------------------------------------------------------------------
 
-    feed.upsert_path(
-        PathProjection(
-            robot_id="PK_01",
-            map_revision="trihouse_test_01:7",
-            nav2_global_path=((0.0, 0.0), (4.0, 0.0)),
-            nav2_local_path=(),
-            actual_trail=(),
-            # RMF 일정이 Nav2 목표와 3 m 어긋난다.
-            rmf_timed_trajectory=((0.0, 0.0, 0.0), (3.0, 4.0, 3.0)),
-            goal_pose=(4.0, 0.0, 0.0),
+
+def test_only_events_newer_than_the_last_sent_one_are_returned() -> None:
+    source = FakeSource([_event(1), _event(2)])
+    tailer = OperationEventTailer(source)
+
+    first = tailer.poll()
+    assert [event["event_id"] for event in first] == [1, 2]
+    assert tailer.last_event_id == 2
+
+    source.events.append(_event(3))
+    assert [event["event_id"] for event in tailer.poll()] == [3]
+    # 새 이벤트가 없으면 아무것도 보내지 않는다.
+    assert tailer.poll() == []
+
+
+def test_events_are_sent_in_ascending_order_despite_newest_first_paging() -> None:
+    source = FakeSource([_event(3), _event(1), _event(2)])
+
+    sent = OperationEventTailer(source).poll()
+
+    assert [event["event_id"] for event in sent] == [1, 2, 3]
+
+
+def test_a_new_subscriber_does_not_replay_history() -> None:
+    source = FakeSource([_event(1), _event(2), _event(3)])
+    tailer = OperationEventTailer(source)
+
+    tailer.start_from_latest()
+    assert tailer.last_event_id == 3
+    assert tailer.poll() == []
+
+    source.events.append(_event(4))
+    assert [event["event_id"] for event in tailer.poll()] == [4]
+
+
+def test_starting_from_latest_on_an_empty_log_sends_everything_after_it() -> None:
+    source = FakeSource([])
+    tailer = OperationEventTailer(source)
+
+    tailer.start_from_latest()
+    assert tailer.last_event_id == 0
+
+    source.events.append(_event(1))
+    assert [event["event_id"] for event in tailer.poll()] == [1]
+
+
+def test_page_size_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="page_size"):
+        OperationEventTailer(FakeSource(), page_size=0)
+
+
+# --- 실제 라우트 --------------------------------------------------------------
+
+
+def test_the_public_route_streams_new_events_to_a_subscriber() -> None:
+    """UI가 구독하는 경로가 실제로 존재하고 이벤트를 밀어 준다."""
+    repository = InMemoryFmsRepository()
+    client = TestClient(create_app(repository))
+
+    with client.websocket_connect("/api/v1/operations/ws") as websocket:
+        # 실제 쓰기 경로가 남기는 이벤트를 그대로 받는다.
+        repository.create_job(
+            {
+                "job_code": "WS-1",
+                "operation_type": "outbound",
+                "priority": "normal",
+                "context": {"source": "public_product_order"},
+                "steps": [
+                    {
+                        "step_no": 10,
+                        "action_type": "wait",
+                        "executor_type": "fms",
+                        "target_location_id": 99,
+                        "input": {"wait_for": "worker_completion"},
+                    }
+                ],
+            }
         )
-    )
-    published = broadcaster.publish_pending()
+        message = websocket.receive_json()
 
-    assert queue.get_nowait()["kind"] == "SNAPSHOT"
-    kinds = [message["kind"] for message in published]
-    assert "PATH_UPDATED" in kinds
-    assert "PATH_SCHEDULE_MISMATCH" in kinds
-    assert feed.is_held("PK_01") is True
-    assert [queue.get_nowait()["kind"] for _ in published] == kinds
-
-
-def test_only_known_event_kinds_reach_the_ui(feed: OperationsFeed) -> None:
-    broadcaster = OperationsBroadcaster(feed)
-    published = broadcaster.publish_pending()
-
-    assert published
-    assert all(message["kind"] in OPERATIONS_EVENT_KINDS for message in published)
-
-
-def test_unsubscribed_queue_stops_receiving(feed: OperationsFeed) -> None:
-    broadcaster = OperationsBroadcaster(feed)
-    queue = broadcaster.subscribe()
-    queue.get_nowait()
-    broadcaster.unsubscribe(queue)
-
-    feed.upsert_robot(
-        RobotView(
-            robot_id="PK_02", x=0.0, y=0.0, yaw=0.0, battery_percent=50.0,
-            safety_state="normal", job_id="", stage="idle", error="",
-        )
-    )
-    broadcaster.publish_pending()
-
-    with pytest.raises(asyncio.QueueEmpty):
-        queue.get_nowait()
+    assert message["event_type"] == "job.created"
+    assert set(message) == set(EVENT_FIELDS)
+    assert isinstance(message["event_id"], int)

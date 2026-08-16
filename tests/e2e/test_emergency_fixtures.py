@@ -8,6 +8,8 @@ Fixture 1은 이동 중 Pinky 전도, Fixture 2는 창고 내 전도다. 두 경
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from control_tower.gateway.operations_feed import (
@@ -26,7 +28,7 @@ from control_tower.task_manager.emergency_workflow import (
     EmergencyDecision,
     EmergencyWorkflow,
 )
-from fms_gateway.app.operations_ws import OperationsBroadcaster
+from fms_gateway.app.operations_ws import serialize_event
 
 
 MAP_REVISION = "trihouse_test_01:test"
@@ -185,12 +187,42 @@ def test_the_incident_is_projected_to_the_ui_with_its_camera() -> None:
         )
     )
 
-    payload = OperationsBroadcaster(feed).snapshot_message()["payload"]
+    snapshot = feed.snapshot()
 
-    assert payload["incidents"][0]["camera_id"] == "CAM-PK-01"
-    assert len(payload["cameras"]) == len(CAMERA_FIXTURES) == 6
+    assert snapshot.incidents[0].camera_id == "CAM-PK-01"
+    assert len(snapshot.cameras) == len(CAMERA_FIXTURES) == 6
     # 내부 bootstrap graph는 운영자에게 나가지 않는다.
-    assert payload["bootstrap_graph_visible"] is False
+    assert snapshot.bootstrap_graph_visible is False
+
+
+def test_the_gateway_event_stream_carries_the_incident_to_the_ui() -> None:
+    """UI 가 구독하는 이벤트에 사건과 카메라가 실린다."""
+    camera_id = select_event_cameras(
+        kind="WAREHOUSE_FALL", location_id="WH-FRZ-01"
+    ).camera_ids[0]
+    serialized = serialize_event(
+        {
+            "event_id": 41,
+            "event_uuid": "00000000-0000-0000-0000-000000000041",
+            "occurred_at": datetime(2026, 8, 16, 12, 0, tzinfo=timezone.utc),
+            "actor_worker_id": None,
+            "device_id": None,
+            "job_id": 7,
+            "job_step_id": 11,
+            "incident_id": 4,
+            "severity": "critical",
+            "category": "safety",
+            "event_type": "WAREHOUSE_FALL",
+            "message": None,
+            "payload": {"location_id": "WH-FRZ-01", "camera_id": camera_id},
+        }
+    )
+
+    assert serialized["event_type"] == "WAREHOUSE_FALL"
+    assert serialized["incident_id"] == 4
+    assert serialized["payload"]["camera_id"] == "CAM-FIXED-02"
+    # 저작 레이어는 어떤 이벤트에도 실리지 않는다.
+    assert "bootstrap_graph" not in str(serialized)
 
 
 def test_p0_registers_six_cameras_without_connecting_them() -> None:

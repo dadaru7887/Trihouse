@@ -19,12 +19,19 @@ services:
       - trihouse_mysql_data:/var/lib/mysql
       - ./db/schema_mysql.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
       - ./db/seed_dev.sql:/docker-entrypoint-initdb.d/002-seed.sql:ro
+    # compose.control.yaml 이 만드는 격리 네트워크. Gateway만 함께 붙는다.
+    networks:
+      - db_internal
     healthcheck:
       test: [CMD-SHELL, "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 5s
       timeout: 5s
       retries: 30
       start_period: 20s
+
+networks:
+  db_internal:
+    name: trihouse_db_internal
 
 volumes:
   trihouse_mysql_data:

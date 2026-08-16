@@ -4,3 +4,4 @@ python-multipart==0.0.9
 pydantic-settings==2.14.2
 PyYAML==6.0.3
 uvicorn==0.52.1
+websockets==15.0.1
