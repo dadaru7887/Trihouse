@@ -5,8 +5,8 @@ services:
   fms_gateway:
     # Build only the small Python 3.12 API image, not the ROS or AI environment.
     build:
-      context: ./fms_gateway
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: fms_gateway/Dockerfile
     image: trihouse_fms_gateway:local
     restart: unless-stopped
     init: true

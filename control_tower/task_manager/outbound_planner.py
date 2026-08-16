@@ -24,6 +24,7 @@ class OrderLine:
 
 @dataclass(frozen=True)
 class OutboundOrder:
+    order_identity: str
     external_reference: str | None
     requested_by: str
     priority: str
@@ -186,7 +187,6 @@ class OutboundPlanner:
 
         line_by_number = {line.line_no: line for line in planned_lines}
         bundles = []
-        identity = order.external_reference or order.requested_by
         for zone in ZONE_ORDER:
             items = zone_items[zone]
             if not items:
@@ -211,7 +211,10 @@ class OutboundPlanner:
                 for index, item in enumerate(items)
             )
             group_id = str(
-                uuid.uuid5(uuid.NAMESPACE_URL, f"trihouse:outbound:{identity}:{zone}")
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"trihouse:outbound:{order.order_identity}:{zone}",
+                )
             )
             bundles.append(
                 ZoneBundle(
@@ -246,8 +249,8 @@ class OutboundPlanner:
 
     @staticmethod
     def _validate_order(order: OutboundOrder) -> None:
-        if not order.requested_by or not order.items:
-            raise ValueError("requester and at least one item are required")
+        if not order.order_identity or not order.requested_by or not order.items:
+            raise ValueError("order identity, requester, and at least one item are required")
         if order.priority not in {"normal", "high", "critical"}:
             raise ValueError("unsupported outbound priority")
         if len({item.line_no for item in order.items}) != len(order.items):

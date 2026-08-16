@@ -2178,10 +2178,12 @@ class MySqlFmsRepository:
             """
             SELECT map_name, manifest
             FROM map_revisions
-            WHERE state = 'published'
+            WHERE map_name = %s AND state = 'published'
             ORDER BY published_at DESC, map_revision DESC
+            LIMIT 1
             FOR UPDATE
-            """
+            """,
+            ("trihouse_test_01",),
         )
         publications = cursor.fetchall()
         for publication in publications:
@@ -2399,6 +2401,20 @@ class MySqlFmsRepository:
                 placeholders = ",".join(["%s"] * len(product_codes))
                 cursor.execute(
                     f"""
+                    SELECT lot_id
+                    FROM inventory_lots
+                    WHERE product_code IN ({placeholders}) AND state = 'stored'
+                    ORDER BY lot_id
+                    """,
+                    tuple(product_codes),
+                )
+                candidate_lot_ids = [
+                    int(row["lot_id"]) for row in cursor.fetchall()
+                ]
+                lot_rows: list[dict[str, Any]] = []
+                for lot_id in candidate_lot_ids:
+                    cursor.execute(
+                        """
                     SELECT lot.lot_id, lot.lot_code, lot.product_code, lot.item_name,
                            lot.temperature_zone, lot.location_id,
                            lot.available_qty, lot.reserved_qty, lot.expiry_date,
@@ -2407,14 +2423,14 @@ class MySqlFmsRepository:
                     FROM inventory_lots lot
                     JOIN locations slot ON slot.location_id = lot.location_id
                     JOIN locations parent ON parent.location_id = slot.parent_location_id
-                    WHERE lot.product_code IN ({placeholders}) AND lot.state = 'stored'
-                    ORDER BY lot.product_code, (lot.expiry_date IS NULL), lot.expiry_date,
-                             (lot.received_at IS NULL), lot.received_at, lot.lot_id
+                    WHERE lot.lot_id = %s AND lot.state = 'stored'
                     FOR UPDATE
-                    """,
-                    tuple(product_codes),
-                )
-                lot_rows = [dict(row) for row in cursor.fetchall()]
+                        """,
+                        (lot_id,),
+                    )
+                    row = cursor.fetchone()
+                    if row is not None:
+                        lot_rows.append(dict(row))
                 for row in lot_rows:
                     if row["temperature_zone"] != row["parent_temperature_zone"]:
                         raise OutboundOrderActiveMapUnavailable(
@@ -2446,7 +2462,12 @@ class MySqlFmsRepository:
                 planning_locations = self._outbound_planning_locations(
                     cursor, required_zone_parents
                 )
+                job_identity = uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"trihouse:outbound-job:{external_reference or idempotency_key}",
+                ).hex[:24]
                 outbound_order = OutboundOrder(
+                    order_identity=job_identity,
                     external_reference=external_reference,
                     requested_by=str(request["requested_by"]),
                     priority=str(request["priority"]),
@@ -2482,10 +2503,6 @@ class MySqlFmsRepository:
                     )
                     raise OutboundOrderInsufficientStock(shortages)
 
-                job_identity = uuid.uuid5(
-                    uuid.NAMESPACE_URL,
-                    f"trihouse:outbound-job:{external_reference or idempotency_key}",
-                ).hex[:24]
                 job_code = f"OUT-{job_identity}"
                 context = {
                     "source": "public_product_order",

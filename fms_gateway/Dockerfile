@@ -13,10 +13,13 @@ RUN groupadd --system trihouse \
 WORKDIR /app
 
 # Install runtime dependencies before application code to preserve the build cache.
-COPY requirements.txt /tmp/requirements.txt
+COPY fms_gateway/requirements.txt /tmp/requirements.txt
 RUN python -m pip install --requirement /tmp/requirements.txt
 
-COPY . /app/fms_gateway
+COPY fms_gateway /app/fms_gateway
+COPY control_tower/task_manager/__init__.py /app/control_tower/task_manager/__init__.py
+COPY control_tower/task_manager/outbound_planner.py /app/control_tower/task_manager/outbound_planner.py
+COPY control_tower/task_manager/outbound_sequence.py /app/control_tower/task_manager/outbound_sequence.py
 
 USER trihouse
 

@@ -45,6 +45,7 @@ def lot(
 
 def order(*lines: tuple[str, int], allow_partial: bool = False) -> OutboundOrder:
     return OutboundOrder(
+        order_identity="job-identity-001",
         external_reference="ORDER-001",
         requested_by="W-OP-01",
         priority="normal",

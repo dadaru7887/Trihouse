@@ -130,6 +130,7 @@ class _OrderPageState extends State<OrderPage> {
     setState(() {
       change();
       _result = null;
+      _error = null;
       _submissionKey = null;
     });
   }
@@ -236,7 +237,7 @@ class _OrderPageState extends State<OrderPage> {
                           FilteringTextInputFormatter.digitsOnly,
                         ],
                         decoration: const InputDecoration(labelText: '수량'),
-                        onChanged: (_) => _submissionKey = null,
+                        onChanged: (_) => _intentChanged(() {}),
                       ),
                     ),
                     IconButton(

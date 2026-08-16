@@ -111,4 +111,48 @@ void main() {
       expect(find.text('미출고 1'), findsOneWidget);
     },
   );
+
+  testWidgets('editing quantity hides a result from the previous intent', (
+    tester,
+  ) async {
+    final api = _OrderApi();
+    await tester.pumpWidget(_testOrderPage(api));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byKey(const Key('product-search')), 'milk');
+    await tester.pump();
+    await tester.tap(find.text('상품 추가'));
+    await tester.pump();
+    await tester.tap(find.text('주문 제출'));
+    await tester.pumpAndSettle();
+    expect(find.text('OUT-17'), findsOneWidget);
+
+    await tester.enterText(find.byKey(const Key('quantity-1')), '2');
+    await tester.pump();
+
+    expect(find.text('OUT-17'), findsNothing);
+    expect(find.text('출고 가능 2/요청 3'), findsNothing);
+  });
+
+  testWidgets('editing quantity clears a validation error from the previous intent', (
+    tester,
+  ) async {
+    final api = _OrderApi();
+    await tester.pumpWidget(_testOrderPage(api));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byKey(const Key('product-search')), 'milk');
+    await tester.pump();
+    await tester.tap(find.text('상품 추가'));
+    await tester.pump();
+    await tester.enterText(find.byKey(const Key('quantity-1')), '');
+    await tester.tap(find.text('주문 제출'));
+    await tester.pump();
+    expect(find.text('상품과 1 이상의 수량을 확인하세요.'), findsOneWidget);
+
+    await tester.enterText(find.byKey(const Key('quantity-1')), '2');
+    await tester.pump();
+
+    expect(find.text('상품과 1 이상의 수량을 확인하세요.'), findsNothing);
+  });
 }

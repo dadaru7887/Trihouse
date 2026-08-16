@@ -1,0 +1,8 @@
+*
+!fms_gateway/
+!fms_gateway/**
+!control_tower/
+!control_tower/task_manager/
+!control_tower/task_manager/__init__.py
+!control_tower/task_manager/outbound_planner.py
+!control_tower/task_manager/outbound_sequence.py
