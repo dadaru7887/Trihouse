@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""P0 스택 전체를 한 명령으로 다루는 lifecycle CLI.
+
+    ./scripts/control_stack up --mode simulation --project trihouse_test_01
+    ./scripts/control_stack status
+    ./scripts/control_stack logs
+    ./scripts/control_stack doctor --mode simulation
+    ./scripts/control_stack down
+
+하나의 Compose project를 쓰고, MySQL → Gateway → Control Tower worker →
+MediaMTX → RMF core → Fleet Adapter → Gazebo → Nav2/Pinky 두 스택 + OMX
+프로토콜 시뮬레이터 두 개 → control_ui 순서로 올린다. Gazebo는 기본
+headless이며 GUI/RViz는 플래그로만 켠다. `compose.ai_5080.yaml`은 시작하지
+않는다. 시뮬레이션은 fake 모델 계약만 확인한다.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+COMPOSE_PROJECT = "trihouse_p0"
+
+# 기동 순서. 앞의 서비스가 healthy가 된 뒤에 다음이 올라간다.
+STARTUP_ORDER = (
+    "mysql",
+    "fms_gateway",
+    "control_tower_worker",
+    "mediamtx",
+    "rmf_core",
+    "fleet_adapter",
+    "gazebo",
+    "nav2_pk01",
+    "nav2_pk02",
+    "omx_01",
+    "omx_02",
+    "control_ui",
+)
+
+COMPOSE_FILES = (
+    "compose.yaml",
+    "compose.control.yaml",
+    "compose.edge_4060.yaml",
+    "compose.simulation.yaml",
+)
+
+# doctor가 반드시 보고해야 하는 점검 항목.
+REQUIRED_CHECKS = (
+    "mysql",
+    "fms_gateway",
+    "control_tower",
+    "mediamtx",
+    "rmf_schedule",
+    "gazebo",
+    "nav2:PK_01",
+    "nav2:PK_02",
+    "omx:OMX_01",
+    "omx:OMX_02",
+    "control_ui",
+)
+
+# 시뮬레이션에서는 절대 켜지 않는다. 5080 AI 스택은 P1 대상이다.
+FORBIDDEN_IN_SIMULATION = ("compose.ai_5080.yaml",)
+
+
+def compose_command(*arguments: str, mode: str = "simulation") -> list[str]:
+    """항상 같은 Compose project 이름으로 파일 묶음을 조립한다."""
+    command = ["docker", "compose", "--project-name", COMPOSE_PROJECT]
+    for name in COMPOSE_FILES:
+        if name in FORBIDDEN_IN_SIMULATION:
+            continue
+        command += ["-f", str(ROOT / name)]
+    return command + list(arguments)
+
+
+def _run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(command, text=True, capture_output=capture, check=False)
+
+
+def _docker_available() -> bool:
+    return shutil.which("docker") is not None
+
+
+def cmd_up(args: argparse.Namespace) -> int:
+    if not _docker_available():
+        print("docker is not available on this host", file=sys.stderr)
+        return 2
+    environment = dict(os.environ)
+    environment["TRIHOUSE_PROJECT"] = args.project
+    # 기본은 headless. GUI/RViz는 명시적 플래그로만 켠다.
+    environment["TRIHOUSE_HEADLESS"] = "false" if args.gui else "true"
+    environment["TRIHOUSE_RVIZ"] = "true" if args.rviz else "false"
+
+    for service in STARTUP_ORDER:
+        completed = subprocess.run(
+            compose_command("up", "-d", "--wait", service, mode=args.mode),
+            text=True,
+            env=environment,
+            check=False,
+        )
+        if completed.returncode != 0:
+            print(f"failed to start {service}", file=sys.stderr)
+            return completed.returncode
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    return _run(compose_command("ps", mode=args.mode)).returncode
+
+
+def cmd_logs(args: argparse.Namespace) -> int:
+    arguments = ["logs", "--no-color", "--tail", str(args.tail)]
+    if args.follow:
+        arguments.append("--follow")
+    return _run(compose_command(*arguments, mode=args.mode)).returncode
+
+
+def cmd_down(args: argparse.Namespace) -> int:
+    return _run(compose_command("down", "--remove-orphans", mode=args.mode)).returncode
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """모든 필수 구성요소의 상태를 기계가 읽을 수 있는 JSON으로 낸다."""
+    running = _running_services(args.mode)
+    checks = {name: _check_state(name, running) for name in REQUIRED_CHECKS}
+    report = {
+        "mode": args.mode,
+        "project": COMPOSE_PROJECT,
+        "checks": checks,
+        # 시뮬레이션은 fake 모델 계약만 확인한다. 실제 checkpoint는 P1이다.
+        "act_contract": "deterministic_fake",
+        "ai_5080_started": False,
+        "healthy": all(state == "healthy" for state in checks.values()),
+    }
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0 if report["healthy"] else 1
+
+
+def _running_services(mode: str) -> dict[str, str]:
+    if not _docker_available():
+        return {}
+    completed = _run(
+        compose_command("ps", "--format", "json", mode=mode), capture=True
+    )
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return {}
+    states: dict[str, str] = {}
+    for line in completed.stdout.splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        name = record.get("Service") or record.get("Name")
+        if name:
+            states[name] = str(record.get("Health") or record.get("State") or "")
+    return states
+
+
+_CHECK_SERVICE = {
+    "control_tower": "control_tower_worker",
+    "rmf_schedule": "rmf_core",
+    "nav2:PK_01": "nav2_pk01",
+    "nav2:PK_02": "nav2_pk02",
+    "omx:OMX_01": "omx_01",
+    "omx:OMX_02": "omx_02",
+}
+
+
+def _check_state(check: str, running: dict[str, str]) -> str:
+    service = _CHECK_SERVICE.get(check, check)
+    state = running.get(service)
+    if state is None:
+        return "absent"
+    return "healthy" if state in ("healthy", "running") else state
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="control_stack", description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    def add_mode(target: argparse.ArgumentParser) -> None:
+        target.add_argument("--mode", default="simulation", choices=("simulation",))
+
+    up = subparsers.add_parser("up", help="start the whole P0 stack in order")
+    add_mode(up)
+    up.add_argument("--project", default="trihouse_test_01")
+    up.add_argument("--gui", action="store_true", help="show the Gazebo GUI")
+    up.add_argument("--rviz", action="store_true", help="also start RViz")
+    up.set_defaults(handler=cmd_up)
+
+    status = subparsers.add_parser("status", help="show container status")
+    add_mode(status)
+    status.set_defaults(handler=cmd_status)
+
+    logs = subparsers.add_parser("logs", help="show recent logs")
+    add_mode(logs)
+    logs.add_argument("--tail", default=200, type=int)
+    logs.add_argument("--follow", action="store_true")
+    logs.set_defaults(handler=cmd_logs)
+
+    doctor = subparsers.add_parser("doctor", help="report every required check")
+    add_mode(doctor)
+    doctor.set_defaults(handler=cmd_doctor)
+
+    down = subparsers.add_parser("down", help="stop the whole stack")
+    add_mode(down)
+    down.set_defaults(handler=cmd_down)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    return args.handler(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

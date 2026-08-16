@@ -36,3 +36,104 @@ services:
 # Gazebo and the ROS 2 launch process remain on the host for the current demo.
 # Do not run this stack together with control_system/openrmf/scripts/run_office_web.sh,
 # because that script starts the same API and dashboard ports itself.
+
+  # --- P0 simulation stack -----------------------------------------------
+  # `scripts/control_stack up --mode simulation` starts these in order. All of
+  # them are simulation-only; compose.ai_5080.yaml is never started here.
+
+  rmf_core:
+    image: ${RMF_API_IMAGE:-ghcr.io/open-rmf/rmf-web/api-server:jazzy}
+    restart: unless-stopped
+    network_mode: host
+    ipc: host
+    environment:
+      TZ: Asia/Seoul
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      RMF_SERVER_USE_SIM_TIME: "true"
+    command: ["ros2", "launch", "rmf_traffic_ros2", "common.launch.xml"]
+    healthcheck:
+      test: [CMD-SHELL, "ros2 node list | grep -q rmf_traffic_schedule"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  fleet_adapter:
+    image: ${TRIHOUSE_BRIDGE_IMAGE:-trihouse_rmf_bridge:local}
+    restart: unless-stopped
+    network_mode: host
+    ipc: host
+    environment:
+      TZ: Asia/Seoul
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      FMS_BASE_URL: ${FMS_BASE_URL:-http://127.0.0.1:8080}
+    depends_on:
+      rmf_core:
+        condition: service_healthy
+
+  gazebo:
+    image: ${TRIHOUSE_SIM_IMAGE:-trihouse_simulation:local}
+    restart: unless-stopped
+    network_mode: host
+    ipc: host
+    environment:
+      TZ: Asia/Seoul
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      # Headless by default; --gui/--rviz on control_stack flip these.
+      TRIHOUSE_HEADLESS: ${TRIHOUSE_HEADLESS:-true}
+      TRIHOUSE_RVIZ: ${TRIHOUSE_RVIZ:-false}
+      TRIHOUSE_PROJECT: ${TRIHOUSE_PROJECT:-trihouse_test_01}
+    depends_on:
+      rmf_core:
+        condition: service_healthy
+
+  nav2_pk01:
+    extends:
+      service: gazebo
+    environment:
+      TRIHOUSE_ROBOT_ID: PK_01
+      TRIHOUSE_ROBOT_NAMESPACE: pinky_01
+    depends_on:
+      gazebo:
+        condition: service_started
+
+  nav2_pk02:
+    extends:
+      service: gazebo
+    environment:
+      TRIHOUSE_ROBOT_ID: PK_02
+      TRIHOUSE_ROBOT_NAMESPACE: pinky_02
+    depends_on:
+      gazebo:
+        condition: service_started
+
+  omx_01:
+    image: ${TRIHOUSE_OMX_IMAGE:-trihouse_omx_adapter:local}
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Seoul
+      # P0 never loads a real ACT checkpoint and emits no OMX motion.
+      ACT_CONFIG: /app/config/act.simulation.yaml
+    command: ["omx_protocol_simulator", "--omx-id", "OMX_01"]
+
+  omx_02:
+    extends:
+      service: omx_01
+    command: ["omx_protocol_simulator", "--omx-id", "OMX_02"]
+
+  control_ui:
+    build:
+      context: ./control_ui/rmf_control_ui
+    image: trihouse_control_ui:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${CONTROL_UI_PORT:-3100}:80"
+    environment:
+      TZ: Asia/Seoul
+      FMS_BASE_URL: ${FMS_BASE_URL:-http://127.0.0.1:8080}
+    healthcheck:
+      test: [CMD-SHELL, "wget -qO- http://127.0.0.1/ >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s

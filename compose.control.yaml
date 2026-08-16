@@ -55,6 +55,31 @@ services:
       retries: 20
       start_period: 10s
 
+  control_tower_worker:
+    # The RMF dispatch worker that claims FMS messages and submits them to RMF.
+    image: trihouse_fms_gateway:local
+    restart: unless-stopped
+    init: true
+    environment:
+      TZ: Asia/Seoul
+      FMS_BASE_URL: http://fms_gateway:8080
+      PYTHONPATH: /app
+    command:
+      - python
+      - -m
+      - control_tower.rmf_adapter.rmf_gateway_worker_node
+      - --fms-base-url
+      - http://fms_gateway:8080
+      - --fleet-name
+      - ${TRIHOUSE_FLEET_NAME:-trihouse_pinky}
+      - --worker-id
+      - trihouse-rmf-worker
+    depends_on:
+      fms_gateway:
+        condition: service_healthy
+    networks:
+      - control_edge
+
 networks:
   # compose.db.yaml creates this network before the control stack starts.
   db_internal:
