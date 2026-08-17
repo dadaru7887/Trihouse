@@ -3655,6 +3655,7 @@ class MySqlFmsRepository:
                         "cancelled_step_ids": [],
                         "cancelled_reservation_ids": [],
                         "released_device_ids": [],
+                        "cancelled_message_ids": [],
                     }
 
                 # `actor_worker_id` 는 workers 를 참조한다. 취소 요청자는 사람이
@@ -3728,6 +3729,27 @@ class MySqlFmsRepository:
                     {str(row["device_id"]) for row in held if row["device_id"]}
                 )
 
+                # 살아 있는 outbox 메시지를 남기면 RMF·실행기 worker 가 취소된 step
+                # 을 계속 집는다. 실제로 그렇게 남은 `sent` 메시지 두 건 때문에 RMF
+                # worker 가 acceptance 를 보고하다 Gateway 에서 409 를 받고 죽었고,
+                # dispatch 주기가 통째로 멈춰 다른 job 도 로봇까지 가지 못했다.
+                # 이미 배달된(`acknowledged`/`completed`) 것은 손대지 않는다 —
+                # 일어난 일을 되쓰면 원장이 거짓이 된다.
+                message_ids: list[str] = []
+                if step_ids:
+                    placeholders = ", ".join(["%s"] * len(step_ids))
+                    cursor.execute(
+                        f"""
+                        SELECT message_id FROM integration_messages
+                        WHERE job_step_id IN ({placeholders})
+                          AND state IN ('pending','sent')
+                        ORDER BY message_id
+                        FOR UPDATE
+                        """,
+                        tuple(step_ids),
+                    )
+                    message_ids = [str(row["message_id"]) for row in cursor.fetchall()]
+
                 if step_ids:
                     placeholders = ", ".join(["%s"] * len(step_ids))
                     cursor.execute(
@@ -3738,6 +3760,19 @@ class MySqlFmsRepository:
                         WHERE job_step_id IN ({placeholders})
                         """,
                         (canonical_request["reason"][:512], *step_ids),
+                    )
+                if message_ids:
+                    placeholders = ", ".join(["%s"] * len(message_ids))
+                    cursor.execute(
+                        f"""
+                        UPDATE integration_messages
+                        SET state = 'failed', last_error = %s
+                        WHERE message_id IN ({placeholders})
+                        """,
+                        (
+                            f"job cancelled: {canonical_request['reason']}"[:512],
+                            *message_ids,
+                        ),
                     )
                 if reservation_ids:
                     placeholders = ", ".join(["%s"] * len(reservation_ids))
@@ -3763,6 +3798,7 @@ class MySqlFmsRepository:
                     "cancelled_step_ids": step_ids,
                     "cancelled_reservation_ids": reservation_ids,
                     "released_device_ids": device_ids,
+                    "cancelled_message_ids": message_ids,
                 }
                 cursor.execute(
                     "UPDATE operation_events SET payload = %s WHERE event_uuid = %s",
@@ -6699,6 +6735,7 @@ class InMemoryFmsRepository:
                     "cancelled_step_ids": [],
                     "cancelled_reservation_ids": [],
                     "released_device_ids": [],
+                    "cancelled_message_ids": [],
                 }
 
             step_ids = sorted(
@@ -6708,6 +6745,18 @@ class InMemoryFmsRepository:
             )
             for step_id in step_ids:
                 self._steps[step_id]["state"] = "cancelled"
+
+            # 살아 있는 outbox 메시지를 남기면 worker 가 취소된 step 을 계속 집는다.
+            open_states = {"pending", "sent"}
+            message_ids = sorted(
+                message_id
+                for message_id, (_request, record) in self._dispatches.items()
+                if record.get("job_step_id") in step_ids
+                and record.get("state") in open_states
+            )
+            for message_id in message_ids:
+                request, record = self._dispatches[message_id]
+                self._dispatches[message_id] = (request, {**record, "state": "failed"})
 
             held = sorted(
                 resource
@@ -6737,6 +6786,7 @@ class InMemoryFmsRepository:
                 "cancelled_step_ids": step_ids,
                 "cancelled_reservation_ids": reservation_ids,
                 "released_device_ids": released_device_ids,
+                "cancelled_message_ids": message_ids,
             }
             self._cancellations[idempotency_key] = (fingerprint, deepcopy(response))
             return response

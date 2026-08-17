@@ -231,6 +231,88 @@ def test_cancelling_an_unknown_job_is_not_found(seeded_schema) -> None:
         )
 
 
+def test_cancelling_closes_the_outbox_so_no_worker_picks_the_job_up_again(
+    seeded_schema,
+) -> None:
+    """살아 있는 outbox 메시지를 남기면 RMF worker 가 그것을 집는다.
+
+    2026-08-18 실측: 취소된 step 을 가리키는 `sent` 메시지 두 건이 남아 RMF worker 가
+    그것을 집고 acceptance 를 보고하다 Gateway 에서 409 를 받고 죽었다. dispatch 주기가
+    통째로 멈춰 다른 job 도 로봇까지 가지 못했다.
+    """
+    job_id = _assigned_job("outbox")
+    # 지금 실행 가능한 것은 첫 step 뿐이다 — Gateway 가 그 순서를 지킨다.
+    step_id = int(
+        rows(
+            "SELECT job_step_id FROM job_steps WHERE job_id=%s ORDER BY step_no LIMIT 1",
+            (job_id,),
+        )[0]["job_step_id"]
+    )
+    _repository().dispatch_step(
+        step_id,
+        {"actor": "control-tower", "assigned_device_id": "OMX_01"},
+        f"cancel-outbox-{job_id}",
+    )
+    assert scalar(
+        "SELECT COUNT(*) FROM integration_messages "
+        "WHERE job_step_id=%s AND state IN ('pending','sent')",
+        (step_id,),
+    ) == 1
+
+    result = _repository().cancel_job(
+        job_id, {"reason": "stuck outside RMF", "requested_by": "W-OP-01"}, "cancel-outbox"
+    )
+
+    assert scalar(
+        "SELECT COUNT(*) FROM integration_messages "
+        "WHERE job_step_id=%s AND state IN ('pending','sent')",
+        (step_id,),
+    ) == 0
+    closed = rows(
+        "SELECT state, last_error FROM integration_messages WHERE job_step_id=%s",
+        (step_id,),
+    )[0]
+    assert closed["state"] == "failed"
+    assert "cancel" in str(closed["last_error"]).lower()
+    assert result["cancelled_message_ids"] != []
+    # 이미 끝난 메시지는 되쓰지 않는다.
+    assert scalar(
+        "SELECT COUNT(*) FROM integration_messages WHERE state='acknowledged'"
+    ) == scalar(
+        "SELECT COUNT(*) FROM integration_messages WHERE state='acknowledged'"
+    )
+
+
+def test_a_delivered_outbox_message_keeps_its_outcome_when_the_job_is_cancelled(
+    seeded_schema,
+) -> None:
+    job_id = _assigned_job("outbox-done")
+    step_id = int(
+        rows(
+            "SELECT job_step_id FROM job_steps WHERE job_id=%s AND executor_type='arm' "
+            "ORDER BY step_no LIMIT 1",
+            (job_id,),
+        )[0]["job_step_id"]
+    )
+    _repository().dispatch_step(
+        step_id,
+        {"actor": "control-tower", "assigned_device_id": "OMX_01"},
+        f"cancel-outbox-done-{job_id}",
+    )
+    _execute(
+        "UPDATE integration_messages SET state='acknowledged' WHERE job_step_id=%s",
+        (step_id,),
+    )
+
+    _repository().cancel_job(
+        job_id, {"reason": "stuck outside RMF", "requested_by": "W-OP-01"}, "cancel-outbox-done"
+    )
+
+    assert rows(
+        "SELECT state FROM integration_messages WHERE job_step_id=%s", (step_id,)
+    )[0]["state"] == "acknowledged"
+
+
 def test_cancelling_frees_the_resource_for_the_next_job(seeded_schema) -> None:
     """회수의 목적은 원장 정리가 아니라 다음 주문이 실제로 그 로봇을 잡는 것이다."""
     first = _assigned_job("handover-1")

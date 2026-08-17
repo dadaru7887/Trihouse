@@ -33,12 +33,21 @@ def run_poll_loop(
     """Poll while ROS is alive; separated from construction for deterministic tests."""
 
     while keep_running():
-        report = worker.run_once(limit=limit)
-        node.get_logger().info(
-            "RMF dispatch cycle: "
-            f"claimed={report.claimed} accepted={report.accepted} "
-            f"rejected={report.rejected} indeterminate={report.indeterminate}"
-        )
+        try:
+            report = worker.run_once(limit=limit)
+        except Exception as error:  # noqa: BLE001
+            # 한 주기의 실패로 프로세스가 죽으면 dispatch 가 통째로 멈추고 로봇이
+            # 조용히 선다. 실제로 취소된 step 을 가리키는 outbox 메시지 하나가
+            # Gateway 에서 409 를 받아 이 loop 를 끝냈고, 그 사실은 로그를 뒤져야
+            # 보였다. 다음 주기가 다시 시도하고, 영구적인 실패라면 같은 줄이
+            # 반복되어 눈에 띈다.
+            node.get_logger().error(f"RMF dispatch cycle failed: {error}")
+        else:
+            node.get_logger().info(
+                "RMF dispatch cycle: "
+                f"claimed={report.claimed} accepted={report.accepted} "
+                f"rejected={report.rejected} indeterminate={report.indeterminate}"
+            )
         if once:
             return
         sleep(poll_interval_s)

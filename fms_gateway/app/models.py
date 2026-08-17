@@ -259,6 +259,8 @@ class JobCancelled(BaseModel):
     cancelled_step_ids: list[int]
     cancelled_reservation_ids: list[int]
     released_device_ids: list[str]
+    # 살아 있는 outbox 메시지를 남기면 worker 가 취소된 step 을 계속 집는다.
+    cancelled_message_ids: list[str] = Field(default_factory=list)
 
 
 class ExpiredReservation(BaseModel):
