@@ -150,5 +150,59 @@ class NamespaceLaunchContractTest(unittest.TestCase):
         self.assertIn("DeclareLaunchArgument('namespace', default_value='pinky_01')", source)
 
 
+class SimulationStatusPathContractTest(unittest.TestCase):
+    """P0 시뮬레이션에서 status_node 의 양 끝이 실제로 이어지는지 확인한다.
+
+    `two_pinky_order_demo.launch.py` 는 `status_node` 를
+    `PushRosNamespace(namespace)` 그룹 안에서 **remapping 없이** 띄우고, fleet
+    adapter 에게는 `/<namespace>/trihouse/status` 를 읽으라고 알려 준다. 그래서
+    `status_node` 가 토픽을 절대 이름으로 적으면 namespace 가 통째로 무시되어
+    양쪽이 어긋난다 — 노드는 루트에 발행하고 adapter 는 namespace 아래를
+    듣는다. 입력도 마찬가지로 gz bridge 는 `<namespace>/odom` 을 내보내는데
+    노드는 루트 `/odom` 을 구독하게 된다.
+
+    그러면 RMF 는 로봇의 위치와 상태를 영영 받지 못하고, 주문은 navigate 단계에서
+    조용히 멈춘다. 오류도 경고도 나지 않기 때문에 테스트로 고정한다.
+    """
+
+    DEMO_LAUNCH = REPO / "trihouse_rmf_bridge/launch/two_pinky_order_demo.launch.py"
+    STATUS_NODE = (
+        REPO / "trihouse_pinky/trihouse_pinky_fleet/trihouse_pinky_fleet/status_node.py"
+    )
+
+    def test_fleet_adapter_reads_the_namespaced_status_topic(self) -> None:
+        source = self.DEMO_LAUNCH.read_text(encoding="utf-8")
+
+        self.assertIn('"robot_status_topic": f"/{namespace}/trihouse/status"', source)
+
+    def test_status_node_publishes_where_the_adapter_listens(self) -> None:
+        names = dict.fromkeys(name for _line, name in _declared_names(self.STATUS_NODE))
+
+        # 상대 이름이어야 PushRosNamespace 가 `/pinky_01/trihouse/status` 로 만든다.
+        self.assertIn("trihouse/status", names)
+        self.assertNotIn("/trihouse/status", names)
+
+    def test_status_node_reads_the_namespaced_pose_and_sensor_topics(self) -> None:
+        names = dict.fromkeys(name for _line, name in _declared_names(self.STATUS_NODE))
+
+        for relative in ("odom", "scan", "amcl_pose"):
+            with self.subTest(topic=relative):
+                self.assertIn(relative, names)
+                self.assertNotIn(f"/{relative}", names)
+
+    def test_gazebo_bridge_topics_stay_relative_so_they_get_the_prefix(self) -> None:
+        # 브리지는 `f"{namespace}/{topic}"` 으로 접두사를 직접 붙인다. 여기에
+        # `/` 로 시작하는 이름이 들어가면 `pinky_01//odom` 이 된다.
+        source = self.DEMO_LAUNCH.read_text(encoding="utf-8")
+        block = source.split("ROBOT_BRIDGE_TOPICS = (", 1)[1].split(")", 1)[0]
+
+        for entry in block.splitlines():
+            stripped = entry.strip().strip(",").strip('"')
+            if not stripped:
+                continue
+
+            self.assertFalse(stripped.startswith("/"), stripped)
+
+
 if __name__ == "__main__":
     unittest.main()
