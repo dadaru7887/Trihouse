@@ -148,11 +148,40 @@ python3 "$ROOT/control_tower/bringup/p0_runtime_assets.py" \
   --robot PK_02:pinky_02 >/dev/null
 
 PIDS=()
+# 워커는 SIGTERM 을 걸쇠로 받아 진행 중인 주기(claim → 실행 → 보고)를 마치고
+# 나간다. 그 시간을 주지 않고 즉시 죽이면 claim 한 작업이 주인 없이 남고,
+# 다음 기동에서 lease 가 만료될 때까지 그 Job 이 멈춘다.
+: "${TRIHOUSE_SHUTDOWN_GRACE_S:=10}"
+
 cleanup() {
   echo
   echo "P0 ROS 층을 정리합니다..."
   for pid in "${PIDS[@]}"; do
     kill "$pid" 2>/dev/null || true
+  done
+
+  # 우아한 종료를 기다리되 무한정은 아니다. 멈춘 프로세스 하나가 스크립트를
+  # 붙잡으면 스택을 내릴 방법이 없어진다.
+  local deadline=$((SECONDS + TRIHOUSE_SHUTDOWN_GRACE_S))
+  while (( SECONDS < deadline )); do
+    local alive=false
+    for pid in "${PIDS[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=true
+        break
+      fi
+    done
+    if [[ "$alive" == false ]]; then
+      break
+    fi
+    sleep 0.2
+  done
+
+  for pid in "${PIDS[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "[bringup] $pid 가 ${TRIHOUSE_SHUTDOWN_GRACE_S}s 안에 끝나지 않아 강제 종료합니다"
+      kill -9 "$pid" 2>/dev/null || true
+    fi
   done
   wait 2>/dev/null || true
 }

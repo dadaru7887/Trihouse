@@ -21,6 +21,7 @@ from typing import Callable, Protocol, Sequence
 import rclpy
 
 from control_tower.gateway.fms_client import FMSGatewayHttpClient
+from control_tower.process_lifecycle import ShutdownSignal
 
 from .executor_worker import ExecutorReport, ExecutorWorker
 
@@ -115,6 +116,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not rclpy.ok():
         rclpy.init()
         owns_context = True
+    # 신호를 즉시 죽는 대신 걸쇠로 받는다. 진행 중인 claim 이 보고까지
+    # 끝난 뒤 주기 경계에서 나가야 작업이 주인 없이 남지 않는다.
+    shutdown = ShutdownSignal.installed()
     node = rclpy.create_node("trihouse_executor_worker")
     try:
         gateway = FMSGatewayHttpClient(args.fms_base_url, timeout=args.timeout_s)
@@ -132,7 +136,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             limit=args.limit,
             poll_interval_s=args.poll_interval_s,
             once=args.once,
-            keep_running=rclpy.ok,
+            keep_running=shutdown.keep_running_with(rclpy.ok),
+            sleep=shutdown.sleep,
         )
         return 0
     except KeyboardInterrupt:
