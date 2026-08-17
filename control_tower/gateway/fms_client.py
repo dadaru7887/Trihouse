@@ -481,6 +481,51 @@ class FMSGatewayHttpClient:
         )
         return RmfDispatchAcceptanceResponse.from_dict(response)
 
+    def cancel_job(
+        self,
+        job_id: int,
+        *,
+        reason: str,
+        requested_by: str,
+        idempotency_key: str,
+    ) -> JsonObject:
+        """Close a job and hand every resource it was holding back.
+
+        RMF 에 제출되기 전에 멈춘 job 은 `rmf_task_repository` 의 해제 경로를 타지
+        못해 로봇·팔·Dock 을 영원히 쥔다. 원장을 손으로 고치는 대신 이 경로를 쓴다.
+        """
+        return self._post(
+            f"/internal/v1/jobs/{job_id}/cancel",
+            {"reason": reason, "requested_by": requested_by},
+            headers={"Idempotency-Key": idempotency_key},
+        )
+
+    def expire_reservations(self) -> JsonObject:
+        """Sweep overdue reservations back into the pool before assigning again."""
+        return self._post("/internal/v1/reservations/expire", {})
+
+    def list_open_anomalies(self) -> tuple[JsonObject, ...]:
+        return tuple(self._get("/api/v1/operations/anomalies?state=open"))
+
+    def acknowledge_anomaly(
+        self, correlation_uuid: str, *, worker_id: str, note: str
+    ) -> JsonObject:
+        """사람이 그 이상을 봤다고 원장에 적는다.
+
+        열려 있지 않은 것을 닫으려 하면 `LookupError` 를 낸다 — 관제 UI 서버가 그
+        예외를 404 로 옮긴다.
+        """
+        try:
+            return self._post(
+                "/api/v1/operations/anomalies/"
+                f"{quote(correlation_uuid, safe='')}/acknowledge",
+                {"worker_id": worker_id, "note": note},
+            )
+        except HTTPError as error:
+            if error.code == 404:
+                raise LookupError(correlation_uuid) from error
+            raise
+
     def _get(self, path: str, *, allow_missing: bool = False) -> Any:
         request = Request(f"{self._base_url}{path}", method="GET")
         try:

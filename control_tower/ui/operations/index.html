@@ -10,13 +10,16 @@
     h1 { font-size: 1.45rem; } h2 { font-size: 1rem; } section { margin-top: 1rem; padding: 1rem; border: 1px solid #334150; border-radius: .5rem; background: #19222d; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; } .map { position: relative; height: 240px; background: #101820; border-radius: .4rem; overflow: hidden; }
     .robot { position: absolute; translate: -50% -50%; border-radius: 50%; background: #2775b9; padding: .35rem; font-size: .75rem; } .incident { margin-top: .5rem; padding: .75rem; border-left: .25rem solid #ff5964; background: #56242c; }
-    .incident[data-acknowledged="true"] { opacity: .65; border-left-color: #8894a3; } table { width: 100%; border-collapse: collapse; } th, td { padding: .45rem; border-bottom: 1px solid #334150; text-align: left; font-size: .85rem; }
+    .incident[data-acknowledged="true"] { opacity: .65; border-left-color: #8894a3; }
+    .anomaly { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-top: .5rem; padding: .75rem; border-left: .25rem solid #d9a441; background: #3d3320; }
+    .anomaly button { padding: .35rem .8rem; border: 0; border-radius: .25rem; background: #d9a441; color: #10151d; font-weight: 600; cursor: pointer; } table { width: 100%; border-collapse: collapse; } th, td { padding: .45rem; border-bottom: 1px solid #334150; text-align: left; font-size: .85rem; }
     video { width: 100%; min-height: 180px; margin-top: .75rem; background: #050505; } small { color: #aab7c6; }
   </style>
 </head>
 <body>
   <header><h1>Trihouse 통합 관제</h1><small id="connection-state">연결 중</small></header>
   <section><div class="head"><h2>사람 위급상황</h2><small>일반 작업 오류보다 먼저 표시</small></div><div id="incidents" aria-live="assertive"></div></section>
+  <section><div class="head"><h2>예약 이상</h2><small>자원은 풀렸는데 로봇이 아직 거기 있을 수 있다 · 확인해야 그 job 이 다시 배정된다</small></div><label>확인자 <input id="anomaly-worker" value="W-OP-01" size="12"></label><div id="anomalies" aria-live="polite"></div></section>
   <div class="grid">
     <section><div class="head"><h2>창고 지도</h2><small>Gateway 위치 read model</small></div><div id="map" class="map" aria-label="Pinky 위치 지도"></div></section>
     <section><div class="head"><h2>CCTV 재생</h2><small>선택할 때만 재생 URL 요청</small></div><label>카메라 <select id="camera-select"><option value="">재생 안 함</option></select></label><video id="camera-player" controls muted playsinline></video></section>

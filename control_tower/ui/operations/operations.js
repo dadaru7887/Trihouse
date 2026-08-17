@@ -41,10 +41,39 @@ byId('camera-select').addEventListener('change', async (event) => {
   } catch (error) { player.removeAttribute('src'); player.load(); showError(error); }
 });
 
+// 예약 이상은 snapshot이 아니라 Gateway 원장에서 온다. 자원은 풀렸는데 로봇이 아직
+// 거기 있을 수 있는 상태이고, 사람이 확인하기 전까지 그 job은 다시 배정되지 않는다.
+// 확인할 곳이 없으면 이상은 열리기만 하고 아무도 닫지 못해 job이 영구히 멈춘다.
+function renderAnomalies(anomalies) {
+  const container = byId('anomalies'); clear(container);
+  anomalies.forEach((anomaly) => {
+    const row = document.createElement('article'); row.className = 'anomaly';
+    row.append(text(`작업 ${anomaly.job_id ?? '-'} · ${anomaly.device_id || '자원'} · ${new Date(anomaly.occurred_at).toLocaleString()}`));
+    const button = document.createElement('button'); button.type = 'button'; button.append(text('확인'));
+    button.addEventListener('click', () => acknowledgeAnomaly(anomaly.correlation_uuid).catch(showError));
+    row.append(button); container.append(row);
+  });
+}
+
+async function acknowledgeAnomaly(correlationUuid) {
+  const response = await fetch(`/api/v1/operations/anomalies/${encodeURIComponent(correlationUuid)}/acknowledge`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ worker_id: byId('anomaly-worker').value, note: '관제 화면에서 확인' }),
+  });
+  if (!response.ok) throw new Error(`acknowledge failed: ${response.status}`);
+  await refreshAnomalies();
+}
+
+async function refreshAnomalies() {
+  const response = await fetch('/api/v1/operations/anomalies?state=open', { headers: { Accept: 'application/json' } });
+  if (!response.ok) throw new Error(`anomaly request failed: ${response.status}`);
+  renderAnomalies((await response.json()).anomalies);
+}
+
 async function refresh() {
   const response = await fetch('/api/v1/operations', { headers: { Accept: 'application/json' } });
   if (!response.ok) throw new Error(`snapshot request failed: ${response.status}`);
-  render(await response.json()); byId('connection-state').textContent = '연결됨';
+  render(await response.json()); await refreshAnomalies(); byId('connection-state').textContent = '연결됨';
 }
 
 function connectEvents() {
