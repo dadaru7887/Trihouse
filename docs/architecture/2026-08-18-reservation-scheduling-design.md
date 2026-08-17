@@ -2,12 +2,89 @@
 
 ## 이 문서를 읽는 법
 
-승인된 설계다. 구현은 아직 시작하지 않았다. 다음 세션은 8절의 순서를 위에서부터
-따라가면 되고, 각 단계에 검증 방법이 붙어 있다.
+승인된 설계다. 구현은 아직 시작하지 않았다. 8절의 순서를 위에서부터 따라가면 되고,
+각 단계에 검증 방법이 붙어 있다.
 
 환경을 다루는 방법(무엇이 어디에 떠 있는지, 테스트를 어떻게 돌리는지, 함정)은
 [2026-08-18 P0 수동 테스트 절차](../validation/2026-08-18-p0-manual-test.md)에 있다.
 이 문서는 그것을 되풀이하지 않는다.
+
+## 0. 새 창에서 시작하기
+
+이 절만 읽으면 저장소를 처음 보는 세션도 8절로 넘어갈 수 있다.
+
+### 기준점
+
+```
+브랜치: feat/pinky-edge-agent
+c2b675c0  docs: design ETA-based assignment on the reservation ledger   <- 이 문서
+01595e9e  feat: pin the ROS-only subnet and let one robot run alone
+a66082ce  fix: carry a robot's localization all the way to the RMF adapter
+```
+
+`git log --oneline -3` 이 위와 다르면 누군가 그 뒤에 작업했다는 뜻이니 먼저 그것을
+읽어라.
+
+지금 Docker 8개는 떠 있고 **호스트 ROS 층은 내려가 있다.** 예약 작업(8절 1~4)은
+ROS 없이 Docker 층만으로 진행·검증된다. 5번 이후에도 ETA 는 순수 계산이라 로봇이
+필요 없다.
+
+### 미커밋 변경이 하나 있다 — 의도된 것이다
+
+`git status` 에 `M pinky_pro` 가 보인다. **지우지 마라.** 서브모듈의
+`pinky_description/urdf/pinky_gz.urdf.xacro` 한 파일에서 `<gazebo reference="...">`
+속성 6곳의 `${namespace}` 접두사를 뗀 변경이다(`l_wheel`, `r_wheel`, `caster_wheel`,
+`rplidar_link`, `front_camera_link`, `imu_link`).
+
+벤더 xacro 가 **링크에는 접두사를 붙이지 않고 조인트에는 붙인다**(`pinky.urdf.xacro`
+에서 `${namespace}` 붙은 link 0개, joint 15개). `<gazebo reference>` 는 URDF 에 실제로
+있는 이름을 가리켜야 하므로 링크는 맨 이름이 맞다. 접두사가 붙어 있으면 Gazebo 가 그
+블록을 **오류 없이 조용히 버려서** 안에 있던 `<sensor>` 까지 사라진다 — scan·imu·
+camera 가 죽고 odom 만 살던 증상의 원인이었다.
+
+64행 `robot_lamp_mount_fixed_joint` 는 **조인트**이므로 접두사를 그대로 두었다. 블록
+안쪽의 `${namespace}`(센서 이름, `<topic>`, `<gz_frame_id>`)도 전부 유지했다.
+
+`pinky_pro` 는 읽기·실행만 허용된 보호 경로다. 그래서 커밋하지 않았고, 처리 방법은
+아직 결정되지 않았다: ⓐ 서브모듈에 커밋하고 상위 포인터를 올린다 ⓑ 벤더 upstream 에
+보낸다(비대칭 자체가 벤더 버그다) ⓒ 상위 저장소에서 xacro 를 덮어써 보호 경로를
+건드리지 않는다. **사람의 결정이 필요하다.**
+
+### `.env` 는 저장소에서 복원되지 않는다
+
+gitignore 되어 있고 실측값이 들어 있다. 새 호스트에서 다시 만들 때는
+`.env.example` 을 보되 두 가지를 반드시 확인하라.
+
+- `FMS_DB_PORT=3308`. 3306 으로 두면 별도 개발 DB 가 이미 점유해서 P0 의 MySQL 이
+  시작하지 못하고 Gateway 가 재시작 루프에 빠진다. 실제로 그렇게 멈췄다.
+- ROS 전용망 실측값: 4060 `192.168.0.9`, 5080 `192.168.0.10`, Pinky `.21`/`.22`,
+  OMX-PC `.31`/`.32`. `EDGE_BIND_ADDRESS` 는 Ethernet 쪽 주소여야 한다.
+
+### 이 문서 밖의 열린 일 (예약 작업과 독립)
+
+예약 작업만 할 것이면 아래는 건드리지 않아도 된다. 다만 "왜 시뮬이 불안정한가" 를
+다시 조사하느라 시간을 쓰지 않도록 적어 둔다.
+
+- **호스트 용량.** 로봇 두 대의 전체 스택은 이 12코어 개발 PC 를 넘는다(실측 load
+  average 60~90). Nav2 lifecycle 기동과 DDS 발견이 간헐 실패한다. 설정 결함이 아니다.
+  `TRIHOUSE_ROBOTS=PK_01` 로 한 대만 띄우는 길을 `01595e9e` 에서 만들어 두었다.
+- **`frame_id == map` 은 달성·검증했지만 재현이 안정적이지 않다.** 원인은 위 용량
+  문제다. `python3 scripts/verify_robot_status.py pinky_01 20` 으로 확인한다.
+- **카메라 4대 구성.** 발행 IP 분리와 `EDGE_BIND_ADDRESS` 는 `01595e9e` 에서 했다.
+  남은 것은 문서의 "PC1/PC2" 서술을 4대 기준으로 고치고 8554/tcp 방화벽 범위를
+  소비자 4대로 적는 일이다.
+- **실기도 같은 TF 문제를 만난다.** nav2 가 `[('/tf','tf')]` 를 무조건 걸어 로봇
+  namespace 를 보는데 발행자가 전역 `/tf` 에 쓰면 AMCL 이 스캔을 전량 버린다. 시뮬에
+  적용한 것과 같은 remap 을 실기 bringup 에도 넣어야 한다.
+
+### 다시 조사하지 말 것 (이미 결정된 것)
+
+- **할당 주체는 control_tower 다.** RMF 입찰로 넘기는 안(C)은 검토 후 버렸다. 2절 참고.
+- **ETA 는 그래프 거리로 시작해 실제 경로로 올린다**(B → A). 3절 참고.
+- **만료는 자원 종류를 구분하지 않고 전부 자동 해제한다.** 대신 이상을 보고한다.
+  3절·4.6절 참고.
+- **전방 예약에 스키마 변경은 필요 없다.** `time_slot` 모드가 이미 그 용법을 지원한다.
+  3절 참고.
 
 ## 1. 무엇을 고치는가
 
