@@ -446,6 +446,9 @@ CREATE TABLE IF NOT EXISTS job_steps (
   executor_type        VARCHAR(16) NOT NULL COMMENT 'Code identifying the executor type.',
   assigned_device_id   VARCHAR(64) NULL COMMENT 'Identifier of the related assigned device.',
   assignment_revision  BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Assignment revision used to reject stale execution results.',
+  predicted_duration_ms BIGINT UNSIGNED NULL COMMENT 'Expected duration in milliseconds recorded when the step was dispatched.',
+  prediction_source    VARCHAR(24) NULL COMMENT 'Origin of the prediction: rmf, baseline, seed, or none.',
+  predicted_at         DATETIME(6) NULL COMMENT 'Timestamp when the prediction was recorded.',
   action_type          VARCHAR(32) NOT NULL COMMENT 'Code identifying the action type.',
   target_location_id   BIGINT UNSIGNED NULL COMMENT 'Identifier of the related target location.',
   state                VARCHAR(24) NOT NULL DEFAULT 'pending' COMMENT 'Job-step status: pending, running, succeeded, failed, or cancelled.',
@@ -480,7 +483,12 @@ CREATE TABLE IF NOT EXISTS job_steps (
     ('navigate','dock','inspect','pick','load','unload','place','verify',
      'handover','wait','recover','return_home','safety_stop')),
   CONSTRAINT chk_job_steps_state CHECK (state IN
-    ('pending','running','succeeded','failed','cancelled'))
+    ('pending','running','succeeded','failed','cancelled')),
+  CONSTRAINT chk_job_steps_prediction CHECK
+    ((predicted_duration_ms IS NULL AND prediction_source IS NULL
+      AND predicted_at IS NULL)
+     OR (predicted_duration_ms IS NOT NULL AND prediction_source IS NOT NULL
+         AND predicted_at IS NOT NULL))
 ) ENGINE=InnoDB COMMENT='Manages ordered execution steps for Pinky movement, OMX manipulation, verification, and handoff operations.';
 
 -- [업무 실행 이력] Pinky·OMX·FMS가 한 단계에서 수행한 개별 시도를 추가 전용으로 기록한다.
@@ -505,6 +513,15 @@ CREATE TABLE IF NOT EXISTS job_step_attempts (
   parameters            JSON NULL COMMENT 'JSON object containing command and method parameters.',
   criteria              JSON NULL COMMENT 'JSON object containing expected, observed, and passed success criteria.',
   metrics               JSON NULL COMMENT 'JSON object containing measured execution values and units.',
+  metric_total_ms       BIGINT UNSIGNED GENERATED ALWAYS AS
+    (JSON_VALUE(metrics, '$.duration.total_ms' RETURNING UNSIGNED)) STORED
+    COMMENT 'Measured total duration in milliseconds, projected from metrics.',
+  metric_environment    VARCHAR(16) GENERATED ALWAYS AS
+    (JSON_VALUE(metrics, '$.duration.environment' RETURNING CHAR(16))) STORED
+    COMMENT 'Environment that produced this sample: simulation or hardware.',
+  metric_scope_key      VARCHAR(128) GENERATED ALWAYS AS
+    (JSON_VALUE(metrics, '$.duration.scope_key' RETURNING CHAR(128))) STORED
+    COMMENT 'Aggregation scope this sample belongs to, projected from metrics.',
   before_observation    JSON NULL COMMENT 'JSON object containing the state observed before execution.',
   after_observation     JSON NULL COMMENT 'JSON object containing the state observed after execution.',
   evidence_refs         JSON NULL COMMENT 'JSON array containing image, video, ROS bag, RMF log, or artifact references.',
@@ -524,6 +541,7 @@ CREATE TABLE IF NOT EXISTS job_step_attempts (
     (job_step_id, assignment_revision, actor_role, attempt_no),
   KEY idx_attempts_actor_time (actor_device_id, created_at),
   KEY idx_attempts_outcome (outcome, failure_domain, completed_at),
+  KEY idx_attempts_calibration (metric_environment, metric_scope_key, completed_at),
   CONSTRAINT fk_attempts_step FOREIGN KEY (job_step_id)
     REFERENCES job_steps (job_step_id) ON DELETE CASCADE,
   CONSTRAINT fk_attempts_device FOREIGN KEY (actor_device_id)
@@ -905,6 +923,51 @@ CREATE TABLE IF NOT EXISTS location_recovery_profiles (
   CONSTRAINT chk_recovery_profiles_reliability CHECK
     (reliability_alpha > 0 AND reliability_beta > 0)
 ) ENGINE=InnoDB COMMENT='Manages recovery roles, availability, and beta-distribution reliability values for each safety node.';
+
+
+-- [스케줄링] 승인된 소요시간 백분위수를 범위·환경별로 보관한다.
+-- 스케줄링은 approved 행만 읽는다. 집계가 곧바로 일정을 바꾸면 창고가
+-- 조용히 자기 시간을 다시 쓰게 되므로, 지도 발행과 같은 승인 관문을 둔다.
+CREATE TABLE IF NOT EXISTS duration_baselines (
+  baseline_id     BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'Surrogate identifier for this baseline revision.',
+  scope_kind      VARCHAR(24) NOT NULL COMMENT 'What this baseline times: an action type or a navigation lane.',
+  scope_key       VARCHAR(128) NOT NULL COMMENT 'Aggregation scope, such as zone=frozen. Refinable without discarding history.',
+  environment     VARCHAR(16) NOT NULL COMMENT 'Environment the samples came from: simulation or hardware.',
+  origin          VARCHAR(16) NOT NULL DEFAULT 'aggregated' COMMENT 'How the values were produced: seed for an operator measurement, aggregated for computed statistics.',
+  sample_count    INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Number of samples behind these percentiles. Zero only for an operator seed.',
+  p50_ms          BIGINT UNSIGNED NOT NULL COMMENT 'Median duration in milliseconds, used for planning.',
+  p90_ms          BIGINT UNSIGNED NOT NULL COMMENT 'Ninetieth percentile duration in milliseconds, used for slack.',
+  observed_from   DATETIME(6) NULL COMMENT 'Start of the sample window. Null for an operator seed.',
+  observed_to     DATETIME(6) NULL COMMENT 'End of the sample window. Null for an operator seed.',
+  revision        BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT 'Increases every time this scope is recalibrated.',
+  state           VARCHAR(16) NOT NULL DEFAULT 'proposed' COMMENT 'Approval status: proposed, approved, or superseded.',
+  approved_by     VARCHAR(64) NULL COMMENT 'Operator who approved this revision.',
+  approved_at     DATETIME(6) NULL COMMENT 'Timestamp when the approval was recorded.',
+  note            VARCHAR(512) NULL COMMENT 'Operator-readable explanation of how the values were obtained.',
+  created_at      DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'Timestamp when the created event occurred.',
+  PRIMARY KEY (baseline_id),
+  UNIQUE KEY uq_baseline_revision (scope_kind, scope_key, environment, revision),
+  KEY idx_baseline_lookup (scope_kind, scope_key, environment, state),
+  CONSTRAINT chk_baseline_scope_kind CHECK (scope_kind IN
+    ('pick','load','handover','wait','dock','navigate_lane','return_home')),
+  CONSTRAINT chk_baseline_environment CHECK (environment IN
+    ('simulation','hardware')),
+  CONSTRAINT chk_baseline_origin CHECK (origin IN ('seed','aggregated')),
+  CONSTRAINT chk_baseline_state CHECK (state IN
+    ('proposed','approved','superseded')),
+  CONSTRAINT chk_baseline_percentiles CHECK (p90_ms >= p50_ms),
+  CONSTRAINT chk_baseline_window CHECK
+    ((observed_from IS NULL AND observed_to IS NULL)
+     OR (observed_from IS NOT NULL AND observed_to IS NOT NULL
+         AND observed_to >= observed_from)),
+  -- An aggregated baseline without samples would be a fabricated number.
+  CONSTRAINT chk_baseline_samples CHECK
+    (origin = 'seed' OR sample_count > 0),
+  -- Approval is what scheduling trusts, so it must name someone.
+  CONSTRAINT chk_baseline_approval CHECK
+    (state <> 'approved'
+     OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
+) ENGINE=InnoDB COMMENT='Holds approved duration percentiles per scope and environment, seeded by operators and refined from measured samples.';
 
 -- ============================================================================
 -- VLM/RL 복구 경험(Episodic Memory)

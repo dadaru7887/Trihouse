@@ -14,6 +14,7 @@ pytestmark = pytest.mark.integration
 
 FMS_TABLES = {
     "artifacts",
+    "duration_baselines",
     "device_states",
     "devices",
     "incidents",
