@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # 호스트 시뮬레이션 층만 완전히 내린다. Docker 층은 건드리지 않는다.
 #
-#   scripts/sim_teardown.sh
+#   scripts/sim_teardown.sh              내린다
+#   scripts/sim_teardown.sh --dry-run    죽일 후보의 pid 만 출력한다
+#
+# 모르는 인자를 받으면 아무것도 죽이지 않고 실패한다. 오타가 조용히 전체 teardown
+# 으로 실행되면 되돌릴 수 없다.
 #
 # 이름 패턴으로 pkill 을 직접 쓰면 두 가지가 잘못된다.
 #
@@ -18,6 +22,30 @@
 # 상태에서 읽은 status 는 어느 세대 것인지 말할 수 없었다. 노드를 새로 추가하면
 # 아래 목록에도 반드시 추가한다.
 set -u
+
+DRY_RUN=false
+for argument in "$@"; do
+  case "$argument" in
+    --dry-run) DRY_RUN=true ;;
+    *)
+      echo "모르는 인자입니다: $argument" >&2
+      echo "사용법: scripts/sim_teardown.sh [--dry-run]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+# `pgrep -f` 는 명령줄 전체를 본다. 아래 PATTERNS 에는 `trihouse_rmf_bridge` 나
+# `control_tower.task_manager` 같은 **경로 이름**이 들어 있어서, 그 경로를 인자로
+# 받은 도구의 명령줄이 그대로 걸린다. 실제로 이 스크립트가 시뮬을 내리면서 같은
+# 셸의 `pytest` 를 함께 죽여 테스트 실행이 통째로 사라졌다. 빌드도 마찬가지로
+# 중간에 죽으면 install 이 반쯤 쓰인 채 남는다.
+#
+# teardown 이 내릴 것은 시뮬 층이지 그 층을 다루는 도구가 아니다.
+EXCLUDE_PATTERNS=(
+  'pytest'
+  'colcon'
+)
 
 PATTERNS=(
   'p0_simulation_bringup'
@@ -76,6 +104,15 @@ PATTERNS=(
   'control_tower.rmf_adapter'
 )
 
+excluded() {
+  local pid="$1" pattern cmdline
+  cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) || return 1
+  for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+    [[ "$cmdline" == *"$pattern"* ]] && return 0
+  done
+  return 1
+}
+
 collect() {
   local pattern pid
   for pattern in "${PATTERNS[@]}"; do
@@ -85,12 +122,20 @@ collect() {
       if grep -qs docker "/proc/$pid/cgroup" 2>/dev/null; then
         continue
       fi
+      excluded "$pid" && continue
       echo "$pid"
     done < <(pgrep -f -- "$pattern" 2>/dev/null)
   done
 }
 
 mapfile -t victims < <(collect | sort -un)
+
+if [[ "$DRY_RUN" == true ]]; then
+  # 아무것도 죽이지 않는다. 후보만 보여 준다.
+  printf '%s\n' "${victims[@]}"
+  echo "candidates=${#victims[@]}"
+  exit 0
+fi
 
 if ((${#victims[@]})); then
   kill -INT "${victims[@]}" 2>/dev/null
