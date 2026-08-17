@@ -78,6 +78,14 @@ class FmsRepository(Protocol):
 
     def claim_rmf_dispatches(self, worker_id: str, limit: int) -> list[dict[str, Any]]: ...
 
+    def claim_executor_dispatches(
+        self, worker_id: str, channels: tuple[str, ...], limit: int
+    ) -> list[dict[str, Any]]: ...
+
+    def record_executor_outcome(
+        self, job_step_id: int, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]: ...
+
     def record_rmf_dispatch_acceptance(
         self, message_id: str, acceptance: dict[str, Any]
     ) -> dict[str, Any]: ...
@@ -221,6 +229,10 @@ class JobStepNotFound(Exception):
 
 class JobStepNotDispatchable(Exception):
     pass
+
+
+class StepOutcomeConflict(Exception):
+    """The reported outcome does not match what the step can accept."""
 
 
 class CommandClaimConflict(Exception):
@@ -4709,6 +4721,274 @@ class MySqlFmsRepository:
             finally:
                 cursor.close()
 
+    # 실행기(OMX·FMS)가 쓰는 채널은 RMF와 달리 waypoint·fleet 보강이 필요 없다.
+    # RMF 전용 claim을 일반화하지 않고 따로 둔 이유는, 그 함수가 payload에
+    # target_waypoint·fleet_name·request_time_ms를 덧붙이기 때문이다. 그 보강은
+    # OMX 명령에는 의미가 없고, 기존 RMF worker의 동작을 건드릴 이유도 없다.
+    ACTOR_ROLE_BY_EXECUTOR = {"mobile": "pinky", "arm": "omx", "fms": "fms"}
+
+    def claim_executor_dispatches(
+        self, worker_id: str, channels: tuple[str, ...], limit: int
+    ) -> list[dict[str, Any]]:
+        """`SKIP LOCKED`로 실행기 채널의 pending 메시지를 선점한다."""
+        del worker_id  # Worker identity is audit-only; claim ownership is row state.
+        if not channels:
+            return []
+        placeholders = ",".join(["%s"] * len(channels))
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                cursor.execute(
+                    f"""
+                    SELECT im.message_id, im.idempotency_key, js.job_id,
+                           im.job_step_id, im.channel, im.message_type,
+                           im.state, im.payload, js.action_type, js.executor_type,
+                           js.assigned_device_id, js.assignment_revision,
+                           jobs.context AS job_context
+                    FROM integration_messages im
+                    JOIN job_steps js ON js.job_step_id = im.job_step_id
+                    JOIN jobs ON jobs.job_id = js.job_id
+                    WHERE im.direction = 'outbound' AND im.channel IN ({placeholders})
+                      AND im.state = 'pending'
+                    ORDER BY im.created_at, im.message_id
+                    LIMIT %s FOR UPDATE SKIP LOCKED
+                    """,
+                    (*channels, limit),
+                )
+                rows = list(cursor.fetchall())
+                if rows:
+                    cursor.executemany(
+                        """
+                        UPDATE integration_messages
+                        SET state = 'sent', attempts = attempts + 1, sent_at = NOW(6)
+                        WHERE message_id = %s
+                        """,
+                        [(row["message_id"],) for row in rows],
+                    )
+                    connection.commit()
+                result = []
+                for row in rows:
+                    row = dict(row)
+                    row["state"] = "sent"
+                    row["payload"] = _json(row["payload"])
+                    row["assignment"] = (_json(row.pop("job_context")) or {}).get(
+                        "assignment"
+                    ) or {}
+                    result.append(row)
+                return result
+            finally:
+                cursor.close()
+
+    def record_executor_outcome(
+        self, job_step_id: int, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """Close one executor step and keep the Gateway the sole arbiter of state.
+
+        The executor decides what happened; it does not decide whether the step
+        was allowed to finish. Assignment revision, step state, and — for a load
+        — per-item confirmation are all re-checked here under a row lock.
+        """
+        event_uuid = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"trihouse:step-outcome:{idempotency_key}")
+        )
+        command_uuid = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"trihouse:step-command:{idempotency_key}")
+        )
+        canonical = deepcopy(request)
+        succeeded = canonical["outcome"] == "succeeded"
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                cursor.execute(
+                    """
+                    SELECT job_step_id, job_id, action_type, executor_type, state,
+                           step_no, assignment_revision, assigned_device_id
+                    FROM job_steps WHERE job_step_id = %s FOR UPDATE
+                    """,
+                    (job_step_id,),
+                )
+                step = cursor.fetchone()
+                if step is None:
+                    raise JobStepNotFound
+
+                cursor.execute(
+                    """
+                    SELECT parameters FROM job_step_attempts
+                    WHERE command_uuid = %s
+                    """,
+                    (command_uuid,),
+                )
+                replay = cursor.fetchone()
+                if replay is not None:
+                    parameters = _json(replay["parameters"]) or {}
+                    if parameters.get("request") != canonical:
+                        raise IdempotencyConflict
+                    return parameters["response"]
+
+                if int(step["assignment_revision"]) != int(
+                    canonical["assignment_revision"]
+                ):
+                    raise ResourceAssignmentConflict("STALE_ASSIGNMENT")
+                if step["state"] not in {"pending", "running"}:
+                    raise StepOutcomeConflict("STEP_NOT_OPEN")
+                if step["executor_type"] == "mobile":
+                    # Navigation terminates through the robot's own task_event
+                    # path, which verifies telemetry and stop conditions. Letting
+                    # an executor short-circuit that would bypass those checks.
+                    raise StepOutcomeConflict("MOBILE_STEP_USES_TASK_EVENT")
+                if succeeded and step["action_type"] == "load":
+                    # Scoped to this step's temperature zone, matching how
+                    # `dispatch_step` gates the same items. A confirmed load in
+                    # one zone must not vouch for items still sitting in another.
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS outstanding
+                        FROM job_items item
+                        JOIN inventory_lots lot ON lot.lot_id = item.lot_id
+                        JOIN job_steps load_step
+                          ON load_step.job_step_id = %s
+                         AND JSON_UNQUOTE(
+                               JSON_EXTRACT(load_step.input, '$.temperature_zone')
+                             ) = lot.temperature_zone
+                        WHERE item.job_id = %s
+                          AND COALESCE(
+                                JSON_UNQUOTE(
+                                  JSON_EXTRACT(item.metadata, '$.load_result')
+                                ), ''
+                              ) <> 'LOAD_CONFIRMED'
+                        """,
+                        (job_step_id, step["job_id"]),
+                    )
+                    if int(cursor.fetchone()["outstanding"]):
+                        raise StepOutcomeConflict("LOAD_ITEMS_NOT_CONFIRMED")
+
+                actor_role = self.ACTOR_ROLE_BY_EXECUTOR[step["executor_type"]]
+                actor_device_id = (
+                    canonical.get("actor_device_id") or step["assigned_device_id"]
+                )
+                if actor_role == "omx" and not actor_device_id:
+                    raise StepOutcomeConflict("ACTOR_DEVICE_REQUIRED")
+                cursor.execute(
+                    """
+                    SELECT COALESCE(MAX(attempt_no), 0) + 1 AS attempt_no
+                    FROM job_step_attempts
+                    WHERE job_step_id = %s AND assignment_revision = %s
+                      AND actor_role = %s
+                    """,
+                    (job_step_id, step["assignment_revision"], actor_role),
+                )
+                attempt_no = int(cursor.fetchone()["attempt_no"])
+                response = {
+                    "job_step_id": job_step_id,
+                    "job_id": int(step["job_id"]),
+                    "state": "succeeded" if succeeded else "failed",
+                    "attempt_uuid": event_uuid,
+                    "attempt_no": attempt_no,
+                }
+                cursor.execute(
+                    """
+                    INSERT INTO job_step_attempts
+                      (attempt_uuid, job_step_id, assignment_revision, actor_role,
+                       actor_device_id, attempt_no, event_uuid, command_uuid,
+                       state, outcome, success, method_code, outcome_reason_code,
+                       failure_domain, parameters, metrics,
+                       policy_source, started_at, completed_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'finished',%s,%s,%s,%s,%s,%s,%s,
+                            'rule',COALESCE(%s, NOW(6)),NOW(6))
+                    """,
+                    (
+                        event_uuid, job_step_id, step["assignment_revision"],
+                        actor_role, actor_device_id,
+                        attempt_no, event_uuid, command_uuid,
+                        "succeeded" if succeeded else "failed", succeeded,
+                        canonical["method_code"],
+                        # `chk_attempts_terminal` requires a reason on every
+                        # finished attempt, so a caller that omits one still
+                        # gets a stable code rather than a constraint violation.
+                        canonical.get("reason_code") or (
+                            "STEP_SUCCEEDED" if succeeded else "STEP_FAILED"
+                        ),
+                        "none" if succeeded else canonical.get("failure_domain", "none"),
+                        json.dumps(
+                            {
+                                "record_kind": "step_outcome",
+                                "request": canonical,
+                                "response": response,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        json.dumps(canonical.get("metrics") or {}, ensure_ascii=False),
+                        canonical.get("started_at"),
+                    ),
+                )
+                cursor.execute(
+                    """
+                    UPDATE job_steps SET state = %s, completed_at = NOW(6),
+                        started_at = COALESCE(started_at, %s, NOW(6)),
+                        result = %s
+                    WHERE job_step_id = %s
+                    """,
+                    (
+                        "succeeded" if succeeded else "failed",
+                        canonical.get("started_at"),
+                        json.dumps(
+                            {
+                                "outcome": canonical["outcome"],
+                                "reason_code": canonical.get("reason_code"),
+                                "actor_device_id": actor_device_id,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        job_step_id,
+                    ),
+                )
+                cursor.execute(
+                    """
+                    UPDATE integration_messages
+                    SET state = %s, acknowledged_at = NOW(6)
+                    WHERE direction = 'outbound' AND job_step_id = %s
+                      AND state IN ('pending','sent')
+                    """,
+                    ("acknowledged" if succeeded else "failed", job_step_id),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO operation_events
+                      (event_uuid, occurred_at, device_id, job_id, job_step_id,
+                       severity, category, event_type, message, payload)
+                    VALUES (%s, NOW(6), %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        event_uuid,
+                        actor_device_id,
+                        int(step["job_id"]),
+                        job_step_id,
+                        "info" if succeeded else "warning",
+                        "omx" if actor_role == "omx" else "operation",
+                        (
+                            "execution.step.succeeded" if succeeded
+                            else "execution.step.failed"
+                        ),
+                        canonical.get("detail"),
+                        json.dumps(
+                            {
+                                "actor_role": actor_role,
+                                "actor_device_id": actor_device_id,
+                                "reason_code": canonical.get("reason_code"),
+                                "action_type": step["action_type"],
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ),
+                )
+                connection.commit()
+                return response
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                cursor.close()
+
     def record_rmf_dispatch_acceptance(
         self, message_id: str, acceptance: dict[str, Any]
     ) -> dict[str, Any]:
@@ -4952,6 +5232,7 @@ class InMemoryFmsRepository:
         self._steps: dict[int, dict[str, Any]] = {}
         self._events: dict[int, list[dict[str, Any]]] = {}
         self._dispatches: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+        self._step_outcomes: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
         self._claims: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]] = {}
         self._reserved_assignment_resources: dict[str, int] = {}
         self._assignment_lock = threading.RLock()
@@ -5822,6 +6103,76 @@ class InMemoryFmsRepository:
                 response["payload"]["request_time_ms"] = int(datetime.now(SEOUL).timestamp() * 1000)
                 claimed.append(deepcopy(response))
         return claimed
+
+    def claim_executor_dispatches(
+        self, worker_id: str, channels: tuple[str, ...], limit: int
+    ) -> list[dict[str, Any]]:
+        del worker_id
+        claimed: list[dict[str, Any]] = []
+        for _, response in self._dispatches.values():
+            if len(claimed) >= limit:
+                break
+            if response["channel"] not in channels or response["state"] != "pending":
+                continue
+            response["state"] = "sent"
+            step = self._steps[response["job_step_id"]]
+            job_context = self._jobs[step["job_id"]].get("context", {})
+            claimed.append(
+                {
+                    **deepcopy(response),
+                    "action_type": step["action_type"],
+                    "executor_type": step["executor_type"],
+                    "assigned_device_id": step.get("assigned_device_id"),
+                    "assignment_revision": step.get("assignment_revision", 0),
+                    "assignment": deepcopy(job_context.get("assignment") or {}),
+                }
+            )
+        return claimed
+
+    def record_executor_outcome(
+        self, job_step_id: int, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        step = self._steps.get(job_step_id)
+        if step is None:
+            raise JobStepNotFound
+        canonical = deepcopy(request)
+        existing = self._step_outcomes.get(idempotency_key)
+        if existing is not None:
+            previous, response = existing
+            if previous != canonical:
+                raise IdempotencyConflict
+            return deepcopy(response)
+        if int(step.get("assignment_revision", 0)) != int(
+            canonical["assignment_revision"]
+        ):
+            raise ResourceAssignmentConflict("STALE_ASSIGNMENT")
+        if step["state"] not in {"pending", "running"}:
+            raise StepOutcomeConflict("STEP_NOT_OPEN")
+        if step["executor_type"] == "mobile":
+            raise StepOutcomeConflict("MOBILE_STEP_USES_TASK_EVENT")
+        succeeded = canonical["outcome"] == "succeeded"
+        step["state"] = "succeeded" if succeeded else "failed"
+        for _, message in self._dispatches.values():
+            if message["job_step_id"] == job_step_id and message["state"] in {
+                "pending",
+                "sent",
+            }:
+                message["state"] = "acknowledged" if succeeded else "failed"
+        response = {
+            "job_step_id": job_step_id,
+            "job_id": step["job_id"],
+            "state": step["state"],
+            "attempt_uuid": idempotency_key,
+            "attempt_no": 1,
+        }
+        self._step_outcomes[idempotency_key] = (canonical, response)
+        self._append_event(
+            step["job_id"],
+            job_step_id,
+            "execution.step.succeeded" if succeeded else "execution.step.failed",
+            {"reason_code": canonical.get("reason_code")},
+        )
+        return deepcopy(response)
 
     def record_rmf_dispatch_acceptance(
         self, message_id: str, acceptance: dict[str, Any]

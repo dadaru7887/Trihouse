@@ -374,6 +374,64 @@ class RmfDispatchesClaimed(BaseModel):
     dispatches: list[DispatchRecord]
 
 
+class ExecutorDispatchClaim(BaseModel):
+    """Claim request from the OMX/FMS executor worker."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    worker_id: str = Field(min_length=1, max_length=64)
+    channels: list[Literal["omx", "pinky"]] = Field(min_length=1)
+    limit: int = Field(default=1, ge=1, le=100)
+
+
+class ExecutorDispatchRecord(DispatchRecord):
+    """Outbox message plus the step context the executor needs to act."""
+
+    action_type: str
+    executor_type: str
+    assigned_device_id: str | None = None
+    assignment_revision: int = 0
+    assignment: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExecutorDispatchesClaimed(BaseModel):
+    dispatches: list[ExecutorDispatchRecord]
+
+
+class StepOutcome(BaseModel):
+    """Terminal report from a non-mobile executor for one job step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["succeeded", "failed"]
+    assignment_revision: int = Field(ge=0)
+    method_code: str = Field(min_length=1, max_length=96)
+    actor_device_id: str | None = Field(default=None, max_length=64)
+    reason_code: str | None = Field(default=None, max_length=96)
+    # `db/schema_mysql.sql` 의 chk_attempts_failure_domain 과 같은 집합이다.
+    failure_domain: Literal[
+        "none", "robot", "perception", "navigation", "manipulation",
+        "safety", "integration", "operator", "unknown",
+    ] = "none"
+    detail: str | None = Field(default=None, max_length=1024)
+    started_at: datetime | None = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def failure_needs_a_domain(self):
+        if self.outcome == "failed" and self.failure_domain == "none":
+            raise ValueError("a failed outcome must name its failure domain")
+        return self
+
+
+class StepOutcomeView(BaseModel):
+    job_step_id: int
+    job_id: int
+    state: str
+    attempt_uuid: str
+    attempt_no: int
+
+
 class RmfDispatchAcceptance(BaseModel):
     """RMF가 dispatch를 수락했는지와 실제 task/robot 매핑을 전달한다."""
     accepted: bool

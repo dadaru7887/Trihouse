@@ -368,6 +368,23 @@ def _runtime(context):
                     output="screen",
                     condition=IfCondition(LaunchConfiguration("start_job_runner")),
                 ),
+                # 실행기 워커. omx/pinky 채널을 claim 해 실행하고 Step 을 닫는다.
+                ExecuteProcess(
+                    cmd=[
+                        "python3", "-m",
+                        "control_tower.task_manager.executor_worker_node",
+                        "--fms-base-url", LaunchConfiguration("fms_base_url"),
+                    ],
+                    additional_env={
+                        "PYTHONPATH": [
+                            LaunchConfiguration("trihouse_root"),
+                            os.pathsep,
+                            EnvironmentVariable("PYTHONPATH", default_value=""),
+                        ]
+                    },
+                    output="screen",
+                    condition=IfCondition(LaunchConfiguration("start_executor_worker")),
+                ),
                 ExecuteProcess(
                     cmd=[
                         "python3", "-m",
@@ -429,6 +446,7 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("start_nav2", default_value="true"),
         DeclareLaunchArgument("start_rmf_worker", default_value="true"),
         DeclareLaunchArgument("start_job_runner", default_value="true"),
+        DeclareLaunchArgument("start_executor_worker", default_value="true"),
         # Gazebo 가 world 를 다 읽기 전에 spawn 을 걸면 `create` 가 "Timed out
         # when getting world names" 로 죽는다. 이 호스트에서 8초면 충분했고
         # 여유를 둬서 12초로 잡는다.

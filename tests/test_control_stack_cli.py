@@ -159,6 +159,8 @@ def test_the_bringup_starts_every_ros_component_together() -> None:
     # 러너와 worker 는 짝이다. 러너가 빠지면 outbox 가 비어 worker 가 claim 할
     # 것이 없고, 주문은 `queued` 에서 멈춘다.
     assert "control_tower.task_manager.job_runner_node" in source
+    # 실행기가 빠지면 주문이 첫 `pick` 에서 멈춘다.
+    assert "control_tower.task_manager.executor_worker_node" in source
     for omx in ("OMX_01", "OMX_02"):
         assert omx in source
 

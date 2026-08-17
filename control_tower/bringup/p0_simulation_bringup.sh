@@ -2,7 +2,7 @@
 # P0 시뮬레이션의 호스트 ROS 2 층을 한 번에 띄운다.
 #
 #   control_tower/bringup/p0_simulation_bringup.sh [--gui] [--rviz] [--no-worker]
-#                                                  [--no-job-runner]
+#                                                  [--no-job-runner] [--no-executor]
 #
 # 함께 올라가는 것:
 #   - Open-RMF traffic schedule (RMF core)
@@ -10,6 +10,7 @@
 #   - 두 대의 fleet adapter
 #   - OMX 프로토콜 시뮬레이터 두 개 (OMX_01, OMX_02)
 #   - Job 러너 (control_tower.task_manager.job_runner_node)
+#   - 실행기 워커 (control_tower.task_manager.executor_worker_node)
 #   - RMF dispatch worker (control_tower.rmf_adapter.rmf_gateway_worker_node)
 #
 # Job 러너와 dispatch worker 는 짝이다. 러너가 `queued` Job 에 자원을 배정하고
@@ -28,12 +29,14 @@ GUI=false
 RVIZ=false
 START_WORKER=true
 START_JOB_RUNNER=true
+START_EXECUTOR=true
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --gui) GUI=true ;;
     --rviz) RVIZ=true ;;
     --no-worker) START_WORKER=false ;;
     --no-job-runner) START_JOB_RUNNER=false ;;
+    --no-executor) START_EXECUTOR=false ;;
     -h|--help) sed -n '2,26p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -53,6 +56,7 @@ done
 # `control_system_test/` 아래라 gitignore 대상이고, 두 로봇이 같은 지도를
 # 공유하려면 초기 pose 정합이 따로 필요하다. 지도를 쓰려면
 # `TRIHOUSE_NAV2_SLAM=false` 로 두고 launch 에 `nav2_map:=` 을 넘긴다.
+: "${TRIHOUSE_ACT_CONFIG:=$ROOT/config/act.simulation.yaml}"
 : "${TRIHOUSE_NAV2_SLAM:=true}"
 : "${TRIHOUSE_START_NAV2:=true}"
 # 승인된 좌표 원본. `control_ui/` 쪽이 git 에 들어 있는 정본이고 지도 발행과
@@ -190,7 +194,8 @@ start "two pinky order demo" \
     headless:="$([[ "$GUI" == true ]] && echo false || echo true)" \
     start_rmf_core:=false \
     start_rmf_worker:=false \
-    start_job_runner:=false
+    start_job_runner:=false \
+    start_executor_worker:=false
 
 # 3) OMX 두 대. 실제 OMX motion 은 나가지 않는다.
 #
@@ -217,7 +222,18 @@ if [[ "$START_JOB_RUNNER" == true ]]; then
       --fms-base-url "$FMS_BASE_URL"
 fi
 
-# 5) RMF dispatch worker. Control Tower 가 고른 로봇으로만 작업을 넘긴다.
+# 5) 실행기 워커. OMX(`omx`)·FMS(`pinky`) 채널 dispatch 를 claim 해 실행하고
+#    결과를 Step 에 반영한다. 이게 없으면 주문이 첫 `pick` 에서 멈추고 뒤따르는
+#    `navigate` 가 RMF 로 나가지 못한다.
+if [[ "$START_EXECUTOR" == true ]]; then
+  start "executor worker" \
+    python3 -m control_tower.task_manager.executor_worker_node \
+      --fms-base-url "$FMS_BASE_URL" \
+      --environment simulation \
+      --act-config "$TRIHOUSE_ACT_CONFIG"
+fi
+
+# 6) RMF dispatch worker. Control Tower 가 고른 로봇으로만 작업을 넘긴다.
 if [[ "$START_WORKER" == true ]]; then
   start "rmf dispatch worker" \
     python3 -m control_tower.rmf_adapter.rmf_gateway_worker_node \

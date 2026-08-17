@@ -223,6 +223,61 @@ class RmfDispatchClaimResponse:
 
 
 @dataclass(frozen=True)
+class ExecutorDispatch:
+    """One claimed outbox message plus the step context needed to act on it."""
+
+    message_id: str
+    job_id: int
+    job_step_id: int
+    channel: str
+    message_type: str
+    action_type: str
+    executor_type: str
+    payload: JsonObject = field(default_factory=dict)
+    assigned_device_id: str | None = None
+    assignment_revision: int = 0
+    assignment: JsonObject = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ExecutorDispatch":
+        return cls(**{name: value.get(name) for name in cls.__dataclass_fields__})
+
+
+@dataclass(frozen=True)
+class ExecutorDispatchClaimRequest:
+    worker_id: str
+    channels: tuple[str, ...]
+    limit: int = 10
+
+
+@dataclass(frozen=True)
+class StepOutcomeRequest:
+    """Terminal report for one non-mobile step."""
+
+    outcome: str
+    assignment_revision: int
+    method_code: str
+    actor_device_id: str | None = None
+    reason_code: str | None = None
+    failure_domain: str = "none"
+    detail: str | None = None
+    metrics: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class StepOutcomeResponse:
+    job_step_id: int
+    job_id: int
+    state: str
+    attempt_uuid: str
+    attempt_no: int
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "StepOutcomeResponse":
+        return cls(**{name: value[name] for name in cls.__dataclass_fields__})
+
+
+@dataclass(frozen=True)
 class RmfDispatchAcceptanceRequest:
     accepted: bool
     rmf_task_id: str | None = None
@@ -282,6 +337,23 @@ class JobRunnerGatewayClient(Protocol):
         job_step_id: int,
         request: StepDispatchRequest,
     ) -> StepDispatchResponse: ...
+
+
+class ExecutorGatewayClient(Protocol):
+    """Outbox boundary required by the OMX/FMS executor worker."""
+
+    def claim_executor_dispatches(
+        self,
+        request: ExecutorDispatchClaimRequest,
+    ) -> tuple[ExecutorDispatch, ...]: ...
+
+    def record_executor_outcome(
+        self,
+        job_step_id: int,
+        request: StepOutcomeRequest,
+        *,
+        idempotency_key: str,
+    ) -> StepOutcomeResponse: ...
 
 
 class RmfDispatchGatewayClient(Protocol):
@@ -356,6 +428,37 @@ class FMSGatewayHttpClient:
             _omit_none(asdict(request)),
         )
         return JobAssignmentResponse.from_dict(response)
+
+    def claim_executor_dispatches(
+        self,
+        request: ExecutorDispatchClaimRequest,
+    ) -> tuple[ExecutorDispatch, ...]:
+        response = self._post(
+            "/internal/v1/executor/dispatches/claim",
+            {
+                "worker_id": request.worker_id,
+                "channels": list(request.channels),
+                "limit": request.limit,
+            },
+        )
+        return tuple(
+            ExecutorDispatch.from_dict(dispatch)
+            for dispatch in response["dispatches"]
+        )
+
+    def record_executor_outcome(
+        self,
+        job_step_id: int,
+        request: StepOutcomeRequest,
+        *,
+        idempotency_key: str,
+    ) -> StepOutcomeResponse:
+        response = self._post(
+            f"/internal/v1/job-steps/{job_step_id}/outcome",
+            _omit_none(asdict(request)),
+            headers={"Idempotency-Key": idempotency_key},
+        )
+        return StepOutcomeResponse.from_dict(response)
 
     def claim_rmf_dispatches(
         self,

@@ -76,8 +76,12 @@ from .models import (
     OutboundOrderRequest,
     RmfDispatchAcceptance,
     RmfDispatchAccepted,
+    ExecutorDispatchClaim,
+    ExecutorDispatchesClaimed,
     RmfDispatchClaim,
     RmfDispatchesClaimed,
+    StepOutcome,
+    StepOutcomeView,
     StepDispatch,
     WorkerCompletionRequest,
 )
@@ -90,6 +94,7 @@ from .repositories import (
     InventoryLotNotFound,
     InventoryQuantityConflict,
     JobStepNotDispatchable,
+    StepOutcomeConflict,
     JobStepNotFound,
     JobNotFound,
     ManualAcknowledgementRequired,
@@ -746,6 +751,49 @@ def create_app(
     def claim_rmf_dispatches(claim: RmfDispatchClaim):
         """RMF worker가 처리할 대기 dispatch를 제한 개수만큼 선점한다."""
         return {"dispatches": repo.claim_rmf_dispatches(claim.worker_id, claim.limit)}
+
+    @app.post(
+        "/internal/v1/executor/dispatches/claim",
+        response_model=ExecutorDispatchesClaimed,
+    )
+    def claim_executor_dispatches(claim: ExecutorDispatchClaim):
+        """OMX·FMS 실행기가 처리할 대기 dispatch를 제한 개수만큼 선점한다."""
+        return {
+            "dispatches": repo.claim_executor_dispatches(
+                claim.worker_id, tuple(claim.channels), claim.limit
+            )
+        }
+
+    @app.post(
+        "/internal/v1/job-steps/{job_step_id}/outcome",
+        response_model=StepOutcomeView,
+    )
+    def record_step_outcome(
+        job_step_id: int,
+        outcome: StepOutcome,
+        idempotency_key: str = Header(min_length=1, max_length=160),
+    ):
+        """비이동 실행기의 종료 결과를 Step에 반영한다."""
+        try:
+            return repo.record_executor_outcome(
+                job_step_id, outcome.model_dump(mode="json"), idempotency_key
+            )
+        except JobStepNotFound as error:
+            raise HTTPException(status_code=404, detail="job step not found") from error
+        except ResourceAssignmentConflict as error:
+            raise HTTPException(
+                status_code=409, detail={"code": str(error)}
+            ) from error
+        except StepOutcomeConflict as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": str(error) or "STEP_OUTCOME_CONFLICT"},
+            ) from error
+        except IdempotencyConflict as error:
+            raise HTTPException(
+                status_code=409,
+                detail="idempotency key was already used for another request",
+            ) from error
 
     @app.post(
         "/internal/v1/rmf/dispatches/{message_id}/acceptance",
