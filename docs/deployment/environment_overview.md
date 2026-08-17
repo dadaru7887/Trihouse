@@ -72,13 +72,39 @@ Docker Engine은 호스트마다 하나만 설치한다. Compose 파일을 역�
 표준 스트림 경로는 다음 하나로 고정한다.
 
 ```text
-rtsp://<PC1_LAN_IP>:8554/pinky/<robot_id>/<camera_id>
+rtsp://<PC1_LAN_IP>:8554/<role>/<camera_id>
 ```
 
-예시는 `rtsp://10.0.0.40:8554/pinky/PK_01/front`이다. PC1의 `.env`에는
+예시는 `rtsp://10.0.0.40:8554/pinky/CAM-PK-01`이다. `camera_id`는 전역 유일한
+논리 ID이고 정본은 `config/cameras.yaml` 하나다. PC1의 `.env`에는
 `EDGE_BIND_ADDRESS=<PC1_LAN_IP>`를 두고 PC2의 `.env`에는 동일 URL을
-`VISION_RTSP_URL`로 둔다. 8554/tcp는 PC2와 카메라 송신 호스트에서만 접근하도록
-방화벽 범위를 제한한다.
+`VISION_RTSP_URL`로 둔다. 카메라 정체를 따로 넘기는 `VISION_CAMERA_ID`는 없다 —
+URL의 마지막 segment가 곧 `camera_id`이므로 둘이 어긋날 수 없다. 8554/tcp는
+PC2와 카메라 송신 호스트에서만 접근하도록 방화벽 범위를 제한한다.
+
+### 인가
+
+MediaMTX는 설정을 마운트하지 않으면 익명 publish·read 기본값으로 뜬다. 정책은
+`config/mediamtx.yml`에 있고 Compose가 마운트한다.
+
+- **publish는 출발지 IP 허용목록**이다. 로봇 주소를 **DHCP로 예약**해야 하며,
+  주소가 바뀌면 그 로봇만 조용히 발행에 실패한다.
+- **read는 `viewer` 계정**이다. PC2와 연구용 호스트가 같은 계정을 쓴다.
+
+`.env`에 실제 값을 채운다(`.env.example`의 값은 전부 자리표시자다).
+
+```bash
+MTX_VIEWER_PASS=<열람 계정 비밀번호>
+PINKY_PK_01_IP=<PK_01 예약 주소>
+PINKY_PK_02_IP=<PK_02 예약 주소>
+PC1_PUBLISHER_IP=<USB 카메라를 발행하는 호스트 주소>
+```
+
+읽을 때는 URL에 자격 증명을 싣는다.
+
+```text
+rtsp://viewer:<MTX_VIEWER_PASS>@<PC1_LAN_IP>:8554/pinky/CAM-PK-01
+```
 
 PC1에서 MediaMTX를 시작한다.
 
@@ -96,7 +122,7 @@ Native RTSP/H.264 카메라는 재인코딩 없이 표준 경로로 전달한다
 
 ```bash
 export CAMERA_RTSP_URL='rtsp://CAMERA_IP/native-stream'
-export VISION_RTSP_URL='rtsp://PC1_LAN_IP:8554/pinky/PK_01/front'
+export VISION_RTSP_URL='rtsp://viewer:MTX_VIEWER_PASS@PC1_LAN_IP:8554/pinky/CAM-PK-01'
 ffmpeg -nostdin -rtsp_transport tcp -i "$CAMERA_RTSP_URL" \
   -map 0:v:0 -an -c:v copy -f rtsp -rtsp_transport tcp "$VISION_RTSP_URL"
 ```
@@ -114,7 +140,7 @@ MJPEG/YUYV만 있으면 RTX 4060의 `VideoEncoder.NVENC`를 사용한다. CPU fa
 PC2에서는 스트림이 보이는지 먼저 확인하고 AI Compose를 시작한다.
 
 ```bash
-export VISION_RTSP_URL='rtsp://PC1_LAN_IP:8554/pinky/PK_01/front'
+export VISION_RTSP_URL='rtsp://viewer:MTX_VIEWER_PASS@PC1_LAN_IP:8554/pinky/CAM-PK-01'
 ffprobe -v error -rtsp_transport tcp \
   -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate \
   -of default=noprint_wrappers=1 "$VISION_RTSP_URL"

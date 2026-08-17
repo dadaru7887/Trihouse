@@ -21,7 +21,8 @@ RTX 4060 영상 수신·저장과 RTX 5080 추론을 역할별로 분리한다. 
 모든 카메라는 최종적으로 다음 RTSP 경로를 제공한다.
 
 ```text
-rtsp://<PC1_LAN_IP>:8554/pinky/<robot_id>/<camera_id>
+rtsp://<PC1_LAN_IP>:8554/<role>/<camera_id>
+예) pinky/CAM-PK-01, omx/CAM-OMX-01-WRIST, fixed/CAM-FIXED-01
 ```
 
 - Native RTSP/H.264: PC1 MediaMTX로 stream-copy한다.
@@ -42,7 +43,7 @@ from vision_system.stream_hub.ingress import (
 )
 
 config = UsbIngressConfig(
-    identity=StreamIdentity(robot_id='PK_01', camera_id='front'),
+    identity=StreamIdentity(role='fixed', camera_id='CAM-FIXED-01'),
     device='/dev/video0',
     mediamtx_base_url='rtsp://PC1_LAN_IP:8554',
     input_format=UsbVideoFormat.MJPEG,

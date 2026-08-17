@@ -87,9 +87,12 @@ Pinky의 제동거리·통로·배터리 로그를 측정한 뒤 한 항목씩 �
 - 사람 쓰러짐 감지(SR_52)는 기술 조사·데이터·수용 기준을 정하기 전까지 계획 단계다. 이 문서의
   현재 코드/테스트를 최종 쓰러짐 감지 구현으로 사용하지 않는다.
 - `vision_system/stream_hub/ingress.py`는 USB 카메라 입력을 PC1 MediaMTX의
-  `pinky/<robot_id>/<camera_id>` 경로로 만드는 FFmpeg argv를 소유한다. 카메라가 H.264를
+  `<role>/<camera_id>` 경로로 만드는 FFmpeg argv를 소유한다. `camera_id`의 정본은
+  `config/cameras.yaml`이고, `StreamIdentity`가 만드는 경로가 그 정본과 같은지는
+  `test_stream_ingress.py`가 대조한다. 카메라가 H.264를
   제공하면 `COPY`, 그 외에는 `NVENC` 또는 `LIBX264`를 명시한다.
-- `vision_system/inference_common/stream.py`는 PC2의 `VISION_RTSP_URL`을 검증하고 모델이
+- `vision_system/inference_common/stream.py`는 PC2의 `VISION_RTSP_URL`을 검증하고 그 마지막 path segment에서
+  `camera_id`를 파생한다(별도 `VISION_CAMERA_ID`는 없다). 모델이
   읽을 BGR24 raw-frame FFmpeg argv를 만든다. 모델 worker는 `frame_size_bytes` 단위로 읽되
   처리 지연 시 과거 frame queue를 끝까지 처리하지 말고 latest-frame 정책을 적용한다.
 

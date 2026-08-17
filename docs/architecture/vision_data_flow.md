@@ -11,14 +11,36 @@ USB H.264 ── FFmpeg stream copy ─────────┤
 USB MJPEG/YUYV ── FFmpeg H.264 encode ───┘
                     │
                     ▼
-PC1 MediaMTX: rtsp://PC1:8554/pinky/<robot_id>/<camera_id>
-  ├─ recording/QR
+PC1 MediaMTX 1.19.3: rtsp://PC1:8554/<role>/<camera_id>
+  예) pinky/CAM-PK-01, omx/CAM-OMX-01-WRIST, fixed/CAM-FIXED-01
+  ├─ recording/QR ── 학습 코퍼스(/recordings/<role>/<camera_id>/)
   └─ PC2 YOLO/VLM inference ── observation ── FMS Gateway/Task Manager
 ```
 
 카메라 종류는 PC1 MediaMTX 앞의 ingress adapter에서만 구분한다. Native H.264는
 재인코딩하지 않고 전달하고, MJPEG/YUYV만 카메라가 연결된 호스트에서 한 번 H.264로
 인코딩한다. PC2는 항상 위 canonical RTSP URL만 소비한다.
+
+## 경로 규약
+
+경로는 `<역할 접두사>/<camera_id>` 두 segment 다. `camera_id` 는 `CAM-PK-01`
+처럼 전역 유일한 논리 ID 이고, `config/cameras.yaml` 이 그 정본이다.
+
+`pinky/<robot_id>/<camera_id>` 세 segment 규약은 폐기됐다. `StreamHealth.msg` 가
+`camera_id` 만 싣고 `robot_id` 는 싣지 않기 때문에, 세 segment 아래에서는 노드의
+`camera_id` 가 `front` 같은 역할 이름이 되어 PK_01 과 PK_02 의 건강 메시지를
+구분할 수 없었다. 마지막 segment 를 전역 유일한 ID 로 두면 그 구분이 공짜로
+따라오고, Control Tower 가 이미 쓰던 ID 와도 같아서 대응표가 필요 없다.
+
+## 인가
+
+- **publish 는 출발지 IP 로 막는다.** RTSP 는 자격 증명을 URL 안에만 실을 수
+  있어서, 계정으로 막으면 비밀번호가 로봇의 package-share YAML 과 `ps` 출력에
+  노출된다. 대신 로봇 주소를 DHCP 로 예약해야 하고 IP 위장은 막지 못한다.
+- **read 는 `viewer` 계정으로 막는다.** PC2 는 이미 URL 을 환경변수로 받으므로
+  비밀번호를 붙여도 코드가 바뀌지 않는다. 연구용 호스트도 같은 계정을 쓴다.
+- 정책은 `config/mediamtx.yml` 에 있고 Compose 가 마운트한다. 마운트하지 않으면
+  MediaMTX 는 익명 publish/read 기본값으로 뜬다.
 
 ## 책임
 

@@ -56,14 +56,35 @@ OV5647은 `/dev/video0` UVC 장치로 가정하지 않는다. 2026-08-06 실측�
 
 | 항목 | 초기값/규칙 |
 |---|---|
-| `camera_id` | 1호기 `pinky_1`, 2호기 `pinky_2` |
-| `device` | 실측한 `/dev/v4l/by-id/...-video-index0` |
-| `publish_uri` | `rtsp://192.168.0.9:8554/<camera_id>` |
+| `camera_id` | 1호기 `CAM-PK-01`, 2호기 `CAM-PK-02` (정본: `config/cameras.yaml`) |
+| `camera_index` | libcamera 카메라 번호. 1호기 `0` |
+| `publish_uri` | `rtsp://192.168.0.9:8554/<역할 접두사>/<camera_id>` |
 | profile | `1280x720`, 10~15 FPS, 1.5~3 Mbps |
 | keyframe | 1초 |
 | transport | 초기 RTSP/TCP, 반복 손실 시 같은 ID로 SRT 검토 |
 | queue | 오래된 frame 폐기, RAM 최대 3 frame 후보 |
 | calibration | `calibration/<camera_id>/{intrinsics.yaml,extrinsics.yaml}` 후보 |
+
+### `camera_index`를 쓰는 이유 (`/dev/v4l/by-id/...`가 아니라)
+
+이전 판에는 `device`를 실측한 `/dev/v4l/by-id/...-video-index0`로 두라는 규칙이
+있었다. 그 규칙은 UVC 캡처 경로를 전제한 것이었는데, 실제로 구현된 경로는 그쪽이
+아니다. 이 패키지는 `rpicam-vid`를 감독하고, 그 `--camera N`은 `/dev/videoN`
+번호가 아니라 **libcamera 인덱스**다. `/dev/video*` 재부팅 재번호 문제는 libcamera
+인덱스에 적용되지 않으므로, `by-id` 경로를 요구할 근거가 없다. 잘못된 쪽은 코드가
+아니라 문서였다.
+
+`publish_uri`의 마지막 segment는 반드시 `camera_id`와 같아야 한다.
+`command_builder.StreamConfig`가 부팅 시점에 이를 강제하므로, 둘 중 하나만
+고치면 노드가 뜨지 않는다.
+
+읽기는 `viewer` 계정 인증이다. 다른 호스트에서 확인할 때는 자격 증명을 URI에
+싣는다.
+
+```bash
+./scripts/verify_rtsp.sh \
+  "rtsp://viewer:<MTX_VIEWER_PASS>@192.168.0.9:8554/pinky/CAM-PK-01" 600
+```
 
 ## 10. 빌드와 실행
 
@@ -93,7 +114,7 @@ RTX 4060 서버에서 10분 검증:
 
 ```bash
 $(ros2 pkg prefix --share trihouse_pinky_vision)/scripts/verify_rtsp.sh \
-  rtsp://192.168.0.9:8554/pinky_1 600
+  rtsp://192.168.0.9:8554/pinky/CAM-PK-01 600
 ```
 
 ## 11. 구현 순서와 완료 조건
@@ -113,7 +134,7 @@ $(ros2 pkg prefix --share trihouse_pinky_vision)/scripts/verify_rtsp.sh \
 - OV5647 CSI camera, index 0
 - `rpicam-apps v1.5.3`, libav enabled, `libx264`
 - 1280x720, 15 FPS, 2 Mbps, IDR 15, baseline, `hflip+vflip`
-- `rtsp://192.168.0.9:8554/pinky_1`, MediaMTX v1.19.3, RTSP/TCP
+- `rtsp://192.168.0.9:8554/pinky/CAM-PK-01`, MediaMTX v1.19.3, RTSP/TCP
 - 599.93초 동안 8,997 frame, FFmpeg `-xerror` 종료 코드 0
 - Pinky 부하: `rpicam-vid` CPU 24.6%, FFmpeg CPU 0.8%, 온도 48.5°C
 - Wi-Fi power save는 `on`으로 확인했으며 운영 계획은 `off`; ROS 노드가 이를 변경하지 않는다.
@@ -156,7 +177,7 @@ gst-launch-1.0 -v \
   v4l2src device=DEVICE_PATH \
   ! video/x-h264,width=1280,height=720,framerate=15/1 \
   ! h264parse config-interval=1 \
-  ! rtspclientsink location=rtsp://192.168.0.9:8554/pinky_1 protocols=tcp
+  ! rtspclientsink location=rtsp://192.168.0.9:8554/pinky/CAM-PK-01 protocols=tcp
 ```
 
 카메라 control이 지원될 때만 다음과 같이 적용한다.
@@ -175,7 +196,7 @@ gst-launch-1.0 -v \
   ! v4l2h264enc extra-controls="controls,video_bitrate=2000000,h264_i_frame_period=15,repeat_sequence_header=1" \
   ! video/x-h264,level=4 \
   ! h264parse config-interval=1 \
-  ! rtspclientsink location=rtsp://192.168.0.9:8554/pinky_1 protocols=tcp
+  ! rtspclientsink location=rtsp://192.168.0.9:8554/pinky/CAM-PK-01 protocols=tcp
 ```
 
 ### Step 2-C — software H.264 송신
@@ -189,7 +210,7 @@ gst-launch-1.0 -v \
   ! x264enc tune=zerolatency speed-preset=veryfast bitrate=2000 key-int-max=15 bframes=0 \
   ! video/x-h264,profile=baseline \
   ! h264parse config-interval=1 \
-  ! rtspclientsink location=rtsp://192.168.0.9:8554/pinky_1 protocols=tcp
+  ! rtspclientsink location=rtsp://192.168.0.9:8554/pinky/CAM-PK-01 protocols=tcp
 ```
 
 MJPG가 없고 YUYV만 있으면 source caps와 변환 구간을 실제 `--list-formats-ext` 결과에 맞춘다. 추측으로 pipeline을 고정하지 않는다.
@@ -199,8 +220,8 @@ MJPG가 없고 YUYV만 있으면 source caps와 변환 구간을 실제 `--list-
 MediaMTX가 먼저 실행 중이어야 한다. 1호기 예시는 다음과 같다.
 
 ```bash
-ffprobe -rtsp_transport tcp rtsp://192.168.0.9:8554/pinky_1
-ffmpeg -rtsp_transport tcp -i rtsp://192.168.0.9:8554/pinky_1 -t 60 -f null -
+ffprobe -rtsp_transport tcp rtsp://192.168.0.9:8554/pinky/CAM-PK-01
+ffmpeg -rtsp_transport tcp -i rtsp://192.168.0.9:8554/pinky/CAM-PK-01 -t 60 -f null -
 ```
 
 화면 확인이 필요하면 `ffplay -rtsp_transport tcp ...`를 사용하되 검증 근거는 `ffprobe/ffmpeg`의 codec, resolution, FPS, decode error와 timestamp로 남긴다.

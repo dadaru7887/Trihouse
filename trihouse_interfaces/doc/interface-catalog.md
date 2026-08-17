@@ -65,4 +65,5 @@ Pinky LED는 기존 `/set_led` (`pinky_interfaces/srv/SetLed`)를 그대로 사�
 | NDJSON `robot_status`, `device_event` | gateway → Control Tower | `RobotStatus`, `RobotHealth`, `SafetyState` |
 | NDJSON `task_feedback`, `task_result` | gateway → Control Tower | `TaskEvent` |
 | NDJSON detection messages | Control Tower → vision bridge | camera-frame detection Topics |
-| RTSP `/pinky_1`, `/pinky_2` | Pinky → MediaMTX | ROS 영상 Topic 없음 |
+| RTSP `/pinky/CAM-PK-01`, `/pinky/CAM-PK-02` | Pinky → MediaMTX 1.19.3 | ROS 영상 Topic 없음. `StreamHealth.camera_id`가 경로의 마지막 segment와 같다 |
+| RTSP `/omx/CAM-OMX-01-WRIST`, `/fixed/CAM-FIXED-01` | PC1 USB ingress → MediaMTX | 발행은 IP 허용목록, 열람은 `viewer` 계정 |

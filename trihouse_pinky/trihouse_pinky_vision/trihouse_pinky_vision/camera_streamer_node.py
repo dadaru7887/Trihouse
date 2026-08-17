@@ -164,6 +164,9 @@ class CameraStreamerNode(Node):
         detail = [health.reason]
         if exit_reason:
             detail.append(exit_reason)
+        if health.timestamp_regressed:
+            # 단조성 위반은 상태를 바꾸지 않는다. 조사할 단서로만 실어 보낸다.
+            detail.append('timestamp_regression')
         if self._bitrate.unavailable_reason:
             detail.extend(['bitrate_unavailable', self._bitrate.unavailable_reason])
         message.detail = ':'.join(detail)

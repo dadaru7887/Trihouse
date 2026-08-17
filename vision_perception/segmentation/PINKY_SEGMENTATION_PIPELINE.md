@@ -5,19 +5,42 @@ GPU 학습까지 정리한 문서입니다.
 
 ## 1. 전체 구조
 
+연구 경로와 운영 경로는 **같은 RTSP 스트림 하나**를 봅니다.
+
 ```
-Pinky (라즈베리파이)                    GPU PC (호스트)
-┌─────────────────────────┐           ┌───────────────────────────────────┐
-│ pinky_camera_server.py  │  MJPEG    │ docker: trihouse_train 컨테이너    │
-│  pinkylib.Camera로 촬영 │ ────────▶ │  (trihouse:ver2 이미지, GPU 할당)  │
-│  :8080/stream.mjpg 송출 │  (HTTP)   │  ├─ train.py / train.sh           │
-└─────────────────────────┘           │  └─ inference_stream.py / infer.sh│
-                                       └───────────────────────────────────┘
+Pinky (라즈베리파이)          PC1 (RTX 4060)              GPU PC (호스트)
+┌──────────────────┐  RTSP   ┌──────────────────┐  RTSP  ┌─────────────────────┐
+│ camera_streamer  │ ──────▶ │ MediaMTX 1.19.3  │ ─────▶ │ trihouse_train 컨테이너│
+│  rpicam-vid      │  H.264  │ /pinky/CAM-PK-01 │ viewer │  ├─ train.py         │
+│  + ffmpeg        │         │  + 녹화(fmp4)     │  계정  │  └─ inference_stream │
+└──────────────────┘         └────────┬─────────┘        └─────────────────────┘
+                                      │ 같은 스트림
+                                      ▼
+                             PC2 (RTX 5080) 운영 추론
 ```
 
-나중에 MediaMTX/RTSP 중계로 옮길 때도 `inference_stream.py`는 코드 수정이
-필요 없습니다 — `--source`를 `rtsp://...` URL로 바꾸기만 하면 됩니다
-(`cv2.VideoCapture`가 http/rtsp를 동일하게 받아들이기 때문).
+### 왜 MJPEG 직송을 쓰지 않는가
+
+학습에 필요한 것은 실시간 스트림이 아니라 **운영이 보는 것과 같은 픽셀**입니다.
+예전 MJPEG 경로와 운영 RTSP 경로는 픽셀이 실제로 다릅니다.
+
+|          | 연구 (MJPEG, 폐기) | 운영 (RTSP) |
+|---|---|---|
+| 코덱      | JPEG, 프레임 독립 | H.264 baseline, `-intra 15` |
+| 화질      | `cv2.imencode(".jpg", frame)` 기본값(품질 95) | 2000 kbps |
+| 프레임률  | 서버 루프 속도대로 무제한 | 15 fps |
+| 해상도    | 미지정, `pinklib` 반환값 그대로 | 1280x720 |
+
+세그멘테이션은 경계에 민감한데, H.264 baseline 2 Mbps 는 deblocking 과 저비트레이트
+블록 아티팩트로 바로 그 경계를 뭉갭니다. MJPEG 은 그런 열화를 만들지 않습니다.
+운영 추론은 여기에 더해 `-vf fps=15,scale=1280:720 -pix_fmt bgr24` 를 한 번 더
+지나갑니다(`vision_system/inference_common/stream.py`). 학습 코퍼스가 같은
+인코딩·디코딩 사슬을 지나지 않으면, 학습 때 보지 못한 열화를 배치 후에 처음
+만나게 됩니다.
+
+전환 비용은 사실상 없습니다. `inference_stream.py` 는 `--source` 를
+`cv2.VideoCapture` 로 넘기고, 이 클래스는 `rtsp://` 를 `http://` 와 똑같이 받습니다.
+코드는 한 줄도 바뀌지 않습니다.
 
 ## 2. 네트워크
 
@@ -108,7 +131,51 @@ cd /home/user/Trihouse_segmentation/Trihouse
   고정되어 있음 — 상대경로로 두면 ultralytics 내부 기본값과 겹쳐서
   `runs/segment/runs/segment/...`처럼 중첩 저장되는 버그가 있었어서 이렇게 고쳐둠.
 
-## 5. Pinky 카메라 스트리밍 (`pinky_camera_server.py`)
+## 5. 카메라 스트림 받기
+
+### 5.1 기본: PC1 MediaMTX 의 RTSP (연구·운영 공통)
+
+Pinky 의 `camera_streamer` 노드가 `pinky/CAM-PK-01` 경로로 발행하고 있으면 그대로
+읽으면 됩니다. **읽기는 계정 인증**이므로 URL 에 `viewer` 자격 증명이 필요합니다
+(비밀번호는 PC1 `.env` 의 `MTX_VIEWER_PASS`).
+
+```bash
+rtsp://viewer:<MTX_VIEWER_PASS>@<PC1_LAN_IP>:8554/pinky/CAM-PK-01
+```
+
+랩 세션처럼 PC1 전체 스택이 필요 없을 때는 **MediaMTX 만** 띄우면 됩니다.
+`compose.edge_4060.yaml` 의 `mediamtx` 서비스에는 `depends_on` 이 없어서 단독 기동이
+가능합니다.
+
+```bash
+docker compose -f compose.edge_4060.yaml up mediamtx
+```
+
+먼저 스트림이 살아 있는지 확인:
+```bash
+ffprobe -rtsp_transport tcp \
+  "rtsp://viewer:<MTX_VIEWER_PASS>@<PC1_LAN_IP>:8554/pinky/CAM-PK-01"
+```
+
+### 5.2 학습 프레임은 MediaMTX 녹화본에서 뽑는다
+
+MediaMTX 가 발행된 스트림을 그대로 녹화하고 있습니다(fmp4, 60초 분할, 168시간 보존).
+이 녹화본은 운영 추론이 보는 것과 **같은 인코딩 사슬을 지난 프레임**이므로, 학습
+코퍼스는 여기서 만듭니다. 별도 수집 장치가 필요 없습니다.
+
+```bash
+# PC1: TRIHOUSE_VIDEO_DIR 아래에 경로별로 쌓입니다
+ls ${TRIHOUSE_VIDEO_DIR:-./runtime/video}/pinky/CAM-PK-01/
+
+# 프레임 추출 (1초에 1장 예시)
+ffmpeg -i <녹화본>.mp4 -vf fps=1 frames/CAM-PK-01_%06d.png
+```
+
+### 5.3 랩 폴백: `pinky_camera_server.py` (MJPEG)
+
+**오프라인 랩 전용입니다. 여기서 나온 프레임은 학습 세트에 넣지 마십시오.**
+§1 의 표대로 운영과 픽셀이 다르기 때문입니다. PC1 에 닿을 수 없는 자리에서
+카메라 자체가 살아 있는지 눈으로 확인하는 용도로만 씁니다.
 
 **Pinky에서** 실행 (Jupyter `http://<Pinky IP>:8888` 접속 → 새 파일/터미널):
 ```bash
@@ -119,6 +186,7 @@ python3 pinky_camera_server.py
 - 화면 색이 반전되어 보이면 `--swap-rgb` 옵션 추가.
 - `pinkylib.Camera`가 물리 카메라를 쓰는 라이브러리라 **반드시 Pinky 위에서만** 실행
   가능 (GPU PC에서 실행하면 `ModuleNotFoundError: No module named 'pinkylib'`).
+- 자동으로 실행되는 곳은 없습니다. 사람이 직접 띄울 때만 돕니다.
 
 ## 6. 실시간 추론 (`inference_stream.py` / `infer.sh`)
 
@@ -127,7 +195,7 @@ python3 pinky_camera_server.py
 cd /home/user/Trihouse_segmentation/Trihouse
 ./infer.sh \
   --model "runs/segment/20260805_181217_yoloe-26s-seg_aug/weights/best.pt" \
-  --source http://<Pinky IP>:8080/stream.mjpg
+  --source "rtsp://viewer:<MTX_VIEWER_PASS>@<PC1_LAN_IP>:8554/pinky/CAM-PK-01"
 ```
 - 화면 없이 콘솔 로그만 보려면 `--no-show` 추가 (§3의 X11 설정 전에도 이걸로 파이프라인
   동작만 먼저 검증 가능).

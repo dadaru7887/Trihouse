@@ -12,8 +12,20 @@ _CAMERA_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$')
 
 @dataclass(frozen=True)
 class InferenceStreamConfig:
+    """PC2 는 스트림 하나만 소비하고, 그 정체는 URL 에서 파생한다.
+
+    `camera_id` 를 별도 환경변수로 받지 않는 이유는 그것이 중복 정보이기
+    때문이다. 경로 규약이 `<역할>/<camera_id>` 로 정해진 뒤로 URL 은 이미
+    논리 ID 를 싣고 있고, 같은 사실을 두 곳에서 받으면 둘이 어긋날 수 있다.
+    `front` 와 `pinky_1` 이 갈라졌던 방식이 정확히 그것이었다.
+
+    필드가 아니라 property 로 파생하는 것도 의도다. 필드로 두면 `from_env`
+    바깥에서 만든 객체가 여전히 어긋난 값을 들 수 있다. 파생하면 어긋난 값을
+    표현할 방법 자체가 없어진다. 이 규칙은 발행자 쪽 규칙(`publish_uri` 의
+    마지막 segment 가 곧 `camera_id`)과 같은 규칙이다.
+    """
+
     input_uri: str
-    camera_id: str
     width: int = 1280
     height: int = 720
     inference_fps: int = 15
@@ -23,8 +35,11 @@ class InferenceStreamConfig:
         parsed = urlparse(self.input_uri)
         if parsed.scheme != 'rtsp' or not parsed.hostname or not parsed.path.strip('/'):
             raise ValueError('input_uri must be an RTSP stream URI')
-        if not _CAMERA_ID.fullmatch(self.camera_id):
-            raise ValueError('camera_id must be a safe identifier')
+        if not _CAMERA_ID.fullmatch(_final_path_segment(self.input_uri)):
+            raise ValueError(
+                'input_uri path must end with a safe camera identifier, '
+                'as in rtsp://<host>:8554/pinky/CAM-PK-01'
+            )
         if self.width <= 0 or self.height <= 0 or self.inference_fps <= 0:
             raise ValueError('frame dimensions and inference_fps must be positive')
         if not self.ffmpeg_executable:
@@ -38,7 +53,6 @@ class InferenceStreamConfig:
             raise ValueError('VISION_RTSP_URL is required')
         return cls(
             input_uri=input_uri,
-            camera_id=values.get('VISION_CAMERA_ID', 'front').strip(),
             width=_positive_int(values.get('VISION_FRAME_WIDTH', '1280'), 'VISION_FRAME_WIDTH'),
             height=_positive_int(values.get('VISION_FRAME_HEIGHT', '720'), 'VISION_FRAME_HEIGHT'),
             inference_fps=_positive_int(values.get('VISION_INFERENCE_FPS', '15'), 'VISION_INFERENCE_FPS'),
@@ -46,8 +60,20 @@ class InferenceStreamConfig:
         )
 
     @property
+    def camera_id(self) -> str:
+        """스트림 경로의 마지막 segment. 발행자가 쓰는 논리 ID 와 같은 값이다."""
+        return _final_path_segment(self.input_uri)
+
+    @property
     def frame_size_bytes(self) -> int:
         return self.width * self.height * 3
+
+
+def _final_path_segment(uri: str) -> str:
+    # `urlparse` 를 거치므로 `viewer:pass@host` 형태의 자격 증명은 netloc 에
+    # 남고 경로에는 섞이지 않는다. read 가 계정으로 막힌 뒤로 PC2 의 URL 은
+    # 실제로 자격 증명을 달고 온다.
+    return urlparse(uri).path.rstrip('/').rsplit('/', 1)[-1]
 
 
 def _positive_int(value: str, name: str) -> int:

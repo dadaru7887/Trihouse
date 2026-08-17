@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-uri="${1:-rtsp://192.168.0.9:8554/pinky_1}"
+# 기본값은 PK_01 의 등록 경로다. MediaMTX 가 read 를 계정으로 막고 있으므로
+# 다른 호스트에서 확인할 때는 자격 증명을 URI 에 실어 넘겨야 한다:
+#   ./verify_rtsp.sh "rtsp://viewer:$MTX_VIEWER_PASS@<PC1>:8554/pinky/CAM-PK-01" 600
+uri="${1:-rtsp://192.168.0.9:8554/pinky/CAM-PK-01}"
 duration="${2:-600}"
 
 if [[ "$uri" != rtsp://* ]]; then

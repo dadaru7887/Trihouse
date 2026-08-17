@@ -211,7 +211,7 @@ def test_publishes_stream_health_from_supervisor_progress(ros_context):
 
         assert messages
         message = messages[-1]
-        assert message.camera_id == 'pinky_1'
+        assert message.camera_id == 'CAM-PK-01'
         assert message.state == StreamHealth.STATE_HEALTHY
         assert message.fps == pytest.approx(15.0)
         assert message.detail == 'healthy:bitrate_unavailable:warmup'

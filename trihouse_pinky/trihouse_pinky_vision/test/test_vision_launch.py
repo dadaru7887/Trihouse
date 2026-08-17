@@ -18,8 +18,8 @@ def test_launch_publishes_healthy_state_with_hardware_free_processes(tmp_path):
     config.write_text(
         f"""camera_streamer:
   ros__parameters:
-    camera_id: pinky_1
-    publish_uri: rtsp://192.168.0.9:8554/pinky_1
+    camera_id: CAM-PK-01
+    publish_uri: rtsp://192.168.0.9:8554/pinky/CAM-PK-01
     health_publish_hz: 20.0
     healthy_after_sec: 0.0
     rpicam_executable: {FIXTURES / "fake_camera.py"}

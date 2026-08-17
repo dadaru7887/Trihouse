@@ -23,17 +23,29 @@ class VideoEncoder(StrEnum):
 
 @dataclass(frozen=True)
 class StreamIdentity:
-    robot_id: str
+    """`<role>/<camera_id>` 두 segment 경로. 세 segment 규약을 대체한다.
+
+    `robot_id` 를 중간 segment 로 두던 규약을 버린 이유는 `StreamHealth.msg` 가
+    `camera_id` 만 싣고 `robot_id` 는 싣지 않기 때문이다. 세 segment 아래에서는
+    노드의 `camera_id` 가 `front` 같은 역할 이름이 되어 PK_01 과 PK_02 의 건강
+    메시지를 구분할 수 없게 된다. `camera_id` 를 마지막 segment 로 두면 그 값이
+    전역 유일해서 구분이 공짜로 따라온다.
+
+    `role` 은 `config/cameras.yaml` 의 역할에 대응하는 경로 접두사(`pinky`,
+    `omx`, `fixed`)다. MediaMTX 는 이 접두사 단위로 publish 권한을 나눈다.
+    """
+
+    role: str
     camera_id: str
 
     def __post_init__(self) -> None:
-        for name, value in (('robot_id', self.robot_id), ('camera_id', self.camera_id)):
+        for name, value in (('role', self.role), ('camera_id', self.camera_id)):
             if not _IDENTIFIER.fullmatch(value):
                 raise ValueError(f'{name} must be a safe stream identifier')
 
     @property
     def path(self) -> str:
-        return f'pinky/{self.robot_id}/{self.camera_id}'
+        return f'{self.role}/{self.camera_id}'
 
     def publish_url(self, mediamtx_base_url: str) -> str:
         parsed = urlparse(mediamtx_base_url)

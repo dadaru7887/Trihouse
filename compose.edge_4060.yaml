@@ -4,24 +4,36 @@ name: trihouse_edge_4060
 services:
   mediamtx:
     # Pin the media server so recording behavior is reproducible across hosts.
-    image: bluenviron/mediamtx:1.18.2
+    # 1.19.3 is the version the 2026-08-06 physical validation ran against
+    # (599.93 s, 8,997 frames). Deploying another version voids that evidence.
+    image: bluenviron/mediamtx:1.19.3
     restart: unless-stopped
     environment:
       TZ: Asia/Seoul
-      MTX_LOGLEVEL: info
-      # Start with TCP only: easier firewalling and deterministic cross-host validation.
-      MTX_RTSPTRANSPORTS: tcp
-      MTX_API: "yes"
-      MTX_APIADDRESS: ":9997"
-      MTX_METRICS: "yes"
-      MTX_METRICSADDRESS: ":9998"
-      MTX_PLAYBACK: "yes"
-      MTX_PLAYBACKADDRESS: ":9996"
-      MTX_RECORD: "yes"
-      MTX_RECORDPATH: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
-      MTX_RECORDFORMAT: fmp4
-      MTX_RECORDSEGMENTDURATION: ${TRIHOUSE_RECORD_SEGMENT_DURATION:-60s}
-      MTX_RECORDDELETEAFTER: ${TRIHOUSE_RECORD_DELETE_AFTER:-168h}
+
+      # Authorization, recording, and path policy all live in config/mediamtx.yml,
+      # which is mounted below. Do not reintroduce MTX_RECORD*/MTX_RTSPTRANSPORTS
+      # here: a mounted file plus scattered overrides makes the effective policy
+      # unreadable, and the security-relevant half would be the invisible half.
+      #
+      # Only deployment-specific values are injected, because MediaMTX 1.19.3 does
+      # NOT expand ${VAR} inside its configuration file. Written there, the viewer
+      # password would silently become the literal string "${MTX_VIEWER_PASS}".
+      #
+      # The indices below are load-bearing: they address entries by position in
+      # config/mediamtx.yml's authInternalUsers list. Reordering that list without
+      # updating these lines silently grants a robot another robot's path.
+      MTX_AUTHINTERNALUSERS_0_IPS: ${PINKY_PK_01_IP:?Set PINKY_PK_01_IP to the DHCP-reserved PK_01 address}
+      MTX_AUTHINTERNALUSERS_1_IPS: ${PINKY_PK_02_IP:?Set PINKY_PK_02_IP to the DHCP-reserved PK_02 address}
+      MTX_AUTHINTERNALUSERS_2_IPS: ${PC1_PUBLISHER_IP:?Set PC1_PUBLISHER_IP to the host publishing USB cameras}
+      MTX_AUTHINTERNALUSERS_3_IPS: ${PC1_PUBLISHER_IP}
+      MTX_AUTHINTERNALUSERS_4_IPS: ${PC1_PUBLISHER_IP}
+      MTX_AUTHINTERNALUSERS_5_IPS: ${PC1_PUBLISHER_IP}
+      MTX_AUTHINTERNALUSERS_6_PASS: ${MTX_VIEWER_PASS:?Set MTX_VIEWER_PASS to the viewer account password}
+
+      # Retention stays tunable from .env without editing the tracked policy file.
+      MTX_PATHDEFAULTS_RECORDSEGMENTDURATION: ${TRIHOUSE_RECORD_SEGMENT_DURATION:-60s}
+      MTX_PATHDEFAULTS_RECORDDELETEAFTER: ${TRIHOUSE_RECORD_DELETE_AFTER:-168h}
     ports:
       # Set EDGE_BIND_ADDRESS to the 4060 LAN address when Pinky publishes remotely.
       - "${EDGE_BIND_ADDRESS:-127.0.0.1}:8554:8554/tcp"
@@ -32,6 +44,9 @@ services:
       - "127.0.0.1:9997:9997/tcp"
       - "127.0.0.1:9998:9998/tcp"
     volumes:
+      # Authorization, recording, and path policy. Mounted read-only: MediaMTX
+      # never needs to write it, and the API can otherwise persist config changes.
+      - "./config/mediamtx.yml:/mediamtx.yml:ro"
       # Use a large persistent server disk by overriding TRIHOUSE_VIDEO_DIR.
       - "${TRIHOUSE_VIDEO_DIR:-./runtime/video}:/recordings"
     networks:
@@ -45,7 +60,9 @@ services:
     environment:
       TZ: Asia/Seoul
       FMS_GATEWAY_URL: http://fms_gateway:8080
-      RTSP_BASE_URL: rtsp://mediamtx:8554
+      # Reading is account-authenticated now, so the base URL carries the viewer
+      # credential. This worker only reads; it must never be granted publish.
+      RTSP_BASE_URL: rtsp://viewer:${MTX_VIEWER_PASS:?Set MTX_VIEWER_PASS}@mediamtx:8554
     depends_on:
       - mediamtx
     networks:
@@ -59,8 +76,16 @@ services:
     environment:
       TZ: Asia/Seoul
       FMS_GATEWAY_URL: http://fms_gateway:8080
+      # OPEN ITEM: the API is authorized for loopback only (config/mediamtx.yml
+      # entry [7]), but this container reaches mediamtx over the compose bridge,
+      # so its source address is not 127.0.0.1 and the API will refuse it. This
+      # profile is not enabled yet, so nothing is broken today. Before enabling
+      # it, decide deliberately between granting an `api` permission to the
+      # compose subnet and reading the recording tree from disk instead. Do not
+      # widen the loopback rule by reflex — the API can rewrite configuration.
       MEDIAMTX_API_URL: http://mediamtx:9997
-      MEDIAMTX_PLAYBACK_URL: http://mediamtx:9996
+      # Playback is a viewer-account action, same as read.
+      MEDIAMTX_PLAYBACK_URL: http://viewer:${MTX_VIEWER_PASS:?Set MTX_VIEWER_PASS}@mediamtx:9996
     volumes:
       - "${TRIHOUSE_VIDEO_DIR:-./runtime/video}:/recordings"
     depends_on:

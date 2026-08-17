@@ -28,7 +28,7 @@ def run_script(tmp_path: Path, ffmpeg_exit=0):
     environment['PATH'] = f'{bin_dir}:{environment["PATH"]}'
     environment['CAPTURE_DIR'] = str(capture_dir)
     result = subprocess.run(
-        [str(SCRIPT), 'rtsp://192.168.0.9:8554/pinky_1', '600'],
+        [str(SCRIPT), 'rtsp://192.168.0.9:8554/pinky/CAM-PK-01', '600'],
         text=True,
         capture_output=True,
         env=environment,
@@ -44,7 +44,7 @@ def test_forwards_uri_and_duration_to_probe_and_decode_without_output_file(tmp_p
     probe_args = (capture_dir / 'ffprobe.args').read_text(encoding='utf-8')
     ffmpeg_args = (capture_dir / 'ffmpeg.args').read_text(encoding='utf-8')
     assert '-rtsp_transport tcp' in probe_args
-    assert probe_args.endswith('rtsp://192.168.0.9:8554/pinky_1\n')
+    assert probe_args.endswith('rtsp://192.168.0.9:8554/pinky/CAM-PK-01\n')
     assert '-xerror' in ffmpeg_args
     assert '-t 600 -f null -' in ffmpeg_args
 
@@ -57,7 +57,7 @@ def test_propagates_decoder_failure(tmp_path):
 
 def test_rejects_non_rtsp_uri_before_running_tools(tmp_path):
     result = subprocess.run(
-        [str(SCRIPT), 'http://192.168.0.9/pinky_1', '60'],
+        [str(SCRIPT), 'http://192.168.0.9/pinky/CAM-PK-01', '60'],
         text=True,
         capture_output=True,
         check=False,

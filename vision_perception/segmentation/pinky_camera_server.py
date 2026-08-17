@@ -1,11 +1,28 @@
-"""Pinky에서 실행 -- pinkylib.Camera로 프레임을 뽑아 MJPEG(HTTP)로 스트리밍.
+"""오프라인 랩 폴백 -- pinkylib.Camera 프레임을 MJPEG(HTTP)로 내보낸다.
 
-PC 쪽은 그냥 URL만 받는 구조라 inference_stream.py는 코드 수정이 필요 없음:
-    python3 inference_stream.py --source http://<이 Pinky IP>:8080/stream.mjpg
+    ※ 여기서 나온 프레임은 학습 세트에 넣지 않는다. ※
 
-나중에 MediaMTX/RTSP 중계로 옮길 때도 PC 쪽은 --source를 rtsp://... URL로
-바꾸기만 하면 되고, inference_stream.py 자체는 안 건드려도 됨
-(cv2.VideoCapture가 http/rtsp 둘 다 동일하게 받아들이기 때문).
+이 파일은 더 이상 기본 경로가 아니다. 학습과 운영 추론은 둘 다 PC1 MediaMTX 의
+RTSP(`rtsp://<PC1>:8554/pinky/CAM-PK-01`)를 쓴다. 학습에 필요한 것은 실시간
+스트림이 아니라 운영이 보는 것과 같은 픽셀인데, 이 경로의 픽셀은 운영과 다르기
+때문이다.
+
+    코덱      JPEG 프레임 독립        ↔ H.264 baseline, --intra 15
+    화질      cv2.imencode 기본(95)   ↔ 2000 kbps
+    프레임률  서버 루프대로 무제한     ↔ 15 fps
+    해상도    미지정(pinklib 반환값)   ↔ 1280x720
+
+세그멘테이션은 경계에 민감하고, H.264 baseline 2 Mbps 는 deblocking 과 저비트레이트
+블록 아티팩트로 바로 그 경계를 뭉갠다. MJPEG 은 그 열화를 만들지 않으므로, 이
+프레임으로 학습하면 배치 후에야 처음 보는 열화를 만나게 된다. 학습 프레임은
+MediaMTX 녹화본(`/recordings/pinky/CAM-PK-01/`)에서 뽑는다. 그 녹화본은 운영과
+같은 인코딩 사슬을 이미 지난 것이다.
+
+남겨 두는 이유는 하나다. PC1 에 닿을 수 없는 자리에서 카메라 자체가 살아 있는지
+눈으로 확인할 때가 있다. 그 용도로만 쓴다. 자동으로 이 파일을 띄우는 곳은 없고,
+그대로 두는 것이 맞다.
+
+배경과 절차: vision_perception/segmentation/PINKY_SEGMENTATION_PIPELINE.md §1, §5.
 
 의존성: pinkylib, opencv-python (Pinky 이미지에 이미 있음, 추가 설치 불필요)
 """
