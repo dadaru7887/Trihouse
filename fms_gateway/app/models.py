@@ -261,6 +261,45 @@ class JobCancelled(BaseModel):
     released_device_ids: list[str]
 
 
+class ExpiredReservation(BaseModel):
+    """회수된 예약 한 건과, 그때 그 job 이 아직 일하고 있었는지."""
+
+    reservation_id: int
+    job_id: int
+    device_id: str | None = None
+    location_id: int | None = None
+    job_active: bool
+
+
+class ReservationsExpired(BaseModel):
+    expired: list[ExpiredReservation]
+
+
+class ReservationAnomaly(BaseModel):
+    """자원은 풀렸는데 로봇이 아직 거기 있을 수 있는 상태 — 사람이 봐야 한다."""
+
+    correlation_uuid: str
+    job_id: int | None = None
+    device_id: str | None = None
+    occurred_at: datetime
+    message: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class AnomalyAcknowledgeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    worker_id: str = Field(min_length=1, max_length=64)
+    note: str = Field(default="", max_length=512)
+
+
+class AnomalyAcknowledged(BaseModel):
+    correlation_uuid: str
+    job_id: int | None = None
+    acknowledged_by: str
+    note: str
+
+
 LoadResult = Literal[
     "LOAD_CONFIRMED", "DROP_DETECTED", "LOAD_UNCERTAIN", "GRASP_RETAINED"
 ]

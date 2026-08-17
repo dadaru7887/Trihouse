@@ -64,6 +64,14 @@ class FmsRepository(Protocol):
         self, job_id: int, request: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]: ...
 
+    def expire_reservations(self) -> dict[str, Any]: ...
+
+    def list_open_anomalies(self) -> list[dict[str, Any]]: ...
+
+    def acknowledge_anomaly(
+        self, correlation_uuid: str, request: dict[str, Any]
+    ) -> dict[str, Any]: ...
+
     def record_load_attempt(
         self, job_step_id: int, request: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]: ...
@@ -201,6 +209,16 @@ class OutboundOrderActiveMapUnavailable(Exception):
 
 class JobNotFound(Exception):
     pass
+
+
+class AnomalyNotFound(Exception):
+    pass
+
+
+class AnomalyAcknowledgementConflict(Exception):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
 
 
 class JobCancellationConflict(Exception):
@@ -3764,6 +3782,288 @@ class MySqlFmsRepository:
             finally:
                 cursor.close()
 
+    # 이상 보고는 `incidents` 가 아니라 `operation_events` 에 올린다. 스키마가
+    # 그것을 허용하지 않기 때문이다 — `chk_incidents_type` 에
+    # `reservation_expired_while_active` 가 없고, `chk_incidents_state` 에 `open` 이
+    # 없으며, `incidents` 에는 `job_id` 컬럼이 아예 없다. `operation_events` 에는
+    # 셋 다 있고 `event_uuid` 가 UNIQUE 라 결정적 UUID 와 함께 쓰면 같은 예약에
+    # 두 번째 open 이 DB 수준에서 불가능하다. 경보 폭주를 애플리케이션 규율이
+    # 아니라 유니크 인덱스가 막는다.
+    ANOMALY_EVENT_TYPE = "reservation.expired_while_active"
+    ANOMALY_ACK_EVENT_TYPE = "reservation.anomaly.acknowledged"
+
+    @staticmethod
+    def _anomaly_uuid(reservation_id: int) -> str:
+        return str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"trihouse:reservation-anomaly:{reservation_id}",
+            )
+        )
+
+    def expire_reservations(self) -> dict[str, Any]:
+        """Sweep overdue reservations back into the pool and flag the risky ones.
+
+        만료 자체는 정상일 수 있다 — job 이 이미 끝났는데 예약만 남은 경우다. 위험한
+        것은 자원은 풀렸는데 로봇이 아직 거기 있을 수 있는 상태이고, 그때만 이상으로
+        올린다(설계 4.6).
+
+        잠금 순서는 저장소 전역 규칙을 따른다: Job -> Steps -> Reservations. 후보
+        job 을 먼저 잠그지 않고 예약부터 잠그면 `cancel_job` 과 역순이 되어 교착한다.
+        """
+        expired: list[dict[str, Any]] = []
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                cursor.execute(
+                    """
+                    SELECT DISTINCT job_id FROM reservations
+                    WHERE state IN ('reserved','in_use') AND expires_at < NOW(6)
+                    ORDER BY job_id
+                    """
+                )
+                job_ids = [int(row["job_id"]) for row in cursor.fetchall()]
+                for job_id in job_ids:
+                    cursor.execute(
+                        "SELECT job_id, state FROM jobs WHERE job_id = %s FOR UPDATE",
+                        (job_id,),
+                    )
+                    job = cursor.fetchone()
+                    if job is None:
+                        continue
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS open_steps FROM job_steps
+                        WHERE job_id = %s AND state IN ('pending','running')
+                        """,
+                        (job_id,),
+                    )
+                    # 단축 평가로 건너뛰면 커서에 결과가 남아 다음 실행이 죽는다.
+                    open_steps = int(cursor.fetchone()["open_steps"])
+                    job_active = (
+                        job["state"] not in {"completed", "failed", "cancelled"}
+                        and open_steps > 0
+                    )
+                    cursor.execute(
+                        """
+                        SELECT reservation_id, device_id, location_id
+                        FROM reservations
+                        WHERE job_id = %s AND state IN ('reserved','in_use')
+                          AND expires_at < NOW(6)
+                        ORDER BY reservation_id
+                        FOR UPDATE
+                        """,
+                        (job_id,),
+                    )
+                    overdue = [dict(row) for row in cursor.fetchall()]
+                    if not overdue:
+                        continue
+                    reservation_ids = [
+                        int(row["reservation_id"]) for row in overdue
+                    ]
+                    placeholders = ", ".join(["%s"] * len(reservation_ids))
+                    cursor.execute(
+                        f"""
+                        UPDATE reservations
+                        SET state = 'expired', released_at = NOW(6)
+                        WHERE reservation_id IN ({placeholders})
+                        """,
+                        tuple(reservation_ids),
+                    )
+                    for row in overdue:
+                        reservation_id = int(row["reservation_id"])
+                        device_id = row["device_id"]
+                        location_id = (
+                            int(row["location_id"])
+                            if row["location_id"] is not None
+                            else None
+                        )
+                        payload = {
+                            "reservation_id": reservation_id,
+                            "device_id": device_id,
+                            "location_id": location_id,
+                        }
+                        cursor.execute(
+                            """
+                            INSERT IGNORE INTO operation_events
+                              (event_uuid, occurred_at, device_id, job_id,
+                               severity, category, event_type, message, payload)
+                            VALUES (%s, NOW(6), %s, %s, 'info', 'policy',
+                                    'reservation.expired',
+                                    'reservation expired and was released', %s)
+                            """,
+                            (
+                                str(
+                                    uuid.uuid5(
+                                        uuid.NAMESPACE_URL,
+                                        "trihouse:reservation-expired:"
+                                        f"{reservation_id}",
+                                    )
+                                ),
+                                device_id,
+                                job_id,
+                                json.dumps(payload, ensure_ascii=False),
+                            ),
+                        )
+                        if job_active:
+                            anomaly_uuid = self._anomaly_uuid(reservation_id)
+                            cursor.execute(
+                                """
+                                INSERT IGNORE INTO operation_events
+                                  (event_uuid, correlation_uuid, occurred_at,
+                                   device_id, job_id, severity, category,
+                                   event_type, message, payload)
+                                VALUES (%s, %s, NOW(6), %s, %s, 'warning', 'policy',
+                                        %s,
+                                        'reservation was released while the job '
+                                        'still had work left', %s)
+                                """,
+                                (
+                                    anomaly_uuid,
+                                    anomaly_uuid,
+                                    device_id,
+                                    job_id,
+                                    self.ANOMALY_EVENT_TYPE,
+                                    json.dumps(payload, ensure_ascii=False),
+                                ),
+                            )
+                        expired.append(
+                            {
+                                "reservation_id": reservation_id,
+                                "job_id": job_id,
+                                "device_id": device_id,
+                                "location_id": location_id,
+                                "job_active": job_active,
+                            }
+                        )
+                connection.commit()
+                return {"expired": expired}
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                cursor.close()
+
+    def list_open_anomalies(self) -> list[dict[str, Any]]:
+        """아직 아무도 확인하지 않은 이상만 돌려준다.
+
+        `state` 컬럼이 아니라 승인 이벤트의 부재로 열림을 판정한다. 원장이
+        append-only 이므로 무엇이 언제 왜 닫혔는지가 지워지지 않는다.
+        """
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                cursor.execute(
+                    """
+                    SELECT anomaly.event_uuid AS correlation_uuid,
+                           anomaly.job_id, anomaly.device_id,
+                           anomaly.occurred_at, anomaly.message, anomaly.payload
+                    FROM operation_events AS anomaly
+                    LEFT JOIN operation_events AS ack
+                      ON ack.correlation_uuid = anomaly.event_uuid
+                     AND ack.event_type = %s
+                    WHERE anomaly.event_type = %s AND ack.event_id IS NULL
+                    ORDER BY anomaly.event_id
+                    """,
+                    (self.ANOMALY_ACK_EVENT_TYPE, self.ANOMALY_EVENT_TYPE),
+                )
+                return [
+                    {
+                        "correlation_uuid": row["correlation_uuid"],
+                        "job_id": int(row["job_id"]) if row["job_id"] else None,
+                        "device_id": row["device_id"],
+                        "occurred_at": row["occurred_at"],
+                        "message": row["message"],
+                        "payload": _json(row["payload"]) or {},
+                    }
+                    for row in cursor.fetchall()
+                ]
+            finally:
+                cursor.close()
+
+    def acknowledge_anomaly(
+        self, correlation_uuid: str, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        """사람이 그 이상을 봤다고 원장에 적는다.
+
+        승인 경로가 없으면 이상은 열리기만 하고 아무도 닫지 못한다 — 지금 job 2·3 이
+        자원을 붙잡고 있는 것과 같은 종류의 교착을 새로 만드는 셈이다(설계 10절).
+        """
+        worker_id = str(request["worker_id"])
+        note = str(request.get("note") or "")
+        ack_uuid = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"trihouse:reservation-anomaly-ack:{correlation_uuid}",
+            )
+        )
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                cursor.execute(
+                    """
+                    SELECT event_uuid, job_id FROM operation_events
+                    WHERE event_uuid = %s AND event_type = %s
+                    """,
+                    (correlation_uuid, self.ANOMALY_EVENT_TYPE),
+                )
+                anomaly = cursor.fetchone()
+                if anomaly is None:
+                    raise AnomalyNotFound
+                cursor.execute(
+                    """
+                    SELECT actor_worker_id, payload FROM operation_events
+                    WHERE event_uuid = %s
+                    """,
+                    (ack_uuid,),
+                )
+                existing = cursor.fetchone()
+                if existing is not None:
+                    payload = _json(existing["payload"]) or {}
+                    return {
+                        "correlation_uuid": correlation_uuid,
+                        "job_id": (
+                            int(anomaly["job_id"]) if anomaly["job_id"] else None
+                        ),
+                        "acknowledged_by": existing["actor_worker_id"],
+                        "note": payload.get("note", ""),
+                    }
+                cursor.execute(
+                    "SELECT active FROM workers WHERE worker_id = %s", (worker_id,)
+                )
+                worker = cursor.fetchone()
+                if worker is None or not worker["active"]:
+                    raise AnomalyAcknowledgementConflict("ACTIVE_WORKER_REQUIRED")
+                cursor.execute(
+                    """
+                    INSERT INTO operation_events
+                      (event_uuid, correlation_uuid, occurred_at, actor_worker_id,
+                       job_id, severity, category, event_type, message, payload)
+                    VALUES (%s, %s, NOW(6), %s, %s, 'info', 'policy', %s,
+                            'operator acknowledged the reservation anomaly', %s)
+                    """,
+                    (
+                        ack_uuid,
+                        correlation_uuid,
+                        worker_id,
+                        anomaly["job_id"],
+                        self.ANOMALY_ACK_EVENT_TYPE,
+                        json.dumps({"note": note}, ensure_ascii=False),
+                    ),
+                )
+                connection.commit()
+                return {
+                    "correlation_uuid": correlation_uuid,
+                    "job_id": int(anomaly["job_id"]) if anomaly["job_id"] else None,
+                    "acknowledged_by": worker_id,
+                    "note": note,
+                }
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                cursor.close()
+
     def record_load_attempt(
         self, job_step_id: int, request: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
@@ -5518,8 +5818,11 @@ class InMemoryFmsRepository:
         self._claims: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]] = {}
         self._reserved_assignment_resources: dict[str, int] = {}
         self._reservation_ids: dict[str, int] = {}
+        self._reservation_expiry: dict[str, datetime] = {}
         self._next_reservation_id = 1
         self._cancellations: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+        self._anomalies: dict[str, dict[str, Any]] = {}
+        self._anomaly_acknowledgements: dict[str, dict[str, Any]] = {}
         self._assignment_lock = threading.RLock()
         self._assignment_locations: dict[str, dict[str, Any]] = {
             "PACKING-01-DOCK-01": {
@@ -6227,6 +6530,9 @@ class InMemoryFmsRepository:
                 if resource not in self._reservation_ids:
                     self._reservation_ids[resource] = self._next_reservation_id
                     self._next_reservation_id += 1
+                self._reservation_expiry[resource] = datetime.now(SEOUL) + timedelta(
+                    hours=4
+                )
             context["assignment"] = deepcopy(assignment)
             job["assigned_mobile_id"] = assignment["mobile_id"]
             job["destination_location_id"] = packing["location_id"]
@@ -6262,6 +6568,110 @@ class InMemoryFmsRepository:
     def force_job_state(self, job_id: int, state: str) -> None:
         """테스트가 실행 경로를 거치지 않고 종료 상태를 만들기 위한 좁은 문."""
         self._jobs[job_id]["state"] = state
+
+    def force_reservation_expiry(self, job_id: int) -> None:
+        """이 job 이 쥔 예약을 이미 만료된 것으로 만든다 — 시계를 돌리는 대신."""
+        for resource, owner in self._reserved_assignment_resources.items():
+            if owner == job_id:
+                self._reservation_expiry[resource] = datetime.now(SEOUL) - timedelta(
+                    hours=1
+                )
+
+    def expire_reservations(self) -> dict[str, Any]:
+        now = datetime.now(SEOUL)
+        expired: list[dict[str, Any]] = []
+        with self._assignment_lock:
+            overdue = sorted(
+                (
+                    (self._reservation_ids[resource], resource, owner)
+                    for resource, owner in self._reserved_assignment_resources.items()
+                    if self._reservation_expiry.get(resource, now) < now
+                )
+            )
+            for reservation_id, resource, job_id in overdue:
+                job = self._jobs.get(job_id) or {}
+                job_active = bool(
+                    job.get("state") not in {"completed", "failed", "cancelled"}
+                    and any(
+                        step["job_id"] == job_id
+                        and step["state"] in {"pending", "running"}
+                        for step in self._steps.values()
+                    )
+                )
+                assignment = (job.get("context") or {}).get("assignment") or {}
+                is_device = resource in {
+                    assignment.get("mobile_id"),
+                    assignment.get("omx_id"),
+                }
+                device_id = resource if is_device else None
+                self._reserved_assignment_resources.pop(resource)
+                self._reservation_ids.pop(resource, None)
+                self._reservation_expiry.pop(resource, None)
+                self._append_event(
+                    job_id,
+                    None,
+                    "reservation.expired",
+                    {"reservation_id": reservation_id, "device_id": device_id},
+                )
+                if job_active:
+                    correlation_uuid = str(
+                        uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            f"trihouse:reservation-anomaly:{reservation_id}",
+                        )
+                    )
+                    self._anomalies.setdefault(
+                        correlation_uuid,
+                        {
+                            "correlation_uuid": correlation_uuid,
+                            "job_id": job_id,
+                            "device_id": device_id,
+                            "occurred_at": now,
+                            "message": (
+                                "reservation was released while the job still had "
+                                "work left"
+                            ),
+                            "payload": {"reservation_id": reservation_id},
+                        },
+                    )
+                expired.append(
+                    {
+                        "reservation_id": reservation_id,
+                        "job_id": job_id,
+                        "device_id": device_id,
+                        "location_id": None,
+                        "job_active": job_active,
+                    }
+                )
+        return {"expired": expired}
+
+    def list_open_anomalies(self) -> list[dict[str, Any]]:
+        return [
+            deepcopy(anomaly)
+            for correlation_uuid, anomaly in self._anomalies.items()
+            if correlation_uuid not in self._anomaly_acknowledgements
+        ]
+
+    def acknowledge_anomaly(
+        self, correlation_uuid: str, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        anomaly = self._anomalies.get(correlation_uuid)
+        if anomaly is None:
+            raise AnomalyNotFound
+        existing = self._anomaly_acknowledgements.get(correlation_uuid)
+        if existing is not None:
+            return deepcopy(existing)
+        worker_id = str(request["worker_id"])
+        if worker_id not in {"W-OP-01", "W-SAFE-01"}:
+            raise AnomalyAcknowledgementConflict("ACTIVE_WORKER_REQUIRED")
+        acknowledgement = {
+            "correlation_uuid": correlation_uuid,
+            "job_id": anomaly["job_id"],
+            "acknowledged_by": worker_id,
+            "note": str(request.get("note") or ""),
+        }
+        self._anomaly_acknowledgements[correlation_uuid] = acknowledgement
+        return deepcopy(acknowledgement)
 
     def cancel_job(
         self, job_id: int, request: dict[str, Any], idempotency_key: str

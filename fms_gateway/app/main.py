@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import logging
 from pathlib import Path as FileSystemPath
 import shutil
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import (
     FastAPI,
@@ -50,6 +50,10 @@ from .models import (
     JobAssignmentView,
     JobCancelRequest,
     JobCancelled,
+    AnomalyAcknowledgeRequest,
+    AnomalyAcknowledged,
+    ReservationAnomaly,
+    ReservationsExpired,
     LoadAttemptRequest,
     LoadAttemptView,
     PickRecoveryRequest,
@@ -98,6 +102,8 @@ from .repositories import (
     JobStepNotDispatchable,
     StepOutcomeConflict,
     JobStepNotFound,
+    AnomalyAcknowledgementConflict,
+    AnomalyNotFound,
     JobCancellationConflict,
     JobNotFound,
     ManualAcknowledgementRequired,
@@ -913,6 +919,46 @@ def create_app(
         except IdempotencyConflict as error:
             raise HTTPException(
                 status_code=409, detail={"code": "IDEMPOTENCY_CONFLICT"}
+            ) from error
+
+    @app.post(
+        "/internal/v1/reservations/expire", response_model=ReservationsExpired
+    )
+    def expire_reservations():
+        """만료된 예약을 돌려받고 위험한 만료만 사람에게 올린다.
+
+        `job_runner` 가 매 주기 이것을 먼저 호출한 뒤 배정을 계산한다. 그러면 다음
+        주기에 자원이 실제로 비어 보인다.
+        """
+        return repo.expire_reservations()
+
+    @app.get(
+        "/api/v1/operations/anomalies", response_model=list[ReservationAnomaly]
+    )
+    def list_anomalies(state: Literal["open"] = "open"):
+        """아직 아무도 확인하지 않은 이상. 지금은 열린 것만 돌려준다."""
+        return repo.list_open_anomalies()
+
+    @app.post(
+        "/api/v1/operations/anomalies/{correlation_uuid}/acknowledge",
+        response_model=AnomalyAcknowledged,
+    )
+    def acknowledge_anomaly(
+        correlation_uuid: str, acknowledgement: AnomalyAcknowledgeRequest
+    ):
+        """사람이 그 이상을 봤다고 원장에 적는다.
+
+        이 경로가 없으면 이상은 열리기만 하고 아무도 닫지 못한다.
+        """
+        try:
+            return repo.acknowledge_anomaly(
+                correlation_uuid, acknowledgement.model_dump()
+            )
+        except AnomalyNotFound as error:
+            raise HTTPException(status_code=404, detail="anomaly not found") from error
+        except AnomalyAcknowledgementConflict as error:
+            raise HTTPException(
+                status_code=409, detail={"code": error.code}
             ) from error
 
     @app.post(
