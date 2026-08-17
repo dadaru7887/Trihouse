@@ -459,3 +459,285 @@ scripts/derive_hardware_nav2_params.py \
 
 첫 줄이 `pinky_01:` 이면 성공이다. 분기 B(`namespace:=''`)면 이 도구를 쓰지 않고
 벤더 기본 params 를 그대로 쓴다.
+
+---
+
+## 9. UI · RMF · Gazebo · Pinky 를 붙여 주문 주행 해 보기
+
+한 번에 끝까지 가는 절차다. **각 단계마다 판정 명령이 붙어 있고, 판정에 실패하면
+다음으로 가지 않는다.** 앞 단계가 조용히 실패한 채로 진행하면 어느 층의 문제인지
+말할 수 없게 된다.
+
+터미널 셋을 쓴다. 1번은 Docker 층, 2번은 호스트 ROS 층, 3번은 관찰·주문이다.
+
+### 9.0 도메인부터 맞춘다 — 이걸 놓치면 RMF 화면이 빈다
+
+`compose.simulation.yaml` 의 `rmf_api` 는 `${ROS_DOMAIN_ID:-52}` 를 쓰고,
+`p0_simulation_bringup.sh` 도 기본값이 52 다. 그런데 **P0 시뮬은 도메인 0 으로
+돈다.** `.env` 에는 `ROS_DOMAIN_ID` 가 없다.
+
+그래서 새 셸에서 그냥 올리면 rmf_api 는 52, 시뮬은 0 이 되어 **RMF 대시보드에
+fleet 도 task 도 나타나지 않는다.** 로봇은 멀쩡히 움직이는데 화면만 비어서, 원인을
+찾는 데 시간을 버리기 좋은 자리다.
+
+**모든 터미널에서 먼저 같은 값을 export 한다.**
+
+```bash
+cd /home/syw/Trihouse
+export ROS_DOMAIN_ID=0            # 시뮬. 실기는 52
+export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
+```
+
+이미 떠 있는 컨테이너가 어느 도메인인지는 이렇게 본다.
+
+```bash
+docker inspect trihouse_p0-rmf_api-1 \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' | grep ROS_DOMAIN_ID
+```
+
+`0` 이 아니면 Docker 층을 다시 올려야 한다(9.1).
+
+### 9.1 터미널 1 — Docker 층 (UI, RMF 대시보드, Gateway, MySQL)
+
+```bash
+export ROS_DOMAIN_ID=0
+scripts/control_stack up
+```
+
+판정. **셋 다 통과해야 다음으로 간다.**
+
+```bash
+curl -s -o /dev/null -w 'control_ui     %{http_code}\n' http://127.0.0.1:3100/
+curl -s -o /dev/null -w 'rmf_dashboard  %{http_code}\n' http://127.0.0.1:3000/
+curl -s http://127.0.0.1:8080/ready; echo
+```
+
+기대: `200`, `200`, `{"status":"ready","database":"ok"}`.
+
+브라우저로 두 개를 연다.
+
+| 주소 | 무엇이 보이는가 |
+|---|---|
+| <http://127.0.0.1:3100> | Trihouse 관제 UI. 주문·재고·지도. `/api/` 를 Gateway 로 proxy 한다 |
+| <http://127.0.0.1:3000> | Open-RMF 대시보드. fleet·robot·task. `control_system` 원본으로 빌드한 것이다 |
+
+지금은 로봇이 없으므로 RMF 대시보드는 비어 있는 것이 정상이다. 9.2 뒤에 다시 본다.
+
+### 9.2 터미널 2 — 호스트 ROS 층 (Gazebo + Nav2 + Open-RMF + Pinky)
+
+자원이 비어 있어야 주문이 로봇을 잡는다. 먼저 확인한다.
+
+```bash
+PW=$(grep -E '^MYSQL_ROOT_PASSWORD=' .env | cut -d= -f2-)
+docker exec trihouse-mysql mysql -uroot -p"$PW" --table -e "
+  SELECT job_id, state, IFNULL(assigned_mobile_id,'-') AS robot FROM trihouse_fms.jobs;
+  SELECT reservation_id, job_id, IFNULL(active_resource_key,'(none)') AS active_key, state
+    FROM trihouse_fms.reservations ORDER BY reservation_id;"
+```
+
+`active_key` 가 `(none)` 이 아닌 줄이 있으면 그 job 이 자원을 쥐고 있다. 끝난 시험의
+잔여물이면 취소해서 돌려받는다. **되돌릴 수 없는 쓰기다.**
+
+```bash
+curl -s -X POST "http://127.0.0.1:8080/internal/v1/jobs/<JOB_ID>/cancel" \
+  -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: manual-clear-<JOB_ID>" \
+  -d '{"reason":"previous session leftover","requested_by":"W-OP-01"}' | python3 -m json.tool
+```
+
+이제 기동한다. 로봇 한 대로 시작한다 — 두 대는 이 12코어 PC 의 용량을 넘는다.
+
+```bash
+export ROS_DOMAIN_ID=0
+TRIHOUSE_MAP_REVISION="trihouse_test_01:730111d2e446f5141c5ef069e5f2c1c8c5383aea79bdeffd05d3d34f2094b7ff" \
+TRIHOUSE_ROBOTS=PK_01 \
+control_tower/bringup/p0_simulation_bringup.sh 2>&1 | tee /tmp/sim.log
+```
+
+기동에 1~2분 걸린다. **끝날 때까지 기다린 뒤에 판정한다.** 브링업 도중에 재면 아직
+안 뜬 것을 실패로 읽는다.
+
+Gazebo 창을 보고 싶으면 `--gui`, RViz 는 `--rviz` 를 붙인다. 부하가 오르므로 처음
+한 번은 붙이지 않는 편이 낫다.
+
+### 9.3 터미널 3 — 위에서부터 판정한다
+
+```bash
+SIM=/tmp/sim.log
+grep -c 'Managed nodes are active' $SIM        # 기대: 2   (localization 1 + navigation 1)
+grep -c 'We will not add the robot' $SIM       # 기대: 0   (fleet 등록 실패)
+grep -c 'Invalid frame ID "odom"' $SIM         # 기대: 0   (costmap 프레임)
+grep -c 'RMF dispatch cycle failed' $SIM       # 기대: 0   (worker 사망)
+grep -c 'RMF dispatch cycle:' $SIM             # 기대: 0 보다 큼
+grep -E 'Failed to bring up all requested|Failed to change state' $SIM
+uptime
+```
+
+하나라도 어긋나면 `uptime` 을 **먼저** 본다. load average 가 60 을 넘으면 그 실패는
+부하이고 버그가 아니다. **다만 `robots:=PK_01` 로 한 대만 띄웠는데도 실패하면 그건
+남은 버그다.**
+
+로봇이 관제에 보이는지 읽는다.
+
+```bash
+python3 scripts/verify_robot_status.py pinky_01 20
+```
+
+기대: `publishers=1`, `frame_id=map`, `dispatchable=true`, `errors=[]`.
+
+`ros2 topic echo` · `topic list` · `param get` 은 쓰지 않는다. 그래프 열거에 의존해
+부하가 높으면 40초 timeout 으로 멈춘다.
+
+**여기서 RMF 대시보드(<http://127.0.0.1:3000>)를 다시 본다.** `project1_pinky` fleet 과
+`PK_01` 이 보여야 한다. 비어 있으면 9.0 의 도메인이 어긋난 것이다.
+
+### 9.4 주문을 넣고 주행을 본다
+
+재고를 먼저 본다. **SKU 마다 stored lot 이 하나씩이므로 주문은 실제로 소진한다.**
+
+```bash
+PW=$(grep -E '^MYSQL_ROOT_PASSWORD=' .env | cut -d= -f2-)
+docker exec trihouse-mysql mysql -uroot -p"$PW" --table -e "
+  SELECT product_code, COUNT(*) AS lots FROM trihouse_fms.inventory_lots
+   WHERE state='stored' GROUP BY product_code ORDER BY product_code;"
+```
+
+관제 UI(<http://127.0.0.1:3100>)에서 주문을 넣거나, 같은 API 를 직접 호출한다.
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/v1/orders \
+  -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: manual-drive-$(date +%s)" \
+  -d '{"requested_by":"manual-drive","priority":"normal",
+       "items":[{"product_code":"SKU-COFFEE","quantity":1}]}' | python3 -m json.tool
+```
+
+기대: `201` 과 함께 job 하나와 7단계 계획. 재고가 없으면 `409 INSUFFICIENT_STOCK`,
+없는 상품이면 `422 PRODUCT_NOT_FOUND`.
+
+주문이 로봇까지 가는 길을 순서대로 본다.
+
+```bash
+# 1) 러너가 자원을 배정하고 step 을 outbox 로 내보내는가
+grep -E 'job runner cycle|job runner blocked' $SIM | tail -5
+
+# 2) RMF worker 가 그것을 집어 RMF 에 넘기는가
+grep -E 'RMF dispatch cycle:' $SIM | tail -3
+
+# 3) RMF 가 로봇을 낙찰하는가
+grep -E 'bidding|bids|Assigning task' $SIM | tail -5
+
+# 4) job 상태
+curl -s http://127.0.0.1:8080/api/v1/jobs | python3 -m json.tool | head -40
+```
+
+기대: `assigned=[N]` → `dispatched=[N]`, `claimed=` 1 이상, job 이 `queued` →
+`assigned` → `running`. **Gazebo 를 `--gui` 로 띄웠다면 이 시점에 Pinky 가 움직인다.**
+
+막히면 아래로 원인을 가른다.
+
+| 증상 | 뜻 | 볼 곳 |
+|---|---|---|
+| `no free robot, arm, or dock` | 이전 job 이 자원을 쥐고 있다 | 9.2 의 취소 절차 |
+| `no assignment and not an order` | 내부 생성 job 이다. 러너의 일이 아니다 | 정상. 무시한다 |
+| `RMF dispatch cycle: claimed=0` 이 계속 | outbox 가 비었거나 `dead_letter` 다 | 아래 쿼리 |
+| `did not received any bids` | 로봇이 fleet 에 없다 | `We will not add the robot` 을 다시 grep |
+| job 이 `assigned` 에서 멈춘다 | step 이 dispatch 되지 않았다 | 아래 쿼리 |
+
+```bash
+docker exec trihouse-mysql mysql -uroot -p"$PW" --table -e "
+  SELECT m.message_id, m.channel, m.state, m.attempts, s.job_id, s.step_no, s.state AS step_state,
+         LEFT(IFNULL(m.last_error,'-'),40) AS err
+    FROM trihouse_fms.integration_messages m
+    JOIN trihouse_fms.job_steps s ON s.job_step_id = m.job_step_id
+   ORDER BY m.created_at DESC LIMIT 8;"
+```
+
+`state=dead_letter` 면 그 메시지는 **다시 시도되지 않는다.** 시도 횟수를 소진한
+것이고, 그 job 은 취소하고 새 주문으로 다시 시작하는 편이 빠르다.
+
+#### 예약이 풀렸는데도 러너가 자원을 안 쓰는 경우
+
+원장과 러너가 서로 다른 근거를 본다. **예약이 `expired` 로 회수되어도 그 job 이
+`queued`/`assigned`/`running`/`held` 인 한 러너는 여전히 그 자원을 점유로 센다.**
+
+```python
+# control_tower/task_manager/job_runner.py:319
+def _reserved_resources(details): ...   # jobs.context.assignment 에서 유도한다
+```
+
+즉 배타성의 정본은 DB 의 `active_resource_key` 인데, 러너는 매 주기 자기 방식으로
+따로 계산한다. 2026-08-18 실측으로 그 갈라짐을 확인했다.
+
+```
+07:37:50  job 4 의 예약 3건이 만료 회수됨 (active_resource_key 전부 NULL)
+08:01:47  job runner blocked: job 5: no free robot, arm, or dock
+```
+
+**그래서 예약을 회수하는 것만으로는 자원이 러너에게 돌아오지 않는다.** 그 job 을
+취소해 종료 상태로 만들어야 한다.
+
+```bash
+docker exec trihouse-mysql mysql -uroot -p"$PW" --table -e "
+  SELECT job_id, state, IFNULL(assigned_mobile_id,'-') AS robot,
+         JSON_UNQUOTE(JSON_EXTRACT(context,'\$.assignment.mobile_id')) AS ctx_robot
+    FROM trihouse_fms.jobs WHERE state IN ('queued','assigned','running','held');"
+```
+
+여기 나오는 job 이 러너가 보는 점유의 전부다. `ctx_robot` 이 채워져 있으면 예약이
+없어도 그 로봇은 러너에게 잡혀 있다.
+
+이것은 설계 8절 6번(`available_at` 을 Gateway 에 물어보기)이 아직 없기 때문이고,
+오늘 범위 밖이다. 고치기 전까지는 위 쿼리로 확인하고 취소로 푼다.
+
+### 9.5 완주와 예약 해제를 확인한다
+
+```bash
+docker exec trihouse-mysql mysql -uroot -p"$PW" --table -e "
+  SELECT job_id, state, IFNULL(assigned_mobile_id,'-') AS robot FROM trihouse_fms.jobs ORDER BY job_id;
+  SELECT job_id, state, COUNT(*) AS n FROM trihouse_fms.reservations GROUP BY job_id, state ORDER BY job_id;"
+```
+
+기대: 새 job 이 종료 상태이고 그 job 의 예약이 `released`.
+
+예약이 `reserved`/`in_use` 로 남으면 RMF task update 가 도착하지 않은 것이다. 그때는
+만료 회수가 걷어 간다.
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/internal/v1/reservations/expire | python3 -m json.tool
+curl -s 'http://127.0.0.1:8080/api/v1/operations/anomalies?state=open' | python3 -m json.tool
+```
+
+`job_active` 가 `true` 인 만료가 있으면 **자원은 풀렸는데 로봇이 아직 거기 있을 수
+있다는 뜻**이고, 이상이 열린다. 사람이 확인하기 전까지 닫히지 않는다.
+
+```bash
+curl -s -X POST \
+  "http://127.0.0.1:8080/api/v1/operations/anomalies/<CORRELATION_UUID>/acknowledge" \
+  -H 'Content-Type: application/json' \
+  -d '{"worker_id":"W-OP-01","note":"로봇이 정차한 것을 눈으로 확인"}' | python3 -m json.tool
+```
+
+### 9.6 정리
+
+```bash
+scripts/sim_teardown.sh            # 호스트 ROS 층만 내린다
+scripts/sim_teardown.sh --dry-run  # 무엇을 죽일지 먼저 보고 싶을 때
+```
+
+Docker 층은 그대로 둔다. 마지막 줄의 `docker_containers=8` 이 그것을 확인해 준다.
+
+### 9.7 어디까지 실측했는가
+
+정직하게 적는다.
+
+| 구간 | 상태 |
+|---|---|
+| 9.1 Docker 층 | **확인됨** |
+| 9.2 기동, 9.3 판정 5줄 + 로봇 상태 | **확인됨** (`Managed nodes are active`=2, `frame_id=map`, `dispatchable=true`) |
+| 9.3 RMF 대시보드에 fleet·robot | **미확인** — 화면을 사람이 본 적이 없다 |
+| 9.4 주문 → 배정 → outbox | **확인됨** |
+| 9.4 RMF 낙찰 → 로봇 주행 | **미확인** — 여기까지 간 적이 없다 |
+| 9.5 완주와 예약 해제 | **미확인** |
+
+미확인 구간에서 막히면 그 지점의 로그를 **성공한 것과 함께 그대로** 기록한다.

@@ -1642,3 +1642,86 @@ DB를 건드리는 PR을 리뷰할 때 확인한다.
 - [ ] `SELECT *`를 쓰지 않았는가
 - [ ] WHERE / ORDER BY가 9절의 인덱스 순서와 맞는가
 - [ ] 생성 컬럼을 직접 쓰지 않았는가
+
+---
+
+## MySQL 이 세 개인 이유 (2026-08-18 실측)
+
+세 개가 우연히 쌓인 것이 아니라 서로 다른 일을 한다. 다만 **셋 중 둘이 같은 스키마의
+개발 데이터를 따로 들고 있고 그 둘이 이미 갈라졌다.** 그것이 헷갈리는 진짜 이유다.
+
+| 컨테이너 | 포트 | Compose project / 파일 | 볼륨 | 무엇 |
+|---|---|---|---|---|
+| `trihouse-mysql` | 3308 | `trihouse_p0` / `compose.yaml` | `trihouse_p0_trihouse_mysql_data` | **Gateway 가 실제로 쓰는 DB.** P0 스택의 일부 |
+| `trihouse_db_test-mysql_test-1` | 3307 | `trihouse_db_test` / `compose.db_test.yaml` | tmpfs (휘발) | pytest 전용. 매 기동마다 스키마가 새로 적용된다 |
+| `trihouse_db-mysql-1` | 3306 | `trihouse_db` / `compose.db.yaml` | `trihouse_db_mysql_data` | 원래의 단독 개발 DB. **지도 작업물이 여기 있다** |
+
+### 3308 이 나중에 생긴 이유
+
+`compose.control.yaml` 이 `db_internal` 이라는 격리 네트워크를 만들고 **Gateway 와
+MySQL 만** 거기 붙인다. 그래서 다른 무엇도 DB 에 직접 닿지 못한다. 그 구조를 한
+Compose project 안에서 완성하려고 `compose.yaml` 에 MySQL 서비스를 넣은 것이다.
+
+실측으로 확인한 결과:
+
+```
+Gateway networks        : trihouse_control_edge, trihouse_db_internal
+trihouse-mysql networks : trihouse_db_internal
+trihouse_db-mysql-1     : trihouse_db_default
+```
+
+**Gateway 는 3306 DB 에 네트워크 수준에서 도달할 수 없다.** API 가 돌려주는 job 수가
+3308 과 일치하고 3306 과 다르다는 것으로도 같은 결론이 나온다.
+
+### 그래서 무엇이 문제인가 — 둘이 갈라졌다
+
+| | 3306 (`trihouse_db`) | 3308 (`trihouse_p0`) |
+|---|---|---|
+| `map_projects.trihouse_test_01` | draft revision **27** | draft revision 2 |
+| `map_projects.trihouse_test` | revision 6 | **없음** |
+| `map_projects.project1` (waypoint 13, **lane 11**) | 있음 | **없음** |
+| `jobs` 최신 생성 | 2026-08-03 | 2026-08-16 이후 |
+| 붙어 있는 애플리케이션 | **0개** | Gateway |
+
+`project1` 은 `control_system_test/project1.rmfproject` 와 같은 이름이고 **lane 을 가진
+유일한 프로젝트**다. `control_system_test/rmf_control_ui/README.md` 는 MySQL 을 들여다볼
+때 `compose.db.yaml` 을 열라고 적고 있으며, 그 문서가 만들어진 시점에는 그것이 유일한
+DB 였다.
+
+**그러므로 3306 을 지우면 안 된다.** 3308 에 없는 지도 작업물이 거기 있다.
+
+주의할 점은 하나 더 있다. control_system_test 의 UI 는 **MySQL 에 직접 붙지 않고
+Gateway 를 거쳐 쓴다.** 지금 Gateway 는 3308 을 쓰므로, README 대로 3306 에서 mysql
+프롬프트를 열면 **UI 가 방금 저장한 것이 보이지 않는다.** 지금 UI 로 저장한 것을
+확인하려면 3308 을 봐야 한다.
+
+```bash
+PW=$(grep -E '^MYSQL_ROOT_PASSWORD=' .env | cut -d= -f2-)
+docker exec trihouse-mysql mysql -uroot -p"$PW" -e "
+  SELECT map_name, draft_revision, waypoint_count, lane_count
+    FROM trihouse_fms.map_projects ORDER BY updated_at DESC;"
+```
+
+두 DB 를 합칠지, 3306 의 작업물을 3308 로 옮길지는 **사람이 결정할 일**이다. 이
+문서는 갈라졌다는 사실만 적는다.
+
+### 지운 것: `compose.test.yaml`
+
+MySQL 정의는 사실 넷이었다. 네 번째인 `compose.test.yaml` 을 지웠다. 근거는 셋이다.
+
+1. **참조가 하나도 없다.** 저장소 전체(숨김 파일 포함)를 훑어 0건이었다.
+2. **대체됐다.** 최초 스캐폴딩 커밋(`599af489`) 이후 한 번도 고쳐지지 않았고,
+   `compose.db_test.yaml` 은 그 뒤로 계속 손질됐다.
+3. **띄우면 조용히 잘못된 테스트 DB 가 된다.** 같은 3307 을 쓰므로 진짜 테스트 DB 와
+   포트가 부딪히고, `db/init/003_grant_gateway_recovery.sh` 를 마운트하지 않는다.
+   `db/schema_mysql.sql` 은 `trihouse_recovery` 를 만들 뿐 **GRANT 를 하지 않으므로**
+   그 스크립트가 유일한 권한 경로다. 실행 중인 3307 에서 확인했다.
+
+   ```
+   GRANT SELECT, INSERT, UPDATE, DELETE ON `trihouse_recovery`.* TO `fms_gateway`@`%`
+   ```
+
+   이것이 없으면 `fms_gateway/tests/conftest.py` 의 `recovery_mysql_db` fixture 가
+   권한 오류로 죽는데, 그 실패는 코드 결함처럼 보인다.
+
+`compose.db.yaml`, `compose.db_test.yaml`, `compose.yaml` 셋은 모두 남긴다.
