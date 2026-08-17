@@ -44,6 +44,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 : "${ROS_DISTRO_SETUP:=/opt/ros/jazzy/setup.bash}"
+# 두 로봇과 관제가 한 domain 을 공유하고, 구분은 ROS namespace(pinky_01,
+# pinky_02)가 맡는다. domain 을 갈라 놓으면 로봇끼리 서로를 못 보고 관제 PC 가
+# domain 마다 따로 붙어야 한다.
+#
+# 여기서 명시적으로 못박는 이유는 이 값이 Docker 층(compose.simulation.yaml 의
+# rmf_api)과 반드시 같아야 하기 때문이다. 예전에는 양쪽 다 아무것도 정하지
+# 않아 우연히 0 으로 맞았는데, 그러면 한쪽만 바뀌었을 때 아무 오류 없이 서로를
+# 못 보게 된다. 두 곳의 기본값을 같은 값으로 적어 두면 그 사고가 나지 않는다.
+#
+# 이미 다른 domain 으로 떠 있는 Docker 층에 붙이려면 이 값을 넘겨라:
+#   ROS_DOMAIN_ID=0 control_tower/bringup/p0_simulation_bringup.sh
+: "${ROS_DOMAIN_ID:=52}"
+export ROS_DOMAIN_ID
 : "${FMS_BASE_URL:=http://127.0.0.1:8080}"
 : "${TRIHOUSE_PROJECT:=trihouse_test_01}"
 # fleet 이름은 `trihouse_rmf_bridge/config/pinky_fleet.yaml` 의 `rmf_fleet.name`
