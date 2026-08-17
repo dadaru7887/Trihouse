@@ -283,6 +283,52 @@ def test_cancelling_closes_the_outbox_so_no_worker_picks_the_job_up_again(
     )
 
 
+def test_cancelling_again_sweeps_an_outbox_message_an_earlier_cancel_left_behind(
+    seeded_schema,
+) -> None:
+    """취소된 job 에 살아 있는 메시지가 남아 있는 것 자체가 모순이다.
+
+    이전 버전의 취소가 outbox 를 닫지 않아 실가동에 그런 메시지가 남았다. 원장을
+    손으로 고치는 대신 같은 엔드포인트가 그것을 마저 닫아야 한다.
+    """
+    job_id = _assigned_job("outbox-leftover")
+    step_id = int(
+        rows(
+            "SELECT job_step_id FROM job_steps WHERE job_id=%s ORDER BY step_no LIMIT 1",
+            (job_id,),
+        )[0]["job_step_id"]
+    )
+    _repository().dispatch_step(
+        step_id,
+        {"actor": "control-tower", "assigned_device_id": "OMX_01"},
+        f"cancel-leftover-{job_id}",
+    )
+    _repository().cancel_job(
+        job_id, {"reason": "stuck outside RMF", "requested_by": "W-OP-01"}, "cancel-leftover-1"
+    )
+    # 이전 버전이 남긴 것과 같은 상태를 만든다.
+    _execute(
+        "UPDATE integration_messages SET state='sent' WHERE job_step_id=%s", (step_id,)
+    )
+
+    again = _repository().cancel_job(
+        job_id, {"reason": "sweep the leftovers", "requested_by": "W-OP-01"}, "cancel-leftover-2"
+    )
+
+    assert again["state"] == "cancelled"
+    assert again["cancelled_message_ids"] != []
+    assert scalar(
+        "SELECT COUNT(*) FROM integration_messages "
+        "WHERE job_step_id=%s AND state IN ('pending','sent')",
+        (step_id,),
+    ) == 0
+    # 세 번째 호출은 닫을 것이 없다.
+    third = _repository().cancel_job(
+        job_id, {"reason": "nothing left", "requested_by": "W-OP-01"}, "cancel-leftover-3"
+    )
+    assert third["cancelled_message_ids"] == []
+
+
 def test_a_delivered_outbox_message_keeps_its_outcome_when_the_job_is_cancelled(
     seeded_schema,
 ) -> None:
