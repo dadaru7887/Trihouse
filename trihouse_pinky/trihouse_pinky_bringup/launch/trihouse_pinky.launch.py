@@ -1,6 +1,7 @@
 """실기 Pinky용 최상위 조합 launch; 벤더 `pinky_pro`는 include만 한다."""
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node, PushRosNamespace, SetRemap
@@ -28,13 +29,27 @@ def generate_launch_description():
     control_port = LaunchConfiguration('control_port')
     font_path = LaunchConfiguration('font_path')
     omx_station_id = LaunchConfiguration('omx_station_id')
+    nav2_params_file = LaunchConfiguration('nav2_params_file')
+    vision_enabled = LaunchConfiguration('vision_enabled')
+    vision_config = LaunchConfiguration('vision_config_file')
     vendor_bringup = PathJoinSubstitution([FindPackageShare('pinky_bringup'), 'launch', 'bringup_robot.launch.xml'])
     navigation = PathJoinSubstitution([FindPackageShare('pinky_navigation'), 'launch', 'bringup_launch.xml'])
+    vision = PathJoinSubstitution([FindPackageShare('trihouse_pinky_vision'), 'launch', 'vision.launch.py'])
+    vision_default_config = PathJoinSubstitution([FindPackageShare('trihouse_pinky_vision'), 'config', 'pinky_1.yaml'])
     return LaunchDescription([
         DeclareLaunchArgument('robot_id', default_value='PK_01'),
         DeclareLaunchArgument('namespace', default_value='pinky_01'),
         DeclareLaunchArgument('map_revision', default_value=''),
         DeclareLaunchArgument('map', default_value=''),
+        # 빈 값이면 벤더 기본 params 가 쓰인다. 분기 B(단일 로봇을 namespace 없이
+        # 기동)에서는 nav2 노드가 루트에 있어 벤더 맨 키가 그대로 맞으므로 그것이
+        # 옳은 기본값이다.
+        DeclareLaunchArgument('nav2_params_file', default_value=''),
+        # 빈 문자열을 기본값으로 두면 안 된다. `DeclareLaunchArgument` 의 기본값은
+        # 인자를 주지 않았을 때만 쓰이는데, 이 값은 include 로 언제나 넘어가므로
+        # 비어 있으면 vision launch 의 기본값이 적용되지 않고 `camera_streamer` 가
+        # 빈 문자열을 params 파일로 읽으려다 죽는다.
+        DeclareLaunchArgument('vision_config_file', default_value=vision_default_config),
         DeclareLaunchArgument('control_host', default_value='127.0.0.1'),
         DeclareLaunchArgument('control_port', default_value='8788'),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
@@ -68,24 +83,47 @@ def generate_launch_description():
             Node(package='trihouse_pinky_fleet', executable='recovery_health', parameters=[{'robot_id': robot_id}]),
             Node(package='trihouse_pinky_fleet', executable='fleet_node', parameters=[{'robot_id': robot_id, 'map_revision': map_revision}]),
             Node(package='trihouse_pinky_fleet', executable='fleet_gateway', parameters=[{'robot_id': robot_id, 'control_host': control_host, 'control_port': control_port}]),
+            # 카메라는 ROS 토픽으로 나가지 않는다. 이 노드는 ffmpeg 로
+            # MediaMTX(PC1) 에 RTSP 를 밀고, 서버가 그것을 읽어 QR·ArUco 를
+            # 인식한다(`vision_edge/perception.py`). namespace 안에 두어야 두
+            # 로봇의 카메라 노드가 섞이지 않는다.
+            IncludeLaunchDescription(
+                AnyLaunchDescriptionSource(vision),
+                launch_arguments={'config_file': vision_config}.items(),
+                condition=IfCondition(vision_enabled),
+            ),
         ]),
         # `use_composition`은 반드시 False다. composed Nav2는 `push-ros-namespace`를
         # 물려받지 않아서 두 로봇이 루트 `/amcl_pose`와 `/map`을 공유하게 된다.
+        # 벤더 XML 은 `<param from>` 으로 params 를 그대로 넘기고 RewrittenYaml 을
+        # 쓰지 않는다. 그래서 `/pinky_01/amcl` 노드는 벤더 params 의 맨 키 `amcl:`
+        # 과 매칭되지 않아 파라미터가 한 개도 적용되지 않는다.
+        # `p0_runtime_assets.derive_nav2_params(..., root_key=namespace)` 로 미리
+        # 감싼 파일을 넘겨 그 간극을 메운다.
         IncludeLaunchDescription(
             AnyLaunchDescriptionSource(navigation),
             launch_arguments={
                 'map': map_path,
                 'namespace': namespace,
                 'use_composition': 'False',
+                'params_file': nav2_params_file,
             }.items(),
         ),
-        # 벤더 bringup은 로봇마다 `namespace` 인자를 받도록 고쳐 두어야 한다
-        # (bringup_robot.launch.xml 의 push-ros-namespace 절차). 그 수정 전
-        # 로봇에서는 이 인자가 무시되고 /odom·/scan 이 루트에 남는다.
-        IncludeLaunchDescription(
-            AnyLaunchDescriptionSource(vendor_bringup),
-            launch_arguments={'namespace': namespace}.items(),
-        ),
+        # 벤더 발행자(robot_state_publisher, odom)는 루트 `/tf` 에 쓴다. 그런데
+        # 벤더 navigation XML 이 nav2 노드에 `/tf -> tf` 를 걸어 두어 nav2 는
+        # `/pinky_01/tf` 를 듣는다. 그 갈라짐이 시뮬에서 AMCL 스캔 전량 폐기를
+        # 일으켰다. 발행자 쪽에도 같은 상대 이름을 걸어 한 자리로 모은다.
+        #
+        # `PushRosNamespace` 는 넣지 않는다 — 벤더 bringup 이 자기 인자로 스스로
+        # push 하므로 두 번 감싸면 `/pinky_01/pinky_01/...` 이 된다.
+        GroupAction([
+            SetRemap('/tf', 'tf'),
+            SetRemap('/tf_static', 'tf_static'),
+            IncludeLaunchDescription(
+                AnyLaunchDescriptionSource(vendor_bringup),
+                launch_arguments={'namespace': namespace}.items(),
+            ),
+        ]),
         # 실기 OMX endpoint는 검증 전 motion을 내보내지 않는 skeleton으로만 포함한다.
         # 정거장은 로봇에 속하지 않으므로 namespace 밖에 둔다.
         Node(package='trihouse_omx_adapter', executable='hardware_omx_adapter', parameters=[{'omx_id': omx_station_id}]),

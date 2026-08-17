@@ -287,3 +287,82 @@ def test_a_source_that_already_configures_collision_monitor_wins(tmp_path: Path)
     ]["ros__parameters"]
     assert monitor["observation_sources"] == ["front_scan"]
     assert monitor["front_scan"]["topic"] == "/pinky_01/scan"
+
+
+def test_root_key_wraps_the_document_for_launchers_without_rewritten_yaml(tmp_path):
+    """벤더 XML 은 `<param from>` 으로 원본을 그대로 넘긴다.
+
+    `nav2_bringup` 은 `RewrittenYaml(root_key=namespace)` 로 최상위 키를 스스로
+    감싸 주지만 실기 `pinky_navigation/launch/bringup_launch.xml` 에는 그 장치가
+    없다. 그러면 `/pinky_01/amcl` 노드가 맨 키 `amcl:` 과 매칭되지 않아 파라미터가
+    한 개도 적용되지 않는다.
+    """
+    module = _module()
+    source = tmp_path / "nav2_params.yaml"
+    source.write_text(
+        "amcl:\n"
+        "  ros__parameters:\n"
+        "    base_frame_id: base_footprint\n"
+        "controller_server:\n"
+        "  ros__parameters:\n"
+        "    controller_frequency: 20.0\n",
+        encoding="utf-8",
+    )
+    destination = tmp_path / "derived.yaml"
+
+    module.derive_nav2_params(source, "pinky_01", destination, root_key="pinky_01")
+
+    document = yaml.safe_load(destination.read_text(encoding="utf-8"))
+    assert set(document) == {"pinky_01"}
+    assert (
+        document["pinky_01"]["amcl"]["ros__parameters"]["base_frame_id"]
+        == "pinky_01/base_footprint"
+    )
+    assert (
+        document["pinky_01"]["controller_server"]["ros__parameters"][
+            "controller_frequency"
+        ]
+        == 20.0
+    )
+
+
+def test_omitting_the_root_key_keeps_the_existing_flat_shape(tmp_path):
+    """시뮬은 RewrittenYaml 이 감싸 주므로 기본값이 바뀌면 시뮬이 깨진다."""
+    module = _module()
+    source = tmp_path / "nav2_params.yaml"
+    source.write_text(
+        "amcl:\n  ros__parameters:\n    base_frame_id: base_footprint\n",
+        encoding="utf-8",
+    )
+    destination = tmp_path / "derived.yaml"
+
+    module.derive_nav2_params(source, "pinky_01", destination)
+
+    document = yaml.safe_load(destination.read_text(encoding="utf-8"))
+    assert "pinky_01" not in document
+    assert document["amcl"]["ros__parameters"]["base_frame_id"] == "pinky_01/base_footprint"
+
+
+def test_the_root_key_wraps_after_the_initial_pose_is_written(tmp_path):
+    """초기 pose 를 심은 뒤에 감싸야 한다 — 순서가 뒤집히면 pose 가 밖에 남는다."""
+    module = _module()
+    source = tmp_path / "nav2_params.yaml"
+    source.write_text("amcl:\n  ros__parameters:\n    alpha1: 0.2\n", encoding="utf-8")
+    destination = tmp_path / "derived.yaml"
+
+    module.derive_nav2_params(
+        source,
+        "pinky_01",
+        destination,
+        initial_pose=(1.5, -2.0, 0.25),
+        root_key="pinky_01",
+    )
+
+    amcl = yaml.safe_load(destination.read_text(encoding="utf-8"))["pinky_01"]["amcl"]
+    assert amcl["ros__parameters"]["set_initial_pose"] is True
+    assert amcl["ros__parameters"]["initial_pose"] == {
+        "x": 1.5,
+        "y": -2.0,
+        "z": 0.0,
+        "yaw": 0.25,
+    }

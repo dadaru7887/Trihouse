@@ -284,6 +284,7 @@ def derive_nav2_params(
     destination: Path,
     *,
     initial_pose: tuple[float, float, float] | None = None,
+    root_key: str | None = None,
 ) -> None:
     """한 로봇용 Nav2 파라미터를 만든다. 원본은 읽기만 한다.
 
@@ -292,6 +293,12 @@ def derive_nav2_params(
     흩뿌린 채 시작하고, 두 로봇이 서로 다른 곳에 있다고 믿으면 RMF 의 교통
     조정이 근거를 잃는다. 로봇은 충전 스테이션에서 spawn 되므로 그 좌표가 곧
     참값이다.
+
+    `root_key` 를 주면 문서 전체를 그 키 아래로 감싼다. `nav2_bringup` 은
+    `RewrittenYaml(root_key=namespace)` 로 이것을 스스로 하지만, 벤더
+    `pinky_navigation/launch/bringup_launch.xml` 은 `<param from>` 으로 원본을
+    그대로 넘긴다. 그러면 `/pinky_01/amcl` 노드가 맨 키 `amcl:` 과 매칭되지
+    않아 파라미터가 한 개도 적용되지 않는다.
     """
     document = yaml.safe_load(source.read_text(encoding="utf-8"))
     # 벤더가 이 절을 채우면 그것을 그대로 쓴다. 우리 기본값은 빈 자리만 메운다.
@@ -324,6 +331,10 @@ def derive_nav2_params(
         # `initial_pose: [0, 0, 0]` 리스트 형태는 어떤 파라미터에도 매칭되지
         # 않아 조용히 무시된다. 중첩 매핑으로 바꿔 써야 실제로 반영된다.
         amcl["initial_pose"] = {"x": float(x), "y": float(y), "z": 0.0, "yaw": float(yaw)}
+
+    if root_key:
+        # 초기 pose 를 심은 뒤에 감싼다. 순서가 뒤집히면 pose 가 감싼 문서 밖에 남는다.
+        derived = {root_key: derived}
 
     destination.write_text(
         yaml.safe_dump(derived, allow_unicode=True, sort_keys=False),
