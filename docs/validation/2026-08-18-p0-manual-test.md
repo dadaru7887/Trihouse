@@ -293,3 +293,169 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/e2e
   `scripts/verify_robot_status.py` 로 한다.
 - **`colcon build` 는 `pinky_pro/install` 을 source 한 뒤에 한다.** 벤더 패키지에
   의존하는 것이 있다.
+
+---
+
+## 8. 2026-08-18 세션 기록 — 예약 회수와 그 뒤에 드러난 벽 넷
+
+이 절은 실측 기록이다. 무엇이 확인됐고 무엇이 남았는지, 그리고 남은 것을 사람이
+손으로 이어가는 방법을 적는다.
+
+### 8.1 무엇이 끝났는가
+
+설계 8절 1~4 와 계획 Task 4·5·6 이 코드로 끝났고 전부 테스트가 붙어 있다.
+
+| 커밋 | 무엇 | 실측 검증 |
+|---|---|---|
+| `87d4fc91` | 취소 엔드포인트 `POST /internal/v1/jobs/{id}/cancel` | job 2·3 취소 → **예약 6건 회수** |
+| `6c99d600` | 만료 회수 `POST /internal/v1/reservations/expire` + 이상 보고 | 실가동 호출 성공, 이상 0건 |
+| `46316c7f` | 관제 화면 "예약 이상" 절과 확인 버튼 | 단위·통합 테스트 |
+| `237ad0df` | `job_runner` 가 매 주기 회수를 먼저 호출 | 로그에 `expired=[]` 매 주기 |
+| `3bd638ca` | 실기 nav2 params root key, TF namespace, 카메라 | launch 계약 테스트 |
+| `73217c75` | `scripts/derive_hardware_nav2_params.py` | 실물 벤더 params 로 실행 확인 |
+| `0f784d51` | costmap `odom` 프레임 namespace | **`Managed nodes are active` 1 → 2** |
+| `4d1f3c4f` | 취소가 outbox 를 닫는다 + RMF worker 가 한 건에 죽지 않는다 | worker 94주기 무사고 |
+| `0c2af19c` | 재취소가 남은 outbox 를 마저 닫는다 | 실가동 메시지 2건 정리 |
+| `19f68e13` | fleet adapter 에 nav_graph 가 쓰는 충전기 이름 | **fleet 등록 성공** |
+
+시뮬 실측(단일 로봇, `robots:=PK_01`):
+
+```
+managed_active      = 2      (기대치. 고치기 전에는 1)
+fleet_reject        = 0      (고치기 전에는 무한 재시도)
+invalid_odom_frame  = 0      (고치기 전에는 계속 반복)
+rmf_worker_crash    = 0      (고치기 전에는 기동 직후 사망)
+rmf_cycles          = 94     (고치기 전에는 0)
+robot status        : publishers=1, frame_id=map, dispatchable=true, errors=[]
+```
+
+### 8.2 순서가 중요했다 — 벽은 하나씩만 보인다
+
+예약이 회수되기 전에는 job 이 배정조차 되지 않아 그 다음 벽이 보이지 않았다.
+회수를 고치자 배정이 되고, 그러자 costmap 프레임이 보였다. 그것을 고치자 nav2 가
+활성화되고, 그러자 RMF worker 의 죽음이 보였다. 그것을 고치자 worker 가 돌고,
+그러자 fleet 등록 실패가 보였다. **네 개는 순차적으로만 관측된다.**
+
+### 8.3 지금 막혀 있는 것
+
+`job 4` 가 `PK_01` 을 쥔 채 되살아나지 못한다.
+
+```bash
+PW=$(grep -E '^MYSQL_ROOT_PASSWORD=' .env | cut -d= -f2-)
+docker exec trihouse-mysql mysql -uroot -p"$PW" --table -e "
+  SELECT m.message_id, m.state, m.attempts, LEFT(IFNULL(m.last_error,'-'),40) AS err
+    FROM trihouse_fms.integration_messages m WHERE m.job_step_id=17;"
+```
+
+`state=dead_letter`, `attempts=5`, `DISPATCH_ATTEMPTS_EXHAUSTED`. 그 5회는 **전부
+충전기 이름이 갈라져 있던 때의 시도**다. `dead_letter` 는 재시도 대상이 아니므로
+job 4 의 step 20 은 다시 dispatch 되지 않는다. job 1·5 도 2026-08-16 에 만들어진
+이전 세션의 시험 잔여물이다.
+
+### 8.4 사람이 이어서 하는 법
+
+**주의: 아래 1번은 되돌릴 수 없는 운영 DB 쓰기다.**
+
+```bash
+cd /home/syw/Trihouse
+
+# 0) 시뮬이 떠 있으면 내린다. 이 스크립트는 같은 셸의 pytest 도 죽이므로
+#    테스트를 돌리는 중에는 실행하지 마라.
+scripts/sim_teardown.sh
+uptime            # load average 가 8 아래로 내려간 뒤에 다음으로 간다
+
+# 1) 잔여 job 을 취소해 자원을 비운다. 취소 엔드포인트가 job·step·예약·outbox 를
+#    한 트랜잭션에서 닫는다.
+for JOB in 1 4 5; do
+  curl -s -X POST "http://127.0.0.1:8080/internal/v1/jobs/$JOB/cancel" \
+    -H 'Content-Type: application/json' \
+    -H "Idempotency-Key: p0-clear-decks-job-$JOB" \
+    -d '{"reason":"previous session leftover","requested_by":"W-OP-01"}' \
+    | python3 -m json.tool
+done
+
+# 2) 자원이 실제로 비었는지 본다. active_resource_key 가 전부 NULL 이어야 한다.
+docker exec trihouse-mysql mysql -uroot -p"$PW" --table -e "
+  SELECT reservation_id, job_id, IFNULL(device_id, CONCAT('location:',location_id)) AS resource,
+         state, IFNULL(active_resource_key,'(none)') AS active_key
+    FROM trihouse_fms.reservations ORDER BY reservation_id;"
+
+# 3) 단일 로봇으로 기동한다.
+TRIHOUSE_MAP_REVISION="trihouse_test_01:730111d2e446f5141c5ef069e5f2c1c8c5383aea79bdeffd05d3d34f2094b7ff" \
+TRIHOUSE_ROBOTS=PK_01 \
+ROS_DOMAIN_ID=0 \
+control_tower/bringup/p0_simulation_bringup.sh 2>&1 | tee /tmp/sim.log
+```
+
+다른 셸에서 판정한다. **위에서부터, 하나씩.**
+
+```bash
+SIM=/tmp/sim.log
+grep -c 'Managed nodes are active' $SIM        # 기대: 2
+grep -c 'We will not add the robot' $SIM       # 기대: 0
+grep -c 'Invalid frame ID "odom"' $SIM         # 기대: 0
+grep -c 'RMF dispatch cycle failed' $SIM       # 기대: 0
+grep -c 'RMF dispatch cycle:' $SIM             # 기대: 0 보다 큼
+python3 scripts/verify_robot_status.py pinky_01 20
+```
+
+여기까지 통과하면 주문을 넣는다.
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/v1/orders \
+  -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: sim-single-$(date +%s)" \
+  -d '{"requested_by":"sim-single","priority":"normal",
+       "items":[{"product_code":"SKU-COFFEE","quantity":1}]}' | python3 -m json.tool
+
+grep -E 'job runner cycle|job runner blocked' $SIM | tail -5
+grep -E 'RMF dispatch cycle:' $SIM | tail -3
+curl -s http://127.0.0.1:8080/api/v1/jobs | python3 -m json.tool | head -40
+```
+
+기대: `claimed=` 1 이상, job 이 `queued` → `assigned` → `running`. **여기서부터는
+아무도 아직 관측하지 못한 구간이다.** 막히면 그 지점의 로그를 그대로 기록한다.
+
+### 8.5 이 절을 읽을 때 주의할 것
+
+- **`scripts/sim_teardown.sh` 는 같은 셸에서 돌던 pytest 도 죽인다.** 이 세션에서
+  실제로 그랬다. 테스트와 teardown 을 같은 시간에 돌리지 마라. handoff 7절이
+  경고한 `pkill` 함정이 이 스크립트 안에도 있다.
+- **`trihouse_pinky_bringup` 의 install 은 복사본이었다.** handoff 7절의 "launch
+  파일은 symlink 라 재빌드가 필요 없다" 는 이 패키지에 맞지 않았다.
+  `colcon build --packages-select trihouse_pinky_bringup --symlink-install` 로 한 번
+  다시 빌드해 두었고, 이제 install → build → source 가 live symlink 로 이어진다.
+- **Gateway 컨테이너는 소스 마운트가 아니라 빌드 이미지다.** `fms_gateway` 를
+  고치면 반드시 다시 빌드해야 새 엔드포인트가 뜬다.
+
+  ```bash
+  docker compose --project-name trihouse_p0 --env-file .env \
+    -f compose.yaml -f compose.control.yaml -f compose.edge_4060.yaml \
+    -f compose.simulation.yaml up -d --build fms_gateway
+  curl -s http://127.0.0.1:8080/openapi.json | python3 -c "
+  import json,sys; p=json.load(sys.stdin)['paths']
+  print('/internal/v1/jobs/{job_id}/cancel' in p)"
+  ```
+- **Gateway 통합 테스트에는 자격증명이 필요하다.** 6절의 ② 만으로는 부족하다.
+
+  ```bash
+  FMS_DB_HOST=127.0.0.1 FMS_DB_PORT=3307 \
+  FMS_DB_USER=fms_gateway FMS_DB_PASSWORD=test_gateway_password \
+  FMS_DB_ADMIN_USER=root FMS_DB_ADMIN_PASSWORD=test_root_password \
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q fms_gateway/tests
+  ```
+
+### 8.6 실기로 넘어갈 때
+
+계획 Task 3(분기점)은 실물 로봇에서 `grep` 하나로 30초면 끝난다. 그 결과가 A 면
+파생 params 를 만들어 넘긴다 — 이제 도구가 있다.
+
+```bash
+scripts/derive_hardware_nav2_params.py \
+  --source pinky_pro/pinky_navigation/params/nav2_params.yaml \
+  --namespace pinky_01 \
+  --output .trihouse/p0/nav2/hardware_pinky_01.yaml
+```
+
+첫 줄이 `pinky_01:` 이면 성공이다. 분기 B(`namespace:=''`)면 이 도구를 쓰지 않고
+벤더 기본 params 를 그대로 쓴다.
