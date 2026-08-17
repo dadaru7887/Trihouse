@@ -301,3 +301,41 @@ def test_the_demo_includes_that_core_rather_than_the_energy_bridge() -> None:
 
     assert "rmf_core.launch.py" in source
     assert "office_energy_bridge.launch.py" not in source
+
+
+def test_nav2_never_runs_composed_so_each_robot_keeps_its_own_localisation(
+    tmp_path: Path,
+) -> None:
+    """nav2_bringup 의 `ComposableNode` 에는 namespace 인자가 없다.
+
+    합성을 켜면 바깥 PushRosNamespace 가 컨테이너에만 붙고 적재된 AMCL 과
+    map_server 에는 전파되지 않는다. 그러면 두 로봇이 루트의 `/amcl_pose` 와
+    `/map` 하나를 함께 쓰게 되어 위치추정이 서로를 덮어쓴다. 실제로 그렇게 떴다.
+    """
+    module, context, actions = _runtime_actions(tmp_path)
+
+    includes = []
+    for timer in (action for action in actions if hasattr(action, "actions")):
+        for group in timer.actions:
+            if not isinstance(group, GroupAction):
+                continue
+            for entity in group.get_sub_entities():
+                arguments = getattr(entity, "launch_arguments", None)
+                if arguments is None:
+                    continue
+                # launch_arguments 는 평범한 문자열일 수도, 치환 목록일 수도
+                # 있다. 문자열을 list() 로 감싸면 글자 단위로 쪼개진다.
+                def _text(value):
+                    if isinstance(value, str):
+                        return value
+                    if isinstance(value, (list, tuple)):
+                        return perform_substitutions(context, list(value))
+                    return perform_substitutions(context, [value])
+
+                resolved = {_text(name): _text(value) for name, value in arguments}
+                if "use_composition" in resolved:
+                    includes.append(resolved)
+
+    assert includes, "nav2 bringup include not found"
+    for resolved in includes:
+        assert resolved["use_composition"] == "False"

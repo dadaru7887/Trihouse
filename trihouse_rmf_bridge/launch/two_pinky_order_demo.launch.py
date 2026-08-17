@@ -212,6 +212,14 @@ def _robot_group(
                 # nav2 노드가 `/pinky_01/pinky_01/...` 로 두 번 접힌다.
                 "namespace": "",
                 "use_namespace": "false",
+                # 합성(composition)은 반드시 꺼야 한다. nav2_bringup 의
+                # `ComposableNode` 에는 namespace 인자가 없어서, 바깥
+                # PushRosNamespace 는 컨테이너 프로세스에만 붙고 그 안에 적재된
+                # AMCL·map_server 에는 전파되지 않는다. 켜 둔 채로 두 대를
+                # 띄우면 두 로봇이 루트의 `/amcl_pose` 와 `/map` 하나를 함께
+                # 쓰게 되어 위치추정이 서로를 덮어쓴다. 비합성 분기는 평범한
+                # `Node` 라 namespace 를 제대로 물려받는다.
+                "use_composition": "False",
                 "use_sim_time": use_sim_time,
                 "autostart": "true",
                 "params_file": str(nav2_params),
