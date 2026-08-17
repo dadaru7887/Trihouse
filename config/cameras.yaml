@@ -1,0 +1,48 @@
+# 카메라 등록 정본.
+#
+# 카메라 명부를 적는 곳은 이 파일 하나뿐이다. `map_revisions.manifest.cameras`
+# 는 지도 발행 시점의 감사용 사본이고, Pinky 송신 설정과 PC2 환경변수와
+# `operations_feed` 는 모두 여기서 파생되거나 여기에 대조된다.
+#
+# 운영 스트림 경로(`pinky/CAM-PK-01`)는 적지 않는다. 역할 접두사와 `camera_id`
+# 로 파생하므로 경로와 ID 가 어긋날 방법 자체가 없다.
+#
+# `simulation_path` 는 파생할 수 없어서 적는다. P0 는 카메라 여섯 대를 물리적으로
+# 연결하지 않으므로 fixture 스트림을 쓰는데, 그 이름 규칙이 카메라마다 다르다
+# (`pinky_01_travel`, `omx_01_wrist`, `warehouse_fixed_01`). 실스트림은 역할
+# 접두사로, fixture 는 `fixtures/` 접두사로 시작하므로 경로만 보고 구분된다.
+#
+# `map_pose` 는 P1 캘리브레이션 전까지 측정되지 않았으므로 좌표를 지어내지
+# 않고 null 로 둔다. 로봇에 붙어 다니는 카메라는 고정 좌표를 가질 수 없으므로
+# 캘리브레이션 후에도 계속 null 이다.
+cameras:
+  - camera_id: CAM-PK-01
+    role: pinky_travel
+    attached_to: PK_01
+    simulation_path: fixtures/pinky_01_travel
+    map_pose: null
+  - camera_id: CAM-PK-02
+    role: pinky_travel
+    attached_to: PK_02
+    simulation_path: fixtures/pinky_02_travel
+    map_pose: null
+  - camera_id: CAM-OMX-01-WRIST
+    role: omx_wrist
+    attached_to: OMX_01
+    simulation_path: fixtures/omx_01_wrist
+    map_pose: null
+  - camera_id: CAM-OMX-02-WRIST
+    role: omx_wrist
+    attached_to: OMX_02
+    simulation_path: fixtures/omx_02_wrist
+    map_pose: null
+  - camera_id: CAM-FIXED-01
+    role: warehouse_fixed
+    attached_to: null
+    simulation_path: fixtures/warehouse_fixed_01
+    map_pose: null
+  - camera_id: CAM-FIXED-02
+    role: warehouse_fixed
+    attached_to: null
+    simulation_path: fixtures/warehouse_fixed_02
+    map_pose: null

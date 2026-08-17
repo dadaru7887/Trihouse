@@ -11,6 +11,8 @@ RMF 일정이 허용 오차를 넘게 어긋나면 `PATH_SCHEDULE_MISMATCH`를 �
 import math
 from dataclasses import dataclass, replace
 
+from control_tower.gateway.camera_registry import load_camera_registry
+
 
 @dataclass(frozen=True)
 class RobotView:
@@ -63,17 +65,36 @@ class CameraFixture:
     map_pose: tuple[float, float, float] | None = None
 
 
-CAMERA_FIXTURES = (
-    CameraFixture('CAM-PK-01', 'pinky_travel', 'PK_01', 'fixtures/pinky_01_travel'),
-    CameraFixture('CAM-PK-02', 'pinky_travel', 'PK_02', 'fixtures/pinky_02_travel'),
-    CameraFixture('CAM-OMX-01-WRIST', 'omx_wrist', 'OMX_01', 'fixtures/omx_01_wrist'),
-    CameraFixture('CAM-OMX-02-WRIST', 'omx_wrist', 'OMX_02', 'fixtures/omx_02_wrist'),
-    CameraFixture('CAM-FIXED-01', 'warehouse_fixed', None, 'fixtures/warehouse_fixed_01'),
-    CameraFixture('CAM-FIXED-02', 'warehouse_fixed', None, 'fixtures/warehouse_fixed_02'),
-)
+def _load_camera_fixtures() -> tuple[CameraFixture, ...]:
+    """등록 정본에서 P0 카메라 fixture 를 만든다.
 
-_PINKY_CAMERA = {'PK_01': 'CAM-PK-01', 'PK_02': 'CAM-PK-02'}
-_OMX_WRIST_CAMERA = {'OMX_01': 'CAM-OMX-01-WRIST', 'OMX_02': 'CAM-OMX-02-WRIST'}
+    카메라 명부를 적는 곳은 `config/cameras.yaml` 하나뿐이다. P0는 실물 카메라를
+    연결하지 않으므로 운영 경로 대신 `simulation_path` 를 쓴다.
+    """
+    return tuple(
+        CameraFixture(
+            camera_id=record.camera_id,
+            role=record.role,
+            attached_to=record.attached_to,
+            mediamtx_path=record.simulation_path,
+            map_pose=record.map_pose,
+        )
+        for record in load_camera_registry()
+    )
+
+
+def _cameras_by_owner(role: str) -> dict[str, str]:
+    return {
+        camera.attached_to: camera.camera_id
+        for camera in CAMERA_FIXTURES
+        if camera.role == role and camera.attached_to is not None
+    }
+
+
+CAMERA_FIXTURES = _load_camera_fixtures()
+
+_PINKY_CAMERA = _cameras_by_owner('pinky_travel')
+_OMX_WRIST_CAMERA = _cameras_by_owner('omx_wrist')
 # 상온/냉장 구역은 고정 카메라 1번, 냉동/포장 구역은 2번이 비춘다.
 _FIXED_CAMERA_BY_AREA = {
     'WH-AMB-01': 'CAM-FIXED-01',

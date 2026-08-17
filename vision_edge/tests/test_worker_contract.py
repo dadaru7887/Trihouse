@@ -16,7 +16,7 @@ from vision_edge.worker import (  # noqa: E402
 )
 
 
-CAMERAS_CONFIG = Path(__file__).resolve().parents[2] / "config" / "cameras.simulation.yaml"
+CAMERAS_CONFIG = Path(__file__).resolve().parents[2] / "config" / "cameras.yaml"
 
 QR = QrObservation(value="SKU-MILK", bounding_box=((0.0, 0.0), (1.0, 1.0)))
 MARKER = ArucoObservation(
@@ -165,4 +165,4 @@ def test_six_camera_fixtures_are_registered_without_invented_poses() -> None:
     ]
     # P1 캘리브레이션 전까지 map pose는 측정되지 않았다.
     assert text.count("map_pose: null") == 6
-    assert "mediamtx_path: fixtures/" in text
+    assert "simulation_path: fixtures/" in text
