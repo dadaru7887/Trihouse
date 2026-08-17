@@ -39,7 +39,7 @@ class GazeboOmxAdapter(Node):
             omx_id=str(self.get_parameter("omx_id").value)
         )
         self.handover_pub = self.create_publisher(HandoverState, "/trihouse/handover/state", 10)
-        self.cargo_pub = self.create_publisher(CargoState, "/trihouse/cargo/state", 10)
+        self.cargo_pub = self.create_publisher(CargoState, "trihouse/cargo/state", 10)
         self.create_timer(0.5, self._publish)
 
     def _publish(self) -> None:

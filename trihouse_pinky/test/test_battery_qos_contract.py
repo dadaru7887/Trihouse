@@ -15,8 +15,9 @@ NODE = (
 def test_battery_condition_node_uses_approved_topics_timeouts_and_qos():
     source = NODE.read_text(encoding="utf-8")
 
-    assert "'/trihouse/battery'" in source
-    assert "'/trihouse/battery/condition'" in source
+    # 상대 이름이어야 PushRosNamespace 가 로봇별로 접두사를 붙일 수 있다.
+    assert "'trihouse/battery'" in source
+    assert "'trihouse/battery/condition'" in source
     assert "'startup_timeout_s', 5.0" in source
     assert "'telemetry_timeout_s', 3.0" in source
     assert "QoSHistoryPolicy.KEEP_LAST" in source

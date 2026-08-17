@@ -42,14 +42,29 @@ def test_sim_launch_exposes_battery_scenario_controls() -> None:
     } <= names
 
 
+
+def _all_nodes(entities):
+    """GroupAction 안까지 훑는다.
+
+    onboard 노드는 이제 `PushRosNamespace` 를 적용하는 GroupAction 안에 들어
+    있으므로 최상위 entities 만 보면 찾지 못한다. 로봇 구분이 namespace 로
+    바뀐 결과이지 노드가 사라진 것이 아니다.
+    """
+    for entity in entities:
+        if isinstance(entity, Node):
+            yield entity
+        else:
+            children = getattr(entity, "get_sub_entities", None)
+            if children is not None:
+                yield from _all_nodes(children())
+
 def test_sim_hardware_receives_all_battery_controls() -> None:
     """선언된 launch 인자가 sim_hardware parameter로 전달되지 않는 회귀를 막는다."""
     description = _description()
     sim_hardware = next(
         action
-        for action in description.entities
-        if isinstance(action, Node)
-        and action.node_executable == "sim_hardware"
+        for action in _all_nodes(description.entities)
+        if action.node_executable == "sim_hardware"
     )
     parameters = sim_hardware._Node__parameters[0]
     names = {key[0].text for key in parameters}

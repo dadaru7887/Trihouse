@@ -82,7 +82,7 @@ gateway는 해당 ID의 zone을 즉시 만료시킨다.
 `pinky_pro`와 위 패키지를 같은 ROS 2 Jazzy overlay로 빌드한 뒤 실행한다.
 
 ```bash
-ROS_DOMAIN_ID=51 ros2 launch trihouse_pinky_bringup trihouse_pinky.launch.py robot_id:=PK-01
+ROS_DOMAIN_ID=52 ros2 launch trihouse_pinky_bringup trihouse_pinky.launch.py robot_id:=PK-01
 ```
 
 확인할 것:
@@ -116,7 +116,7 @@ Control Tower/Safety authority가 `/trihouse/safety/emergency_request`로 보낸
 카메라 검출 자체가 `/cmd_vel`을 발행하지 않는다.
 
 ```bash
-ROS_DOMAIN_ID=51 ros2 launch trihouse_pinky_bringup trihouse_pinky_sim.launch.py robot_id:=PK-01
+ROS_DOMAIN_ID=52 ros2 launch trihouse_pinky_bringup trihouse_pinky_sim.launch.py robot_id:=PK-01
 ```
 
 이 launch는 `/trihouse/proximity/front`과 `/trihouse/battery`를 `sim_hardware`가
@@ -135,7 +135,7 @@ GPIO가 LOW로 내려가는지 실물에서 반드시 확인한다.
 그 절대 경로를 전달한다.
 
 ```bash
-ROS_DOMAIN_ID=51 ros2 launch trihouse_pinky_bringup trihouse_pinky.launch.py \
+ROS_DOMAIN_ID=52 ros2 launch trihouse_pinky_bringup trihouse_pinky.launch.py \
   robot_id:=PK-01 font_path:=/opt/trihouse/fonts/NanumGothic.ttf
 ```
 

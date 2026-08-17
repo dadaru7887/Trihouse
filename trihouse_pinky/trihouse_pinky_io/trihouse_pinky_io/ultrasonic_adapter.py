@@ -7,8 +7,8 @@ from sensor_msgs.msg import Range
 class UltrasonicAdapter(Node):
     def __init__(self) -> None:
         super().__init__('ultrasonic_adapter')
-        self.publisher = self.create_publisher(Range, '/trihouse/proximity/front', 10)
-        self.create_subscription(Range, '/us_sensor/range', self.publisher.publish, 10)
+        self.publisher = self.create_publisher(Range, 'trihouse/proximity/front', 10)
+        self.create_subscription(Range, 'us_sensor/range', self.publisher.publish, 10)
 
 
 def main() -> None:

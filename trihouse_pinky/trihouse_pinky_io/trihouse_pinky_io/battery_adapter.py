@@ -7,8 +7,8 @@ from sensor_msgs.msg import BatteryState
 class BatteryAdapter(Node):
     def __init__(self) -> None:
         super().__init__('battery_adapter')
-        self.publisher = self.create_publisher(BatteryState, '/trihouse/battery', 10)
-        self.create_subscription(BatteryState, '/batt_state', self.publisher.publish, 10)
+        self.publisher = self.create_publisher(BatteryState, 'trihouse/battery', 10)
+        self.create_subscription(BatteryState, 'batt_state', self.publisher.publish, 10)
 
 
 def main() -> None:

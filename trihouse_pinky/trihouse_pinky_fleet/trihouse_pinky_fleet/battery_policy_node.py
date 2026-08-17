@@ -14,13 +14,13 @@ class BatteryPolicyNode(Node):
         self._charging = False
         self._condition = BatteryCondition()
         self.publisher = self.create_publisher(
-            BatteryPolicyState, "/trihouse/battery/policy_state", 10,
+            BatteryPolicyState, "trihouse/battery/policy_state", 10,
         )
         self.create_subscription(
-            BatteryCondition, "/trihouse/battery/condition", self._on_condition, 10,
+            BatteryCondition, "trihouse/battery/condition", self._on_condition, 10,
         )
         self.create_subscription(
-            BatteryState, "/trihouse/battery", self._on_battery, 10,
+            BatteryState, "trihouse/battery", self._on_battery, 10,
         )
         self.create_timer(1.0, self._publish)
 

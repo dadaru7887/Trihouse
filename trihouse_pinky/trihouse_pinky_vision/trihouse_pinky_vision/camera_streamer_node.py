@@ -63,7 +63,7 @@ class CameraStreamerNode(Node):
         )
         self._publisher = self.create_publisher(
             StreamHealth,
-            '/trihouse/vision/stream_health',
+            'trihouse/vision/stream_health',
             qos,
         )
         self._supervisor.start()

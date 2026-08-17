@@ -58,20 +58,20 @@ class StatusNode(Node):
         self.cargo = CargoState()
         self.battery_policy = BatteryPolicyState()
 
-        self.create_subscription(LaserScan, '/scan', self._scan, 10)
-        self.create_subscription(Odometry, '/odom', self._odom, 10)
+        self.create_subscription(LaserScan, 'scan', self._scan, 10)
+        self.create_subscription(Odometry, 'odom', self._odom, 10)
         self.create_subscription(
-            PoseWithCovarianceStamped, '/amcl_pose', self._map_pose, 10)
-        self.create_subscription(BatteryState, '/trihouse/battery', self._battery, 10)
-        self.create_subscription(BatteryCondition, '/trihouse/battery/condition', self._battery_condition, 10)
-        self.create_subscription(SafetyState, '/trihouse/safety/state', self._safety, 10)
-        self.create_subscription(CargoState, '/trihouse/cargo/state', self._cargo, 10)
-        self.create_subscription(BatteryPolicyState, '/trihouse/battery/policy_state', lambda m: setattr(self, 'battery_policy', m), 10)
-        self.create_subscription(NavigationState, '/trihouse/navigation/state', self._navigation, 10)
-        self.create_subscription(Readiness, '/trihouse/readiness', self._readiness, 10)
-        self.create_subscription(ConnectionState, '/trihouse/fms/state', self._connection, 10)
+            PoseWithCovarianceStamped, 'amcl_pose', self._map_pose, 10)
+        self.create_subscription(BatteryState, 'trihouse/battery', self._battery, 10)
+        self.create_subscription(BatteryCondition, 'trihouse/battery/condition', self._battery_condition, 10)
+        self.create_subscription(SafetyState, 'trihouse/safety/state', self._safety, 10)
+        self.create_subscription(CargoState, 'trihouse/cargo/state', self._cargo, 10)
+        self.create_subscription(BatteryPolicyState, 'trihouse/battery/policy_state', lambda m: setattr(self, 'battery_policy', m), 10)
+        self.create_subscription(NavigationState, 'trihouse/navigation/state', self._navigation, 10)
+        self.create_subscription(Readiness, 'trihouse/readiness', self._readiness, 10)
+        self.create_subscription(ConnectionState, 'trihouse/fms/state', self._connection, 10)
 
-        self.publisher = self.create_publisher(RobotStatus, '/trihouse/status', 10)
+        self.publisher = self.create_publisher(RobotStatus, 'trihouse/status', 10)
 
         self.create_timer(1.0, self._publish)   # heartbeat가 유지되도록 1초마다 _publish를 호출한다.
 

@@ -20,10 +20,10 @@ class ReadinessChecker(Node):
         self.robot_id = self.get_parameter('robot_id').value
         self.timeout = float(self.get_parameter('sensor_timeout_s').value)
         self.last_scan, self.last_odom = 0.0, 0.0
-        self.create_subscription(LaserScan, '/scan', lambda _: self._mark('scan'), 10)
-        self.create_subscription(Odometry, '/odom', lambda _: self._mark('odom'), 10)
-        self.publisher = self.create_publisher(Readiness, '/trihouse/readiness', 10)
-        self.nav = ActionClient(self, NavigateToPose, '/navigate_to_pose')
+        self.create_subscription(LaserScan, 'scan', lambda _: self._mark('scan'), 10)
+        self.create_subscription(Odometry, 'odom', lambda _: self._mark('odom'), 10)
+        self.publisher = self.create_publisher(Readiness, 'trihouse/readiness', 10)
+        self.nav = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.create_timer(1.0, self._publish)
 
     def _mark(self, source: str) -> None:

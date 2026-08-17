@@ -414,7 +414,7 @@ ros2 pkg prefix trihouse_pinky_safety
 ```bash
 source /opt/ros/jazzy/setup.bash
 source /home/syw/Trihouse/install/setup.bash
-export ROS_DOMAIN_ID=51
+export ROS_DOMAIN_ID=52
 ```
 
 ### 터미널 1: Gazebo physics·sensor 서버

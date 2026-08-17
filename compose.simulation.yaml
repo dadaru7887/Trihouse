@@ -10,7 +10,7 @@ services:
     ipc: host
     environment:
       TZ: Asia/Seoul
-      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-52}
       RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
       FASTDDS_BUILTIN_TRANSPORTS: ${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}
       RMF_SERVER_USE_SIM_TIME: "true"

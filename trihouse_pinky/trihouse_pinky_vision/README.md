@@ -100,7 +100,7 @@ source install/setup.bash
 Pinky에서 MediaMTX 서버가 먼저 실행된 상태로:
 
 ```bash
-export ROS_DOMAIN_ID=51  # Pinky 2는 52
+export ROS_DOMAIN_ID=52  # 두 로봇이 같은 domain 을 쓴다. 구분은 namespace
 ros2 launch trihouse_pinky_vision vision.launch.py
 ```
 

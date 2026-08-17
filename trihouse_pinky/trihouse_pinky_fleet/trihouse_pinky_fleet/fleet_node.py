@@ -36,24 +36,24 @@ class FleetNode(Node):
         self.robot_id = self.get_parameter('robot_id').value
         self.workflow = TransportWorkflow(robot_id=self.robot_id, expected_map_revision=self.get_parameter('map_revision').value)
         self.ready = False; self.outbox_ready = False; self.cargo_confirmed = False; self.emergency = False; self.stationary = False; self.recovery_health_ok = False; self.current_pose: tuple[float, float, float] | None = None
-        self.navigation_pub = self.create_publisher(NavigationState, '/trihouse/navigation/state', 10)
-        self.event_pub = self.create_publisher(TaskEvent, '/trihouse/task/events', 10)
+        self.navigation_pub = self.create_publisher(NavigationState, 'trihouse/navigation/state', 10)
+        self.event_pub = self.create_publisher(TaskEvent, 'trihouse/task/events', 10)
         self.handover_pub = self.create_publisher(HandoverState, '/trihouse/handover/state', 10)
-        self.display_pub = self.create_publisher(String, '/trihouse/display/destination_code', 10)
-        self.create_subscription(Readiness, '/trihouse/readiness', self._on_readiness, 10)
-        self.create_subscription(CargoState, '/trihouse/cargo/state', self._on_cargo, 10)
-        self.create_subscription(SafetyState, '/trihouse/safety/state', self._on_safety, 10)
-        self.create_subscription(RobotHealth, '/trihouse/health', self._on_health, 10)
+        self.display_pub = self.create_publisher(String, 'trihouse/display/destination_code', 10)
+        self.create_subscription(Readiness, 'trihouse/readiness', self._on_readiness, 10)
+        self.create_subscription(CargoState, 'trihouse/cargo/state', self._on_cargo, 10)
+        self.create_subscription(SafetyState, 'trihouse/safety/state', self._on_safety, 10)
+        self.create_subscription(RobotHealth, 'trihouse/health', self._on_health, 10)
         self.create_subscription(
-            Bool, '/trihouse/fms/event_outbox_ready', self._on_outbox_ready, 10
+            Bool, 'trihouse/fms/event_outbox_ready', self._on_outbox_ready, 10
         )
-        self.create_subscription(Odometry, '/odom', self._on_odom, 10)
-        self.nav_client = ActionClient(self, NavigateToPose, '/navigate_to_pose')
+        self.create_subscription(Odometry, 'odom', self._on_odom, 10)
+        self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.nav_goal_handles = {}
         self.server = ActionServer(
             self,
             ExecuteTransport,
-            '/trihouse/transport/execute',
+            'trihouse/transport/execute',
             self._execute,
             cancel_callback=self._cancel,
         )

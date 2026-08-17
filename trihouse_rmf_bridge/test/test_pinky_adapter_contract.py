@@ -77,7 +77,9 @@ def test_rmf_never_treats_odom_pose_as_map_pose() -> None:
 
     assert 'message.frame_id != "map"' in adapter_source
     assert "PoseWithCovarianceStamped" in status_source
-    assert "'/amcl_pose'" in status_source
+    # 상대 이름이다. 로봇 구분이 remap 이 아니라 namespace 로 바뀌면서
+    # `PushRosNamespace` 가 접두사를 붙일 수 있어야 하기 때문이다.
+    assert "'amcl_pose'" in status_source
     assert "now - self.last_map_pose <= self.timeout" in status_source
 
 

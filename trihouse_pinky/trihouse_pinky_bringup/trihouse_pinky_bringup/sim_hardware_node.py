@@ -77,8 +77,8 @@ class SimHardware(Node):
             reliability=QoSReliabilityPolicy.RELIABLE,
             durability=QoSDurabilityPolicy.VOLATILE,
         )
-        self.range_pub = self.create_publisher(Range, '/trihouse/proximity/front', 10)
-        self.battery_pub = self.create_publisher(BatteryState, '/trihouse/battery', qos)
+        self.range_pub = self.create_publisher(Range, 'trihouse/proximity/front', 10)
+        self.battery_pub = self.create_publisher(BatteryState, 'trihouse/battery', qos)
         self.create_timer(1.0, self._publish)
 
     def _publish(self) -> None:

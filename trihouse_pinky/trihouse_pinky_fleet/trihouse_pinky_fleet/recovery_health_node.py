@@ -18,12 +18,12 @@ class RecoveryHealthNode(Node):
         self.robot_id = self.get_parameter('robot_id').value; self.timeout = float(self.get_parameter('timeout_s').value)
         self.last_odom = self.last_scan = self.last_range = self.last_battery = 0.0
         self.cargo_present = False
-        self.create_subscription(Odometry, '/odom', lambda _: self._mark('odom'), 10)
-        self.create_subscription(LaserScan, '/scan', lambda _: self._mark('scan'), 10)
-        self.create_subscription(Range, '/trihouse/proximity/front', lambda _: self._mark('range'), 10)
-        self.create_subscription(BatteryState, '/trihouse/battery', lambda _: self._mark('battery'), 10)
-        self.create_subscription(CargoState, '/trihouse/cargo/state', self._cargo, 10)
-        self.publisher = self.create_publisher(RobotHealth, '/trihouse/health', 10)
+        self.create_subscription(Odometry, 'odom', lambda _: self._mark('odom'), 10)
+        self.create_subscription(LaserScan, 'scan', lambda _: self._mark('scan'), 10)
+        self.create_subscription(Range, 'trihouse/proximity/front', lambda _: self._mark('range'), 10)
+        self.create_subscription(BatteryState, 'trihouse/battery', lambda _: self._mark('battery'), 10)
+        self.create_subscription(CargoState, 'trihouse/cargo/state', self._cargo, 10)
+        self.publisher = self.create_publisher(RobotHealth, 'trihouse/health', 10)
         self.create_timer(1.0, self._publish)
 
     def _mark(self, component: str) -> None:

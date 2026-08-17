@@ -40,10 +40,10 @@ class BatteryConditionNode(Node):
             durability=QoSDurabilityPolicy.VOLATILE,
         )
         self.publisher = self.create_publisher(
-            BatteryCondition, '/trihouse/battery/condition', qos
+            BatteryCondition, 'trihouse/battery/condition', qos
         )
         self.create_subscription(
-            BatteryState, '/trihouse/battery', self._on_battery, qos
+            BatteryState, 'trihouse/battery', self._on_battery, qos
         )
         self.create_timer(1.0, self._publish_heartbeat)
 

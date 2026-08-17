@@ -48,14 +48,14 @@ source install/setup.bash
 `map_revision`과 adapter 인자는 반드시 같아야 한다.
 
 ```bash
-ROS_DOMAIN_ID=51 ros2 launch trihouse_pinky_bringup trihouse_pinky.launch.py \
+ROS_DOMAIN_ID=52 ros2 launch trihouse_pinky_bringup trihouse_pinky.launch.py \
   robot_id:=PK-01 map_revision:=gwanghee-2026-08-12
 ```
 
 AMCL이 수렴해 `/amcl_pose`와 `RobotStatus.frame_id=map`이 확인된 뒤 adapter를 실행한다.
 
 ```bash
-ROS_DOMAIN_ID=51 ros2 launch trihouse_rmf_bridge \
+ROS_DOMAIN_ID=52 ros2 launch trihouse_rmf_bridge \
   pinky_easy_fleet_adapter.launch.py \
   nav_graph:=/home/syw/Trihouse/control_system/rmf_maps/gwanghee/nav_graphs/0.yaml \
   robot_name:=PK-01 rmf_map_name:=L1 charger_waypoint:=충전1 \
@@ -65,11 +65,11 @@ ROS_DOMAIN_ID=51 ros2 launch trihouse_rmf_bridge \
 ## 등록 전 확인
 
 ```bash
-ROS_DOMAIN_ID=51 ros2 topic echo --once /trihouse/status
-ROS_DOMAIN_ID=51 ros2 action info /trihouse/transport/execute
-ROS_DOMAIN_ID=51 ros2 topic echo --once /fleet_states
-ROS_DOMAIN_ID=51 ros2 topic info /cmd_vel --verbose
-ROS_DOMAIN_ID=51 ros2 action info /navigate_to_pose
+ROS_DOMAIN_ID=52 ros2 topic echo --once /trihouse/status
+ROS_DOMAIN_ID=52 ros2 action info /trihouse/transport/execute
+ROS_DOMAIN_ID=52 ros2 topic echo --once /fleet_states
+ROS_DOMAIN_ID=52 ros2 topic info /cmd_vel --verbose
+ROS_DOMAIN_ID=52 ros2 action info /navigate_to_pose
 ```
 
 다음 조건을 모두 만족해야 첫 RMF 작업을 제출한다.

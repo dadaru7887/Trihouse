@@ -266,22 +266,22 @@ class GatewayNode(Node):
         self._measurement_warning_emitted = False
 
         # Control Tower 접속 상태를 로봇 내부의 다른 ROS 노드에 알린다.
-        self.state_pub = self.create_publisher(ConnectionState, '/trihouse/fms/state', 10)
+        self.state_pub = self.create_publisher(ConnectionState, 'trihouse/fms/state', 10)
         self.outbox_ready_pub = self.create_publisher(
-            Bool, '/trihouse/fms/event_outbox_ready', 10
+            Bool, 'trihouse/fms/event_outbox_ready', 10
         )
 
         # 통합 로봇 상태와 작업 이벤트는 Control Tower로 보내기 위해 구독한다.
-        self.create_subscription(RobotStatus, '/trihouse/status', self._status, 10)
-        self.create_subscription(TaskEvent, '/trihouse/task/events', self._task_event, 10)
+        self.create_subscription(RobotStatus, 'trihouse/status', self._status, 10)
+        self.create_subscription(TaskEvent, 'trihouse/task/events', self._task_event, 10)
 
         # 검증된 운송 명령은 fleet_node가 제공하는 ROS action으로 전달한다.
-        self.transport = ActionClient(self, ExecuteTransport, '/trihouse/transport/execute')
+        self.transport = ActionClient(self, ExecuteTransport, 'trihouse/transport/execute')
 
         # 비상 요청과 접근 금지 구역은 해당 로컬 안전 노드에 ROS 메시지로 넘긴다.
-        self.emergency_pub = self.create_publisher(Bool, '/trihouse/safety/emergency_request', 10)
-        self.keep_out_pub = self.create_publisher(KeepOutZone, '/trihouse/safety/keep_out_zones', 10)
-        self.clear_emergency = self.create_client(ClearEmergency, '/trihouse/safety/clear_emergency')
+        self.emergency_pub = self.create_publisher(Bool, 'trihouse/safety/emergency_request', 10)
+        self.keep_out_pub = self.create_publisher(KeepOutZone, 'trihouse/safety/keep_out_zones', 10)
+        self.clear_emergency = self.create_client(ClearEmergency, 'trihouse/safety/clear_emergency')
 
         # NDJSON client는 별도 thread에서 재접속하며 수신 결과만 queue에 추가한다.
         self.link = NdjsonClient(

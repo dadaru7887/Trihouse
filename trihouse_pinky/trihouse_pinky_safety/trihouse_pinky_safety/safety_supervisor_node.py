@@ -45,20 +45,20 @@ class SafetySupervisor(Node):
         self.last_sensor_at = 0.0
         self.last_range_at = 0.0
         self.last_scan_at = 0.0
-        self.create_subscription(Twist, '/cmd_vel_nav', self._on_nav, 10)
-        self.create_subscription(Twist, '/cmd_vel_dock', self._on_dock, 10)
-        self.create_subscription(Range, '/trihouse/proximity/front', self._on_range, 10)
-        self.create_subscription(LaserScan, '/scan', self._on_scan, 10)
-        self.create_subscription(PersonDetection, '/trihouse/vision/person_detection/base', self._on_person, 10)
-        self.create_subscription(KeepOutZone, '/trihouse/safety/keep_out_zones', self._on_keep_out, 10)
-        self.create_subscription(Odometry, '/odom', self._on_odom, 10)
-        self.create_subscription(ConnectionState, '/trihouse/fms/state', self._on_connection, 10)
+        self.create_subscription(Twist, 'cmd_vel_nav', self._on_nav, 10)
+        self.create_subscription(Twist, 'cmd_vel_dock', self._on_dock, 10)
+        self.create_subscription(Range, 'trihouse/proximity/front', self._on_range, 10)
+        self.create_subscription(LaserScan, 'scan', self._on_scan, 10)
+        self.create_subscription(PersonDetection, 'trihouse/vision/person_detection/base', self._on_person, 10)
+        self.create_subscription(KeepOutZone, 'trihouse/safety/keep_out_zones', self._on_keep_out, 10)
+        self.create_subscription(Odometry, 'odom', self._on_odom, 10)
+        self.create_subscription(ConnectionState, 'trihouse/fms/state', self._on_connection, 10)
         # Vision detects; the Control Tower/Safety authority explicitly requests emergency.
-        self.create_subscription(Bool, '/trihouse/safety/emergency_request', self._on_emergency_request, 10)
-        self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.state_pub = self.create_publisher(SafetyState, '/trihouse/safety/state', 10)
-        self.indicator_pub = self.create_publisher(IndicatorState, '/trihouse/indicator/state', 10)
-        self.create_service(ClearEmergency, '/trihouse/safety/clear_emergency', self._clear_emergency)
+        self.create_subscription(Bool, 'trihouse/safety/emergency_request', self._on_emergency_request, 10)
+        self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', 10)
+        self.state_pub = self.create_publisher(SafetyState, 'trihouse/safety/state', 10)
+        self.indicator_pub = self.create_publisher(IndicatorState, 'trihouse/indicator/state', 10)
+        self.create_service(ClearEmergency, 'trihouse/safety/clear_emergency', self._clear_emergency)
         self.create_timer(0.05, self._publish)
 
     def _on_nav(self, message: Twist) -> None:

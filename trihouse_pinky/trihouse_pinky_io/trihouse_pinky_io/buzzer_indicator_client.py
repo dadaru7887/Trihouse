@@ -15,7 +15,7 @@ class BuzzerIndicatorClient(Node):
             self.gpio = GPIO
         except Exception as error:
             self.get_logger().warning(f'buzzer GPIO unavailable: {error}')
-        self.create_subscription(IndicatorState, '/trihouse/indicator/state', self._apply, 10)
+        self.create_subscription(IndicatorState, 'trihouse/indicator/state', self._apply, 10)
 
     def _apply(self, message: IndicatorState) -> None:
         if self.gpio is not None:

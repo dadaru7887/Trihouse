@@ -9,8 +9,8 @@ class LedIndicatorClient(Node):
     COLORS = {IndicatorState.STATE_OFF: (0, 0, 0), IndicatorState.STATE_PERSON_DETECTED: (255, 128, 0), IndicatorState.STATE_EMERGENCY: (255, 0, 0)}
     def __init__(self) -> None:
         super().__init__('led_indicator_client')
-        self.client = self.create_client(SetLed, '/set_led')
-        self.create_subscription(IndicatorState, '/trihouse/indicator/state', self._apply, 10)
+        self.client = self.create_client(SetLed, 'set_led')
+        self.create_subscription(IndicatorState, 'trihouse/indicator/state', self._apply, 10)
 
     def _apply(self, message: IndicatorState) -> None:
         if not self.client.service_is_ready():

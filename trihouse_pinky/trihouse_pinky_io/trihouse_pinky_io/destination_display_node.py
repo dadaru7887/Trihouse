@@ -13,7 +13,7 @@ class DestinationDisplay(Node):
         self.declare_parameter('font_path', '')
         self.font_path = self.get_parameter('font_path').value
         self.lcd = None
-        self.create_subscription(String, '/trihouse/display/destination_code', self._show, 10)
+        self.create_subscription(String, 'trihouse/display/destination_code', self._show, 10)
 
     def _show(self, message: String) -> None:
         label = destination_label(message.data)

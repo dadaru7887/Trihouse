@@ -2,8 +2,9 @@
 
 ## 공통 규칙
 
-- Pinky 1: `ROS_DOMAIN_ID=51`, `robot_id=PK-01`
-- Pinky 2: `ROS_DOMAIN_ID=52`, `robot_id=PK-02`
+- 공통: `ROS_DOMAIN_ID=52`. 로봇 구분은 domain 이 아니라 ROS namespace 가 맡는다.
+- Pinky 1: namespace `pinky_01`, `robot_id=PK_01`
+- Pinky 2: namespace `pinky_02`, `robot_id=PK_02`
 - Topic 이름에는 robot ID를 넣지 않는다.
 - 외부 Control Tower·Vision 서버는 TCP/NDJSON·REST·WebSocket을 사용하고 onboard gateway가 ROS로 변환한다.
 - `TRANSIENT_LOCAL` 상태 Topic의 depth는 1이다.

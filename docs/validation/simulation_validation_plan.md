@@ -45,7 +45,7 @@ Flutter 앱이 각각 존재한다. 필요한 것은 단순 기동 확인이 아
   `ROS_DOMAIN_ID`를 통합 기동 전에 판정ㆍ기록한다.
 - R2. 개발용 MySQL 볼륨보다 먼저 격리된 테스트 DB에서 `trihouse_fms` 스키마,
   seed, Gateway 읽기 API, 재고 멱등성, 시간대를 검증한다.
-- R3. PK-01은 `ROS_DOMAIN_ID=51`에서 먼저 검증하고, PK-02/domain 52는 그 다음에
+- R3. 두 로봇 모두 `ROS_DOMAIN_ID=52`를 공유하고 namespace 로 구분한다. PK-01(`pinky_01`)을 먼저 검증하고 PK-02(`pinky_02`)는 그 다음에
   격리 검증한다. `robot_id`는 DDS 격리 수단이 아니다.
 - R4. Gazebo bringup, Nav2 준비, 모의 적재/인계, 안전 정지와 단일 `/cmd_vel` 권한을
   검증하되, 실제 OMX/하드웨어 구동 명령은 보내지 않는다.
