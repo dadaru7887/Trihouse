@@ -104,7 +104,7 @@ def _declared_defaults(module, context: LaunchContext) -> dict[str, str]:
     return defaults
 
 
-def _runtime_actions(tmp_path: Path):
+def _runtime_actions(tmp_path: Path, **overrides: str):
     module = _module()
     nav_graph = tmp_path / "0.yaml"
     nav_graph.write_text("levels: {}\n", encoding="utf-8")
@@ -142,6 +142,7 @@ def _runtime_actions(tmp_path: Path):
         "start_rmf_worker": "false",
         "startup_delay_s": "0",
     })
+    context.launch_configurations.update(overrides)
     return module, context, module._runtime(context)
 
 
@@ -339,6 +340,62 @@ def test_nav2_never_runs_composed_so_each_robot_keeps_its_own_localisation(
     assert includes, "nav2 bringup include not found"
     for resolved in includes:
         assert resolved["use_composition"] == "False"
+
+
+def test_one_robot_can_be_launched_alone(tmp_path: Path) -> None:
+    """로봇 한 대만 띄우는 길이 있어야 한다.
+
+    로봇 두 대의 전체 스택(Gazebo + Nav2 두 벌 + Open-RMF + 로봇당 온보드 노드
+    여섯 개)은 개발 PC 한 대의 용량을 넘는다. 실측으로 load average 가 60~90 이었고,
+    그 상태에서는 Nav2 의 lifecycle manager 가 `map_server/get_state` 를 기다리다
+    포기하며(`Failed to bring up all requested nodes`) 새로 붙는 노드도 토픽을
+    발견하지 못한다. 설정 결함이 아니라 부하이므로, 주문 경로를 증명할 때는 로봇을
+    한 대로 줄여 변수를 없애는 편이 빠르다.
+
+    두 대 구성을 지우지는 않는다. 교통 조정과 병목 예약은 두 대가 있어야 의미가 있다.
+    """
+    module, context, actions = _runtime_actions(tmp_path, robots="PK_01")
+
+    namespaces = []
+    for timer in (action for action in actions if hasattr(action, "actions")):
+        for group in timer.actions:
+            if not isinstance(group, GroupAction):
+                continue
+            pushes = [
+                entity
+                for entity in group.get_sub_entities()
+                if isinstance(entity, PushRosNamespace)
+            ]
+            if pushes:
+                namespaces.append(
+                    perform_substitutions(
+                        context, pushes[0]._PushROSNamespace__namespace
+                    )
+                )
+
+    assert namespaces == ["pinky_01"]
+
+    # 그룹 밖의 bridge 도 같이 줄어야 한다. 남으면 없는 로봇의 gz 토픽을 구독한다.
+    mentioned = []
+    for node in _nodes_outside_groups(actions):
+        if "parameter_bridge" not in str(node.node_executable):
+            continue
+        for argument in getattr(node, "_Node__arguments", None) or []:
+            mentioned.append(
+                argument if isinstance(argument, str)
+                else perform_substitutions(context, [argument])
+            )
+        for _source, target in _remappings(context, node):
+            mentioned.append(target)
+
+    assert any("pinky_01" in text for text in mentioned), mentioned
+    assert not any("pinky_02" in text for text in mentioned), mentioned
+
+
+def test_an_unknown_robot_id_fails_instead_of_starting_nothing(tmp_path: Path) -> None:
+    """오타가 조용히 "로봇 0대" 로 끝나면 무엇이 잘못됐는지 알 수 없다."""
+    with pytest.raises(RuntimeError, match="PK_99"):
+        _runtime_actions(tmp_path, robots="PK_99")
 
 
 def _remappings(context, node: Node) -> list[tuple[str, str]]:

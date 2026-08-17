@@ -70,9 +70,13 @@ export ROS_DOMAIN_ID
 # `.env` 를 읽지 않는 것은 의도다. 거기엔 MySQL·MediaMTX 비밀값이 있고 source
 # 하면 그것들이 모든 ROS 노드 환경으로 새어 나간다. 두 층의 기본값을 같은
 # 값으로 적어 두는 쪽이 안전하고, 그 일치는 테스트가 지킨다.
+# discovery 범위도 같은 이유로 못박는다. 서버 PC 는 인터페이스를 둘 갖는다 —
+# 인터넷용 Wi-Fi 와 ROS 전용 공유기로 가는 Ethernet. 범위를 좁히지 않으면 discovery
+# 를 Wi-Fi 쪽으로도 뿌리고, 한쪽 층만 좁히면 그 층은 상대를 보지 못한다.
 : "${RMW_IMPLEMENTATION:=rmw_fastrtps_cpp}"
 : "${FASTDDS_BUILTIN_TRANSPORTS:=UDPv4}"
-export RMW_IMPLEMENTATION FASTDDS_BUILTIN_TRANSPORTS
+: "${ROS_AUTOMATIC_DISCOVERY_RANGE:=SUBNET}"
+export RMW_IMPLEMENTATION FASTDDS_BUILTIN_TRANSPORTS ROS_AUTOMATIC_DISCOVERY_RANGE
 : "${FMS_BASE_URL:=http://127.0.0.1:8080}"
 : "${TRIHOUSE_PROJECT:=trihouse_test_01}"
 # fleet 이름은 `trihouse_rmf_bridge/config/pinky_fleet.yaml` 의 `rmf_fleet.name`
@@ -81,6 +85,13 @@ export RMW_IMPLEMENTATION FASTDDS_BUILTIN_TRANSPORTS
 # 하다(`control_tower/rmf_adapter/rmf_gateway_worker_node.py`).
 : "${TRIHOUSE_FLEET_NAME:=project1_pinky}"
 : "${TRIHOUSE_MAP_REVISION:=}"
+# 띄울 로봇을 고른다. 비어 있으면 전부. 예: `TRIHOUSE_ROBOTS=PK_01`.
+#
+# 로봇 두 대의 전체 스택(Gazebo + Nav2 두 벌 + Open-RMF + 로봇당 온보드 노드 여섯
+# 개)은 개발 PC 한 대의 용량을 넘는다. 부하가 높으면 Nav2 의 lifecycle manager 가
+# `map_server/get_state` 를 기다리다 포기하고 새로 붙는 노드도 토픽을 발견하지 못한다.
+# 주문 경로를 증명할 때는 한 대로 줄여 부하라는 변수를 먼저 없애라.
+: "${TRIHOUSE_ROBOTS:=}"
 # 두 로봇은 하나의 SLAM 지도를 공유하고 각자 AMCL 로 위치추정한다.
 #
 # 로봇마다 slam_toolbox 를 돌리면 같은 창고의 지도를 각자 따로 만들게 되고, 두
@@ -257,6 +268,7 @@ start "two pinky order demo" \
     nav2_params_file:="$PINKY_NAV2_PARAMS" \
     nav2_params_dir:="$TRIHOUSE_RUNTIME_DIR/nav2" \
     runtime_state_dir:="$TRIHOUSE_RUNTIME_DIR" \
+    robots:="$TRIHOUSE_ROBOTS" \
     nav2_slam:="$TRIHOUSE_NAV2_SLAM" \
     nav2_map:="$([[ "$TRIHOUSE_NAV2_SLAM" == true ]] && echo "" || echo "$TRIHOUSE_NAV2_MAP")" \
     start_nav2:="$TRIHOUSE_START_NAV2" \

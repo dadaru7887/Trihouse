@@ -258,3 +258,32 @@ def test_env_example_declares_every_variable_compose_requires() -> None:
 
     missing = sorted(_required_compose_variables(module) - documented)
     assert missing == [], f".env.example 에 없는 필수 변수: {missing}"
+
+
+def test_the_documented_db_port_does_not_collide_with_the_test_database() -> None:
+    """포트가 겹치면 컨테이너는 "port is already allocated" 로 시작조차 못 한다.
+
+    이 호스트에는 MySQL 이 셋까지 나란히 뜬다 — 보존 개발 DB, tmpfs 테스트 DB,
+    그리고 P0 스택의 DB. `compose.db_test.yaml` 은 3307 로 고정되어 있고 나머지 둘은
+    `${FMS_DB_PORT}` 를 공유한다. 예시가 겹치는 값을 권하면 다음 사람이 그대로 밟는다.
+    실제로 3306 을 쓰다가 P0 의 MySQL 이 시작하지 못하고 Gateway 가 재시작 루프에
+    빠졌다.
+    """
+    import re
+
+    example = (ROOT / ".env.example").read_text(encoding="utf-8")
+    match = re.search(r"^FMS_DB_PORT=(\d+)", example, flags=re.MULTILINE)
+    assert match, ".env.example 에 FMS_DB_PORT 가 없다"
+    documented = int(match.group(1))
+
+    fixed_ports = {
+        int(port)
+        for port in re.findall(
+            r'127\.0\.0\.1:(\d+):3306',
+            (ROOT / "compose.db_test.yaml").read_text(encoding="utf-8"),
+        )
+    }
+
+    assert documented not in fixed_ports, (
+        f"FMS_DB_PORT={documented} 가 고정 포트 {sorted(fixed_ports)} 와 겹친다"
+    )

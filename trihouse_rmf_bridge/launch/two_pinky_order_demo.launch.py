@@ -44,6 +44,34 @@ ROBOT_CHARGERS = (
     ("PK_02", "pinky_02", "TRIHOUSE-TEST-01-CHG-02"),
 )
 
+
+def selected_robots(context) -> tuple[tuple[str, str, str], ...]:
+    """`robots:=PK_01` 로 고른 로봇만 낸다. 비어 있으면 전부.
+
+    로봇 두 대의 전체 스택(Gazebo + Nav2 두 벌 + Open-RMF + 로봇당 온보드 노드
+    여섯 개)은 개발 PC 한 대의 용량을 넘는다. 부하가 높으면 Nav2 의 lifecycle
+    manager 가 `map_server/get_state` 를 기다리다 포기하고 새로 붙는 노드도 토픽을
+    발견하지 못한다. 설정 결함이 아니라 부하이므로, 주문 경로를 증명할 때는 로봇을
+    한 대로 줄여 변수를 없애는 편이 빠르다.
+
+    두 대 구성을 없애지는 않는다. 교통 조정과 병목 예약은 두 대가 있어야 의미가 있다.
+    """
+    requested = LaunchConfiguration("robots").perform(context).strip()
+    if not requested:
+        return ROBOT_CHARGERS
+
+    wanted = [token.strip() for token in requested.split(",") if token.strip()]
+    known = {entry[0] for entry in ROBOT_CHARGERS}
+    unknown = [name for name in wanted if name not in known]
+    if unknown:
+        # 오타가 조용히 "로봇 0대" 로 끝나면 무엇이 잘못됐는지 알 수 없다.
+        raise RuntimeError(
+            f"모르는 robot id 입니다: {', '.join(unknown)}. "
+            f"고를 수 있는 것: {', '.join(sorted(known))}"
+        )
+
+    return tuple(entry for entry in ROBOT_CHARGERS if entry[0] in wanted)
+
 # 각 로봇 namespace 안에서만 유지되어야 하는 토픽/action 이름.
 NAMESPACED_INTERFACES = (
     "scan",
@@ -362,6 +390,7 @@ def _runtime(context):
         )
     world = Path(LaunchConfiguration("world").perform(context)).expanduser().resolve()
     poses = charger_spawn_poses(features_path)
+    robots = selected_robots(context)
 
     actions = []
 
@@ -433,7 +462,7 @@ def _runtime(context):
             spawn_pose=poses[robot_id],
             nav_graph=nav_graph,
         )
-        for robot_id, namespace, charger_code in ROBOT_CHARGERS
+        for robot_id, namespace, charger_code in robots
     ]
 
     # 로봇별 bridge 는 namespace 밖에서 띄운다. `parameter_bridge` 는 준 이름을
@@ -448,7 +477,7 @@ def _runtime(context):
             arguments=[f"{namespace}/{topic}" for topic in ROBOT_BRIDGE_TOPICS],
             parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],
         )
-        for _robot_id, namespace, _charger in ROBOT_CHARGERS
+        for _robot_id, namespace, _charger in robots
     ]
 
     # `odom -> base_footprint` 는 robot_state_publisher 가 아니라 Gazebo 의
@@ -471,7 +500,7 @@ def _runtime(context):
             # 띄우고 ROS 쪽만 옮긴다 — gz 는 계속 `/tf` 를 구독한다.
             remappings=[("/tf", f"/{namespace}/tf")],
         )
-        for _robot_id, namespace, _charger in ROBOT_CHARGERS
+        for _robot_id, namespace, _charger in robots
     ]
 
     actions.append(
@@ -572,6 +601,10 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("fleet_name", default_value="trihouse_pinky"),
         DeclareLaunchArgument("rmf_worker_id", default_value="trihouse-rmf-worker"),
         DeclareLaunchArgument("fms_base_url", default_value="http://127.0.0.1:8080"),
+        # 띄울 로봇을 고른다. 비어 있으면 전부. 예: `robots:=PK_01`.
+        # 개발 PC 한 대에 두 대의 전체 스택은 무겁다. 주문 경로를 증명할 때는 한 대로
+        # 줄여 부하라는 변수를 없애는 편이 빠르다.
+        DeclareLaunchArgument("robots", default_value=""),
         # `fleet_gateway` 가 붙는 FMS Gateway 의 TCP 경계다. HTTP(8080)와 다른
         # 포트이며 기본값은 `compose.control.yaml` 의 `FMS_TCP_PORT` 와 같다.
         DeclareLaunchArgument("fms_tcp_host", default_value="127.0.0.1"),

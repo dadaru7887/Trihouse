@@ -26,7 +26,16 @@ BRINGUP = ROOT / "control_tower" / "bringup" / "p0_simulation_bringup.sh"
 COMPOSE = ROOT / "compose.simulation.yaml"
 
 # 두 층이 반드시 합의해야 하는 변수.
-SHARED_DDS_KEYS = ("ROS_DOMAIN_ID", "RMW_IMPLEMENTATION", "FASTDDS_BUILTIN_TRANSPORTS")
+#
+# `ROS_AUTOMATIC_DISCOVERY_RANGE` 가 여기 있는 이유는 서버 PC 가 인터페이스를 둘 갖기
+# 때문이다 — 인터넷용 Wi-Fi 와 ROS 전용 공유기로 가는 Ethernet. 범위를 좁히지 않으면
+# discovery 를 Wi-Fi 쪽으로도 뿌린다. 한쪽 층만 좁히면 그 층은 상대를 못 본다.
+SHARED_DDS_KEYS = (
+    "ROS_DOMAIN_ID",
+    "RMW_IMPLEMENTATION",
+    "FASTDDS_BUILTIN_TRANSPORTS",
+    "ROS_AUTOMATIC_DISCOVERY_RANGE",
+)
 
 
 def _bringup_defaults() -> dict[str, str]:

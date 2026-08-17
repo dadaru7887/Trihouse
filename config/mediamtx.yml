@@ -25,12 +25,12 @@
 #
 #   authInternalUsers 색인 → 환경변수 (색인은 아래 목록 순서다. 순서를 바꾸면
 #   Compose 의 주입 대상도 같이 바꿔야 한다.)
-#     [0] pinky/CAM-PK-01      MTX_AUTHINTERNALUSERS_0_IPS
-#     [1] pinky/CAM-PK-02      MTX_AUTHINTERNALUSERS_1_IPS
-#     [2] omx/CAM-OMX-01-WRIST MTX_AUTHINTERNALUSERS_2_IPS
-#     [3] omx/CAM-OMX-02-WRIST MTX_AUTHINTERNALUSERS_3_IPS
-#     [4] fixed/CAM-FIXED-01   MTX_AUTHINTERNALUSERS_4_IPS
-#     [5] fixed/CAM-FIXED-02   MTX_AUTHINTERNALUSERS_5_IPS
+#     [0] pinky/CAM-PK-01      MTX_AUTHINTERNALUSERS_0_IPS  <- PK_01 (로봇)
+#     [1] pinky/CAM-PK-02      MTX_AUTHINTERNALUSERS_1_IPS  <- PK_02 (로봇)
+#     [2] omx/CAM-OMX-01-WRIST MTX_AUTHINTERNALUSERS_2_IPS  <- OMX_01 이 붙은 일반 PC
+#     [3] omx/CAM-OMX-02-WRIST MTX_AUTHINTERNALUSERS_3_IPS  <- OMX_02 이 붙은 일반 PC
+#     [4] fixed/CAM-FIXED-01   MTX_AUTHINTERNALUSERS_4_IPS  <- 4060 (USB)
+#     [5] fixed/CAM-FIXED-02   MTX_AUTHINTERNALUSERS_5_IPS  <- 4060 (USB)
 #     [6] viewer               MTX_AUTHINTERNALUSERS_6_PASS
 #     [7] localhost 관리자     (주입 없음)
 

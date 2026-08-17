@@ -25,9 +25,12 @@ services:
       # updating these lines silently grants a robot another robot's path.
       MTX_AUTHINTERNALUSERS_0_IPS: ${PINKY_PK_01_IP:?Set PINKY_PK_01_IP to the DHCP-reserved PK_01 address}
       MTX_AUTHINTERNALUSERS_1_IPS: ${PINKY_PK_02_IP:?Set PINKY_PK_02_IP to the DHCP-reserved PK_02 address}
-      MTX_AUTHINTERNALUSERS_2_IPS: ${PC1_PUBLISHER_IP:?Set PC1_PUBLISHER_IP to the host publishing USB cameras}
-      MTX_AUTHINTERNALUSERS_3_IPS: ${PC1_PUBLISHER_IP}
-      MTX_AUTHINTERNALUSERS_4_IPS: ${PC1_PUBLISHER_IP}
+      # 손목 카메라는 OMX 가 붙어 있는 일반 PC 가 발행한다. 4060 이 아니다.
+      # 한 변수를 둘이 함께 쓰면 한쪽 주소만 허용되어 다른 로봇은 조용히 거절된다.
+      MTX_AUTHINTERNALUSERS_2_IPS: ${OMX_PC_01_IP:?Set OMX_PC_01_IP to the PC that OMX_01 is wired to}
+      MTX_AUTHINTERNALUSERS_3_IPS: ${OMX_PC_02_IP:?Set OMX_PC_02_IP to the PC that OMX_02 is wired to}
+      # 창고 고정 카메라는 4060 에 USB 로 붙는다.
+      MTX_AUTHINTERNALUSERS_4_IPS: ${PC1_PUBLISHER_IP:?Set PC1_PUBLISHER_IP to the host publishing the fixed USB cameras}
       MTX_AUTHINTERNALUSERS_5_IPS: ${PC1_PUBLISHER_IP}
       MTX_AUTHINTERNALUSERS_6_PASS: ${MTX_VIEWER_PASS:?Set MTX_VIEWER_PASS to the viewer account password}
 

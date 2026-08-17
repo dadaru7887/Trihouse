@@ -13,6 +13,8 @@ services:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-52}
       RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
       FASTDDS_BUILTIN_TRANSPORTS: ${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}
+      # 호스트 bringup 과 같은 값이어야 한다. 한쪽만 좁히면 그 층이 상대를 못 본다.
+      ROS_AUTOMATIC_DISCOVERY_RANGE: ${ROS_AUTOMATIC_DISCOVERY_RANGE:-SUBNET}
       RMF_SERVER_USE_SIM_TIME: "true"
 
   rmf_dashboard:
