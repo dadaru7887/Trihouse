@@ -112,8 +112,8 @@ def _enabled(context, name: str) -> bool:
     }
 
 
-def charger_spawn_poses(features_path: Path) -> dict[str, tuple[float, float, float]]:
-    """승인된 JSONL의 충전 스테이션 pose만 로봇별로 돌려준다."""
+def _imported_features(features_path: Path):
+    """승인된 JSONL을 읽는다. 좌표와 이름은 언제나 여기서만 온다."""
     import sys
 
     repository_root = Path(__file__).resolve().parents[2]
@@ -121,19 +121,49 @@ def charger_spawn_poses(features_path: Path) -> dict[str, tuple[float, float, fl
         sys.path.insert(0, str(repository_root))
     from fms_gateway.app.physical_features import PhysicalFeatureImporter
 
-    imported = PhysicalFeatureImporter().parse(features_path)
+    return PhysicalFeatureImporter().parse(features_path)
+
+
+def _charger_waypoint(imported, charger_code: str):
+    waypoint = imported.waypoint(charger_code)
+    if waypoint.operational_role != "charging_station":
+        raise RuntimeError(
+            f"{charger_code}는 charging_station이 아닙니다: "
+            f"{waypoint.operational_role}"
+        )
+    return waypoint
+
+
+def charger_spawn_poses(features_path: Path) -> dict[str, tuple[float, float, float]]:
+    """승인된 JSONL의 충전 스테이션 pose만 로봇별로 돌려준다."""
+    imported = _imported_features(features_path)
     poses: dict[str, tuple[float, float, float]] = {}
     for robot_id, _namespace, charger_code in ROBOT_CHARGERS:
-        waypoint = imported.waypoint(charger_code)
-        if waypoint.operational_role != "charging_station":
-            raise RuntimeError(
-                f"{charger_code}는 charging_station이 아닙니다: "
-                f"{waypoint.operational_role}"
-            )
+        waypoint = _charger_waypoint(imported, charger_code)
         if waypoint.pose.yaw is None:
             raise RuntimeError(f"{charger_code}에 측정된 yaw가 없습니다")
         poses[robot_id] = (waypoint.pose.x, waypoint.pose.y, waypoint.pose.yaw)
     return poses
+
+
+def charger_graph_names(features_path: Path) -> dict[str, str]:
+    """충전기를 nav_graph 가 실제로 쓰는 이름으로 돌려준다.
+
+    `build_nav_graph` 는 waypoint 정점을 `rmf_waypoint_name`(`charging_station_01`)
+    으로 이름 짓는다. adapter 에 `location_code`(`TRIHOUSE-TEST-01-CHG-01`)를 주면
+    이렇게 찍고 로봇을 fleet 에 넣지 않는다.
+
+      Cannot find a waypoint named [TRIHOUSE-TEST-01-CHG-01] in the navigation
+      graph of fleet [project1_pinky] ... We will not add the robot to the fleet
+
+    로봇이 fleet 에 없으면 낙찰이 나지 않아 주문이 로봇까지 가지 못한다. 두 이름을
+    손으로 맞추지 않고 graph 를 만든 것과 같은 JSONL 에서 읽어 갈라지지 않게 한다.
+    """
+    imported = _imported_features(features_path)
+    return {
+        robot_id: _charger_waypoint(imported, charger_code).rmf_waypoint_name
+        for robot_id, _namespace, charger_code in ROBOT_CHARGERS
+    }
 
 
 def _robot_group(
@@ -390,6 +420,9 @@ def _runtime(context):
         )
     world = Path(LaunchConfiguration("world").perform(context)).expanduser().resolve()
     poses = charger_spawn_poses(features_path)
+    # adapter 는 nav_graph 가 쓰는 이름을 받아야 한다. location_code 를 주면 로봇이
+    # fleet 에 등록되지 못하고 낙찰이 나지 않는다.
+    charger_names = charger_graph_names(features_path)
     robots = selected_robots(context)
 
     actions = []
@@ -458,7 +491,7 @@ def _runtime(context):
             context,
             robot_id=robot_id,
             namespace=namespace,
-            charger_code=charger_code,
+            charger_code=charger_names[robot_id],
             spawn_pose=poses[robot_id],
             nav_graph=nav_graph,
         )

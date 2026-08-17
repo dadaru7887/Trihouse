@@ -632,3 +632,42 @@ def test_nav2_gets_the_namespace_so_its_parameter_keys_match_the_node_names(
     for resolved in includes:
         # 이름을 두 번 입히지 않도록 이것은 계속 꺼져 있어야 한다.
         assert resolved["use_namespace"] == "false"
+
+
+def test_the_fleet_adapter_is_given_the_name_the_nav_graph_actually_uses() -> None:
+    """충전기 이름이 두 갈래면 로봇이 fleet 에 등록되지 못한다.
+
+    `build_nav_graph` 는 waypoint 정점을 `rmf_waypoint_name`(`charging_station_01`)
+    으로 이름 짓는데 adapter 에는 `location_code`(`TRIHOUSE-TEST-01-CHG-01`)가
+    넘어갔다. 그러면 adapter 가 이렇게 찍고 로봇을 fleet 에 넣지 않는다.
+
+      Cannot find a waypoint named [TRIHOUSE-TEST-01-CHG-01] in the navigation
+      graph of fleet [project1_pinky] ... We will not add the robot to the fleet
+
+    로봇이 fleet 에 없으면 낙찰이 나지 않아 주문이 로봇까지 가지 못한다.
+    2026-08-18 단일 로봇 시뮬에서 실제로 관측했다.
+    """
+    module = _module()
+    graph_names = module.charger_graph_names(FEATURES)
+
+    assert graph_names["PK_01"] == "charging_station_01"
+    assert graph_names["PK_02"] == "charging_station_02"
+
+
+def test_every_charger_graph_name_exists_in_the_generated_nav_graph() -> None:
+    """이름을 손으로 맞추지 않고 같은 JSONL 에서 나온 것인지 확인한다."""
+    import yaml
+
+    from control_tower.bringup.p0_runtime_assets import build_nav_graph, load_features
+
+    module = _module()
+    waypoints, bottlenecks = load_features(FEATURES)
+    graph = yaml.safe_load(build_nav_graph("trihouse_test_01", waypoints, bottlenecks))
+    vertex_names = {
+        vertex[2]["name"]
+        for level in graph["levels"].values()
+        for vertex in level["vertices"]
+    }
+
+    for robot_id, name in module.charger_graph_names(FEATURES).items():
+        assert name in vertex_names, f"{robot_id}: {name} 이 nav_graph 에 없다"
