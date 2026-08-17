@@ -366,3 +366,89 @@ def test_the_root_key_wraps_after_the_initial_pose_is_written(tmp_path):
         "z": 0.0,
         "yaw": 0.25,
     }
+
+
+def test_the_local_costmap_odom_frame_is_namespaced(tmp_path):
+    """`local_costmap.global_frame: odom` 이 맨 이름으로 남으면 로봇은 못 움직인다.
+
+    URDF 가 프레임에 namespace 를 붙이므로 실제로 존재하는 것은 `pinky_01/odom`
+    이다. costmap 이 맨 `odom` 을 찾으면 `Invalid frame ID "odom" ... frame does
+    not exist` 로 변환을 영원히 기다리고, controller_server 가 경로를 따라갈 근거를
+    잃는다. 2026-08-18 단일 로봇 시뮬에서 실제로 관측했다.
+    """
+    module = _module()
+    source = tmp_path / "nav2_params.yaml"
+    source.write_text(
+        "local_costmap:\n"
+        "  local_costmap:\n"
+        "    ros__parameters:\n"
+        "      global_frame: odom\n"
+        "      robot_base_frame: base_footprint\n"
+        "global_costmap:\n"
+        "  global_costmap:\n"
+        "    ros__parameters:\n"
+        "      global_frame: map\n"
+        "      robot_base_frame: base_footprint\n",
+        encoding="utf-8",
+    )
+    destination = tmp_path / "derived.yaml"
+
+    module.derive_nav2_params(source, "pinky_01", destination)
+
+    document = yaml.safe_load(destination.read_text(encoding="utf-8"))
+    local = document["local_costmap"]["local_costmap"]["ros__parameters"]
+    world = document["global_costmap"]["global_costmap"]["ros__parameters"]
+    assert local["global_frame"] == "pinky_01/odom"
+    assert local["robot_base_frame"] == "pinky_01/base_footprint"
+    # 지도는 두 로봇이 공유한다. 여기에 namespace 가 붙으면 서로 다른 지도를 믿는다.
+    assert world["global_frame"] == "map"
+
+
+def test_the_amcl_global_frame_id_stays_the_shared_map(tmp_path):
+    module = _module()
+    source = tmp_path / "nav2_params.yaml"
+    source.write_text(
+        "amcl:\n"
+        "  ros__parameters:\n"
+        "    global_frame_id: map\n"
+        "    odom_frame_id: odom\n",
+        encoding="utf-8",
+    )
+    destination = tmp_path / "derived.yaml"
+
+    module.derive_nav2_params(source, "pinky_01", destination)
+
+    amcl = yaml.safe_load(destination.read_text(encoding="utf-8"))["amcl"][
+        "ros__parameters"
+    ]
+    assert amcl["global_frame_id"] == "map"
+    assert amcl["odom_frame_id"] == "pinky_01/odom"
+
+
+def test_every_frame_in_the_real_vendor_params_resolves_to_one_namespace(tmp_path):
+    """실물 벤더 파일로 확인한다 — 맨 이름 프레임이 하나라도 남으면 안 된다."""
+    module = _module()
+    vendor = ROOT / "pinky_pro" / "pinky_navigation" / "params" / "nav2_params.yaml"
+    if not vendor.is_file():
+        pytest.skip("벤더 params 가 이 체크아웃에 없다")
+    destination = tmp_path / "derived.yaml"
+
+    module.derive_nav2_params(vendor, "pinky_01", destination)
+
+    document = yaml.safe_load(destination.read_text(encoding="utf-8"))
+    stray = []
+
+    def walk(node, path=""):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in module.FRAME_KEYS and isinstance(value, str):
+                    if value != "map" and not value.startswith("pinky_01/"):
+                        stray.append(f"{path}.{key} = {value}")
+                else:
+                    walk(value, f"{path}.{key}")
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                walk(item, f"{path}[{index}]")
+
+    walk(document)
+    assert stray == []

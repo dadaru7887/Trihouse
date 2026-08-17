@@ -60,6 +60,13 @@ FRAME_KEYS = (
     "robot_base_frame",
     "base_frame",
     "fixed_frame",
+    # `local_costmap.global_frame` 이 `odom` 이다. 맨 이름으로 남으면 URDF 가 만든
+    # `pinky_01/odom` 과 매칭되지 않아 costmap 이 `Invalid frame ID "odom" ...
+    # frame does not exist` 로 변환을 영원히 기다리고, controller_server 가 경로를
+    # 따라갈 근거를 잃는다. `global_costmap.global_frame` 은 `map` 이라 아래
+    # rewrite 의 `map` 예외가 그대로 지켜 준다 — 두 로봇이 지도를 공유하기 때문이다.
+    "global_frame",
+    "global_frame_id",
 )
 
 # 절대 경로로 적혀 있어 두 로봇이 서로의 것을 보게 되는 토픽.
