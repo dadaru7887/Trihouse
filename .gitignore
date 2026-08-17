@@ -27,6 +27,10 @@ docs/agent_plans/
 # files
 *.DS_Store
 *.png
+# 지도 원본은 예외다. `control_system_test/` 는 삭제될 예정이고 그 안의
+# rmf_maps 는 어떤 git 도 추적하지 않아, 지우면 되살릴 수 없다. 발행이 요구하는
+# slam_yaml/slam_image 소스가 여기 있으므로 미리보기까지 통째로 보존한다.
+!control_ui/rmf_control_ui/data/rmf_maps/**/*.png
 
 # local secrets and generated database artifacts
 .env
