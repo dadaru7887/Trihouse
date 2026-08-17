@@ -7,7 +7,7 @@
 
 import base64
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import json
 import math
@@ -4669,14 +4669,30 @@ class MySqlFmsRepository:
             finally:
                 cursor.close()
 
-    def claim_rmf_dispatches(self, worker_id: str, limit: int) -> list[dict[str, Any]]:
-        """`SKIP LOCKED`로 여러 RMF worker가 서로 다른 pending 메시지를 선점한다."""
+    def claim_rmf_dispatches(
+        self,
+        worker_id: str,
+        limit: int,
+        *,
+        lease_seconds: int | None = None,
+        max_attempts: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """`SKIP LOCKED`로 여러 RMF worker가 서로 다른 메시지를 선점한다.
+
+        실행기 채널과 같은 lease 규칙을 쓴다. 이 worker 가 claim 한 뒤 죽으면
+        그 dispatch 도 똑같이 갇히기 때문이다.
+        """
         del worker_id  # Worker identity is currently audit-only; claim ownership is row state.
+        lease = self.DISPATCH_LEASE_SECONDS if lease_seconds is None else lease_seconds
+        attempts_cap = (
+            self.DISPATCH_MAX_ATTEMPTS if max_attempts is None else max_attempts
+        )
         with self.database.connection() as connection:
             cursor = connection.cursor(dictionary=True)
             try:
+                self._dead_letter_exhausted(connection, cursor, ("rmf",), lease, attempts_cap)
                 cursor.execute(
-                    """
+                    f"""
                     SELECT im.message_id, im.idempotency_key, js.job_id,
                            im.job_step_id, im.channel, im.message_type,
                            im.state, im.payload, loc.location_code,
@@ -4687,11 +4703,11 @@ class MySqlFmsRepository:
                     JOIN job_steps js ON js.job_step_id = im.job_step_id
                     LEFT JOIN locations loc ON loc.location_id = js.target_location_id
                     WHERE im.direction = 'outbound' AND im.channel = 'rmf'
-                      AND im.state = 'pending'
+                      {self._CLAIMABLE_PREDICATE}
                     ORDER BY im.created_at, im.message_id
                     LIMIT %s FOR UPDATE SKIP LOCKED
                     """,
-                    (limit,),
+                    (lease, limit),
                 )
                 rows = list(cursor.fetchall())
                 if rows:
@@ -4727,17 +4743,85 @@ class MySqlFmsRepository:
     # OMX 명령에는 의미가 없고, 기존 RMF worker의 동작을 건드릴 이유도 없다.
     ACTOR_ROLE_BY_EXECUTOR = {"mobile": "pinky", "arm": "omx", "fms": "fms"}
 
+    # A claim marks a row `sent`. If the worker then dies, nothing ever moves it
+    # again, because a claim only looks at `pending` — the work is stranded. So a
+    # claim also reclaims a `sent` row whose lease has expired.
+    #
+    # The window must exceed the longest legitimate execution: too short and a
+    # live worker has its work taken, which for an arm means the command goes out
+    # twice. Double reporting is already harmless — the outcome key is derived
+    # from (step, revision), so the second report returns the first answer — but
+    # the physical motion is not. Hardware will need a fencing token; in
+    # simulation a generous window is enough.
+    DISPATCH_LEASE_SECONDS = 60
+    # Without a cap, a message that kills its worker is reclaimed and re-executed
+    # forever. After this many attempts it becomes someone's decision, not a loop.
+    DISPATCH_MAX_ATTEMPTS = 5
+
+    # `pending` honours any backoff the dispatcher set; `sent` is reclaimable
+    # once its lease has expired.
+    _CLAIMABLE_PREDICATE = """
+          AND (
+            (im.state = 'pending'
+             AND (im.next_attempt_at IS NULL OR im.next_attempt_at <= NOW(6)))
+            OR (im.state = 'sent'
+                AND im.sent_at IS NOT NULL
+                AND im.sent_at < NOW(6) - INTERVAL %s SECOND)
+          )
+    """
+
+    def _dead_letter_exhausted(
+        self,
+        connection: Any,
+        cursor: Any,
+        channels: tuple[str, ...],
+        lease_seconds: int,
+        max_attempts: int,
+    ) -> None:
+        """Stop reclaiming a message that has already burned its attempts.
+
+        Committed on its own rather than with the claim: a cycle that selects no
+        rows still has to keep this decision, otherwise the quarantine is rolled
+        back and the same poison message is reclaimed on the very next poll.
+        """
+        placeholders = ",".join(["%s"] * len(channels))
+        cursor.execute(
+            f"""
+            UPDATE integration_messages
+            SET state = 'dead_letter',
+                last_error = 'DISPATCH_ATTEMPTS_EXHAUSTED'
+            WHERE direction = 'outbound' AND channel IN ({placeholders})
+              AND state = 'sent' AND sent_at IS NOT NULL
+              AND sent_at < NOW(6) - INTERVAL %s SECOND
+              AND attempts >= %s
+            """,
+            (*channels, lease_seconds, max_attempts),
+        )
+        if cursor.rowcount:
+            connection.commit()
+
     def claim_executor_dispatches(
-        self, worker_id: str, channels: tuple[str, ...], limit: int
+        self,
+        worker_id: str,
+        channels: tuple[str, ...],
+        limit: int,
+        *,
+        lease_seconds: int | None = None,
+        max_attempts: int | None = None,
     ) -> list[dict[str, Any]]:
-        """`SKIP LOCKED`로 실행기 채널의 pending 메시지를 선점한다."""
+        """`SKIP LOCKED`로 실행기 채널의 대기·회수 대상 메시지를 선점한다."""
         del worker_id  # Worker identity is audit-only; claim ownership is row state.
         if not channels:
             return []
+        lease = self.DISPATCH_LEASE_SECONDS if lease_seconds is None else lease_seconds
+        attempts_cap = (
+            self.DISPATCH_MAX_ATTEMPTS if max_attempts is None else max_attempts
+        )
         placeholders = ",".join(["%s"] * len(channels))
         with self.database.connection() as connection:
             cursor = connection.cursor(dictionary=True)
             try:
+                self._dead_letter_exhausted(connection, cursor, channels, lease, attempts_cap)
                 cursor.execute(
                     f"""
                     SELECT im.message_id, im.idempotency_key, js.job_id,
@@ -4749,11 +4833,11 @@ class MySqlFmsRepository:
                     JOIN job_steps js ON js.job_step_id = im.job_step_id
                     JOIN jobs ON jobs.job_id = js.job_id
                     WHERE im.direction = 'outbound' AND im.channel IN ({placeholders})
-                      AND im.state = 'pending'
+                      {self._CLAIMABLE_PREDICATE}
                     ORDER BY im.created_at, im.message_id
                     LIMIT %s FOR UPDATE SKIP LOCKED
                     """,
-                    (*channels, limit),
+                    (*channels, lease, limit),
                 )
                 rows = list(cursor.fetchall())
                 if rows:
@@ -5233,6 +5317,8 @@ class InMemoryFmsRepository:
         self._events: dict[int, list[dict[str, Any]]] = {}
         self._dispatches: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
         self._step_outcomes: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+        self._dispatch_sent_at: dict[str, Any] = {}
+        self._dispatch_attempts: dict[str, int] = {}
         self._claims: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]] = {}
         self._reserved_assignment_resources: dict[str, int] = {}
         self._assignment_lock = threading.RLock()
@@ -6090,14 +6176,64 @@ class InMemoryFmsRepository:
             step["assigned_device_id"] = robot_id
             step["assignment_revision"] += 1
 
-    def claim_rmf_dispatches(self, worker_id: str, limit: int) -> list[dict[str, Any]]:
+    # 실제 Repository 와 같은 회수 규칙을 쓴다. 테스트 double 이 lease 를
+    # 모르면 "죽은 worker 의 작업이 회수된다"는 계약을 검증할 수 없다.
+    DISPATCH_LEASE_SECONDS = 60
+    DISPATCH_MAX_ATTEMPTS = 5
+
+    def expire_dispatch_leases(self) -> None:
+        """모든 claim 을 만료시킨다. worker 가 죽은 상황을 시험에서 재현한다."""
+        for message_id in self._dispatch_sent_at:
+            self._dispatch_sent_at[message_id] = datetime.now(SEOUL) - timedelta(
+                seconds=self.DISPATCH_LEASE_SECONDS * 10
+            )
+
+    def _claimable(self, response: dict[str, Any], lease_seconds: int) -> bool:
+        if response["state"] == "pending":
+            return True
+        if response["state"] != "sent":
+            return False
+        sent_at = self._dispatch_sent_at.get(response["message_id"])
+        if sent_at is None:
+            return False
+        return (datetime.now(SEOUL) - sent_at).total_seconds() >= lease_seconds
+
+    def _sweep_exhausted(
+        self, channels: tuple[str, ...], lease_seconds: int, max_attempts: int
+    ) -> None:
+        for _, response in self._dispatches.values():
+            if response["channel"] not in channels or response["state"] != "sent":
+                continue
+            if not self._claimable(response, lease_seconds):
+                continue
+            if self._dispatch_attempts.get(response["message_id"], 0) >= max_attempts:
+                response["state"] = "dead_letter"
+
+    def _mark_claimed(self, response: dict[str, Any]) -> None:
+        response["state"] = "sent"
+        self._dispatch_sent_at[response["message_id"]] = datetime.now(SEOUL)
+        self._dispatch_attempts[response["message_id"]] = (
+            self._dispatch_attempts.get(response["message_id"], 0) + 1
+        )
+
+    def claim_rmf_dispatches(
+        self,
+        worker_id: str,
+        limit: int,
+        *,
+        lease_seconds: int | None = None,
+        max_attempts: int | None = None,
+    ) -> list[dict[str, Any]]:
         del worker_id
+        lease = self.DISPATCH_LEASE_SECONDS if lease_seconds is None else lease_seconds
+        cap = self.DISPATCH_MAX_ATTEMPTS if max_attempts is None else max_attempts
+        self._sweep_exhausted(("rmf",), lease, cap)
         claimed = []
         for _, response in self._dispatches.values():
             if len(claimed) >= limit:
                 break
-            if response["channel"] == "rmf" and response["state"] == "pending":
-                response["state"] = "sent"
+            if response["channel"] == "rmf" and self._claimable(response, lease):
+                self._mark_claimed(response)
                 response["payload"]["target_waypoint"] = response["payload"].get("input", {}).get("waypoint")
                 response["payload"]["fleet_name"] = response["payload"].get("input", {}).get("fleet_name")
                 response["payload"]["request_time_ms"] = int(datetime.now(SEOUL).timestamp() * 1000)
@@ -6105,16 +6241,27 @@ class InMemoryFmsRepository:
         return claimed
 
     def claim_executor_dispatches(
-        self, worker_id: str, channels: tuple[str, ...], limit: int
+        self,
+        worker_id: str,
+        channels: tuple[str, ...],
+        limit: int,
+        *,
+        lease_seconds: int | None = None,
+        max_attempts: int | None = None,
     ) -> list[dict[str, Any]]:
         del worker_id
+        if not channels:
+            return []
+        lease = self.DISPATCH_LEASE_SECONDS if lease_seconds is None else lease_seconds
+        cap = self.DISPATCH_MAX_ATTEMPTS if max_attempts is None else max_attempts
+        self._sweep_exhausted(tuple(channels), lease, cap)
         claimed: list[dict[str, Any]] = []
         for _, response in self._dispatches.values():
             if len(claimed) >= limit:
                 break
-            if response["channel"] not in channels or response["state"] != "pending":
+            if response["channel"] not in channels or not self._claimable(response, lease):
                 continue
-            response["state"] = "sent"
+            self._mark_claimed(response)
             step = self._steps[response["job_step_id"]]
             job_context = self._jobs[step["job_id"]].get("context", {})
             claimed.append(

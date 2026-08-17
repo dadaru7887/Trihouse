@@ -265,3 +265,54 @@ def test_a_claim_requires_at_least_one_channel() -> None:
     )
 
     assert claimed.status_code == 422
+
+
+def test_a_lease_that_expires_returns_the_work_to_the_queue() -> None:
+    """A worker that dies mid-execution must not strand its dispatch forever.
+
+    A claim marks the row `sent`, and a claim only ever looked at `pending`, so
+    before the lease existed that row could never be handed to anyone again.
+    """
+    client, repository = _client()
+    step_id = _pick_step(client)
+    _dispatch(client, step_id, "dispatch-pick-1")
+    body = {"worker_id": "executor-1", "channels": ["omx"], "limit": 10}
+    assert len(client.post("/internal/v1/executor/dispatches/claim", json=body).json()["dispatches"]) == 1
+    assert client.post("/internal/v1/executor/dispatches/claim", json=body).json()["dispatches"] == []
+
+    repository.expire_dispatch_leases()
+
+    reclaimed = client.post("/internal/v1/executor/dispatches/claim", json=body).json()
+    assert [item["job_step_id"] for item in reclaimed["dispatches"]] == [step_id]
+
+
+def test_a_message_that_keeps_killing_its_worker_stops_being_reclaimed() -> None:
+    """Without a cap, a poison pill is reclaimed and re-executed forever."""
+    client, repository = _client()
+    step_id = _pick_step(client)
+    _dispatch(client, step_id, "dispatch-pick-1")
+    body = {"worker_id": "executor-1", "channels": ["omx"], "limit": 10}
+
+    seen = 0
+    for _ in range(repository.DISPATCH_MAX_ATTEMPTS + 3):
+        claimed = client.post("/internal/v1/executor/dispatches/claim", json=body).json()
+        seen += len(claimed["dispatches"])
+        repository.expire_dispatch_leases()
+
+    assert seen == repository.DISPATCH_MAX_ATTEMPTS
+
+
+def test_a_live_claim_is_not_taken_from_the_worker_holding_it() -> None:
+    """Reclaiming early would send the same command to the arm twice."""
+    client, _ = _client()
+    step_id = _pick_step(client)
+    _dispatch(client, step_id, "dispatch-pick-1")
+    body = {"worker_id": "executor-1", "channels": ["omx"], "limit": 10}
+    client.post("/internal/v1/executor/dispatches/claim", json=body)
+
+    again = client.post(
+        "/internal/v1/executor/dispatches/claim",
+        json={"worker_id": "executor-2", "channels": ["omx"], "limit": 10},
+    ).json()
+
+    assert again["dispatches"] == []
