@@ -48,7 +48,8 @@ def run_poll_loop(
             logger.info(
                 "job runner cycle: "
                 f"assigned={list(report.assigned)} "
-                f"dispatched={list(report.dispatched)}"
+                f"dispatched={list(report.dispatched)} "
+                f"expired={list(report.expired)}"
             )
         for blocked in report.blocked:
             # Steady-state noise for a job waiting on a busy robot, but the

@@ -73,12 +73,13 @@ class JobRunnerReport:
     assigned: tuple[int, ...] = ()
     dispatched: tuple[int, ...] = ()
     awaiting: tuple[int, ...] = ()
+    expired: tuple[int, ...] = ()
     blocked: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
 
     @property
     def changed(self) -> bool:
-        return bool(self.assigned or self.dispatched)
+        return bool(self.assigned or self.dispatched or self.expired)
 
 
 @dataclass
@@ -88,6 +89,7 @@ class _Cycle:
     assigned: list[int] = field(default_factory=list)
     dispatched: list[int] = field(default_factory=list)
     awaiting: list[int] = field(default_factory=list)
+    expired: list[int] = field(default_factory=list)
     blocked: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -96,6 +98,7 @@ class _Cycle:
             assigned=tuple(self.assigned),
             dispatched=tuple(self.dispatched),
             awaiting=tuple(self.awaiting),
+            expired=tuple(self.expired),
             blocked=tuple(self.blocked),
             errors=tuple(self.errors),
         )
@@ -133,6 +136,7 @@ class JobRunner:
         if limit <= 0:
             raise ValueError("limit must be positive")
         cycle = _Cycle()
+        self._sweep_expired_reservations(cycle)
 
         summaries = self._gateway.list_jobs()
         details = self._load_details(summaries, cycle)
@@ -153,6 +157,35 @@ class JobRunner:
                 cycle.errors.append(f"job {detail.job_id}: {error}")
 
         return cycle.report()
+
+    def _sweep_expired_reservations(self, cycle: _Cycle) -> None:
+        """Hand dead reservations back before deciding what is free.
+
+        순서가 뒤집히면 이 주기의 배정은 이미 죽은 예약이 쥔 자원을 계속 비어 있지
+        않다고 읽는다. 그러면 `no free robot` 이 한 주기 더 반복된다.
+
+        회수가 실패해도 주기를 멈추지 않는다 — 이미 배정된 job 은 계속 전진해야
+        하고, 다음 주기가 회수를 다시 시도한다.
+        """
+        sweep = getattr(self._gateway, "expire_reservations", None)
+        if sweep is None:
+            # 이 경로가 없는 Gateway 를 상대로도 러너는 돌아야 한다.
+            return
+        try:
+            released = sweep().get("expired", ())
+        except Exception as error:  # noqa: BLE001
+            cycle.errors.append(f"reservation sweep: {error}")
+            return
+        for entry in released:
+            cycle.expired.append(int(entry["reservation_id"]))
+            if entry.get("job_active"):
+                # 자원은 풀렸는데 로봇이 아직 거기 있을 수 있다. Gateway 가 이미
+                # 이상을 열었고, 여기서는 그 사실이 로그에 보이게만 한다.
+                cycle.blocked.append(
+                    f"job {entry['job_id']}: reservation "
+                    f"{entry['reservation_id']} expired while the job still had "
+                    "work left"
+                )
 
     def _load_details(
         self,

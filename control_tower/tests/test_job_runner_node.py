@@ -57,7 +57,7 @@ def test_once_mode_runs_one_cycle_without_sleeping() -> None:
     assert runner.limits == [4]
     assert sleeps == []
     assert node.logger.info_messages == [
-        "job runner cycle: assigned=[7] dispatched=[7]"
+        "job runner cycle: assigned=[7] dispatched=[7] expired=[]"
     ]
 
 
