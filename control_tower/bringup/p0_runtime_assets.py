@@ -90,6 +90,36 @@ def verify(published: dict[str, Any], expected_revision: str) -> dict[str, str]:
     return contents
 
 
+# 로봇별 고정 충전기. `control_tower/task_manager/assignment.py` 의
+# CHARGER_BY_MOBILE 과 같은 값이고, Gateway 도 이 쌍이 아니면 배정을 거절한다
+# (FIXED_CHARGER_MISMATCH). 로봇은 여기서 spawn 되므로 AMCL 초기 pose 도 같다.
+CHARGER_BY_ROBOT = {
+    "PK_01": "TRIHOUSE-TEST-01-CHG-01",
+    "PK_02": "TRIHOUSE-TEST-01-CHG-02",
+}
+
+
+def charger_pose(
+    waypoints: dict[str, dict], robot_id: str
+) -> tuple[float, float, float] | None:
+    """로봇의 고정 충전기 좌표를 승인된 JSONL 에서만 읽는다."""
+    charger_code = CHARGER_BY_ROBOT.get(robot_id)
+    if charger_code is None:
+        return None
+    for record in waypoints.values():
+        if record.get("location_code") != charger_code:
+            continue
+        pose = record.get("map_pose") or {}
+        return (
+            float(pose["x"]),
+            float(pose["y"]),
+            float(pose.get("yaw") or 0.0),
+        )
+    raise SystemExit(
+        f"승인된 JSONL 에 {robot_id} 의 충전기 {charger_code} 가 없습니다"
+    )
+
+
 def load_features(features_path: Path) -> tuple[dict[str, dict], dict[str, dict]]:
     """승인된 JSONL 에서 waypoint 와 병목을 읽는다. 좌표는 여기서만 온다."""
     waypoints: dict[str, dict] = {}
@@ -158,8 +188,21 @@ def build_nav_graph(
     )
 
 
-def derive_nav2_params(source: Path, namespace: str, destination: Path) -> None:
-    """한 로봇용 Nav2 파라미터를 만든다. 원본은 읽기만 한다."""
+def derive_nav2_params(
+    source: Path,
+    namespace: str,
+    destination: Path,
+    *,
+    initial_pose: tuple[float, float, float] | None = None,
+) -> None:
+    """한 로봇용 Nav2 파라미터를 만든다. 원본은 읽기만 한다.
+
+    `initial_pose` 를 주면 AMCL 이 그 자리에서 위치추정을 시작한다. 공유 지도를
+    쓰는 순간 이게 필수가 된다 — 초기 pose 가 없으면 AMCL 은 지도 전체에 입자를
+    흩뿌린 채 시작하고, 두 로봇이 서로 다른 곳에 있다고 믿으면 RMF 의 교통
+    조정이 근거를 잃는다. 로봇은 충전 스테이션에서 spawn 되므로 그 좌표가 곧
+    참값이다.
+    """
     document = yaml.safe_load(source.read_text(encoding="utf-8"))
 
     def rewrite(node: Any) -> Any:
@@ -179,8 +222,18 @@ def derive_nav2_params(source: Path, namespace: str, destination: Path) -> None:
             return [rewrite(item) for item in node]
         return node
 
+    derived = rewrite(document)
+    if initial_pose is not None:
+        x, y, yaw = initial_pose
+        amcl = derived.setdefault("amcl", {}).setdefault("ros__parameters", {})
+        amcl["set_initial_pose"] = True
+        # nav2_amcl 은 `initial_pose.x` 처럼 개별 파라미터를 선언한다. 원본의
+        # `initial_pose: [0, 0, 0]` 리스트 형태는 어떤 파라미터에도 매칭되지
+        # 않아 조용히 무시된다. 중첩 매핑으로 바꿔 써야 실제로 반영된다.
+        amcl["initial_pose"] = {"x": float(x), "y": float(y), "z": 0.0, "yaw": float(yaw)}
+
     destination.write_text(
-        yaml.safe_dump(rewrite(document), allow_unicode=True, sort_keys=False),
+        yaml.safe_dump(derived, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
 
@@ -236,7 +289,12 @@ def main(argv: list[str] | None = None) -> int:
         if not namespace:
             raise SystemExit(f"--robot 는 ROBOT_ID:NAMESPACE 형식입니다: {entry}")
         destination = nav2_dir / f"{namespace}.yaml"
-        derive_nav2_params(args.nav2_source, namespace, destination)
+        derive_nav2_params(
+            args.nav2_source,
+            namespace,
+            destination,
+            initial_pose=charger_pose(waypoints, robot_id),
+        )
         nav2_files[robot_id] = str(destination)
 
     summary = {

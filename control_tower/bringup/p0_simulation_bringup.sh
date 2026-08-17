@@ -52,12 +52,18 @@ done
 # 하다(`control_tower/rmf_adapter/rmf_gateway_worker_node.py`).
 : "${TRIHOUSE_FLEET_NAME:=project1_pinky}"
 : "${TRIHOUSE_MAP_REVISION:=}"
-# Nav2 는 지도 없이 slam_toolbox 로 돈다. P0 의 승인된 SLAM 지도는
-# `control_system_test/` 아래라 gitignore 대상이고, 두 로봇이 같은 지도를
-# 공유하려면 초기 pose 정합이 따로 필요하다. 지도를 쓰려면
-# `TRIHOUSE_NAV2_SLAM=false` 로 두고 launch 에 `nav2_map:=` 을 넘긴다.
+# 두 로봇은 하나의 SLAM 지도를 공유하고 각자 AMCL 로 위치추정한다.
+#
+# 로봇마다 slam_toolbox 를 돌리면 같은 창고의 지도를 각자 따로 만들게 되고, 두
+# `map` 프레임이 일치하지 않는다. 그러면 병목 예약도 lane 충돌도 근거를 잃고,
+# 승인된 JSONL 의 좌표가 어느 지도 것인지도 말할 수 없게 된다. 지도가 저장소에
+# 들어온 지금은 공유 지도가 정본이다. 초기 pose 는 각 로봇의 고정 충전기
+# 좌표에서 오며 `p0_runtime_assets.py` 가 파생 파라미터에 심는다.
+#
+# 지도 없이 돌려야 하면 `TRIHOUSE_NAV2_SLAM=true` 로 되돌릴 수 있다.
 : "${TRIHOUSE_ACT_CONFIG:=$ROOT/config/act.simulation.yaml}"
-: "${TRIHOUSE_NAV2_SLAM:=true}"
+: "${TRIHOUSE_NAV2_MAP:=$ROOT/control_ui/rmf_control_ui/data/rmf_maps/trihouse_map_01.yaml}"
+: "${TRIHOUSE_NAV2_SLAM:=false}"
 : "${TRIHOUSE_START_NAV2:=true}"
 # 승인된 좌표 원본. `control_ui/` 쪽이 git 에 들어 있는 정본이고 지도 발행과
 # 자동 테스트가 모두 이 파일을 쓴다. `control_system_test/` 사본은 gitignore
@@ -92,6 +98,12 @@ set -u
 # `python3 -m trihouse_omx_adapter.simulator_node` 가 실패한다. 안쪽 패키지
 # 디렉터리를 루트보다 앞에 둔다.
 export PYTHONPATH="$ROOT/trihouse_omx_adapter:$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+
+if [[ "$TRIHOUSE_NAV2_SLAM" != true && ! -f "$TRIHOUSE_NAV2_MAP" ]]; then
+  echo "공유 SLAM 지도가 없습니다: $TRIHOUSE_NAV2_MAP" >&2
+  echo "지도 없이 각자 SLAM 으로 돌리려면 TRIHOUSE_NAV2_SLAM=true 를 주세요." >&2
+  exit 1
+fi
 
 if [[ ! -f "$PHYSICAL_FEATURES_FILE" ]]; then
   echo "승인된 physical-feature JSONL 이 없습니다: $PHYSICAL_FEATURES_FILE" >&2
@@ -216,6 +228,7 @@ start "two pinky order demo" \
     nav2_params_file:="$PINKY_NAV2_PARAMS" \
     nav2_params_dir:="$TRIHOUSE_RUNTIME_DIR/nav2" \
     nav2_slam:="$TRIHOUSE_NAV2_SLAM" \
+    nav2_map:="$([[ "$TRIHOUSE_NAV2_SLAM" == true ]] && echo "" || echo "$TRIHOUSE_NAV2_MAP")" \
     start_nav2:="$TRIHOUSE_START_NAV2" \
     fleet_config:="$TRIHOUSE_FLEET_CONFIG" \
     fleet_name:="$TRIHOUSE_FLEET_NAME" \
