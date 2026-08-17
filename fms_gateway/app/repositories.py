@@ -60,6 +60,10 @@ class FmsRepository(Protocol):
         self, job_id: int, assignment: dict[str, Any]
     ) -> dict[str, Any]: ...
 
+    def cancel_job(
+        self, job_id: int, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]: ...
+
     def record_load_attempt(
         self, job_step_id: int, request: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]: ...
@@ -197,6 +201,14 @@ class OutboundOrderActiveMapUnavailable(Exception):
 
 class JobNotFound(Exception):
     pass
+
+
+class JobCancellationConflict(Exception):
+    """이미 끝난 job 은 취소할 수 없다 — 끝난 일을 취소했다고 적으면 원장이 거짓이 된다."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
 
 
 class ManualAcknowledgementRequired(Exception):
@@ -3568,6 +3580,190 @@ class MySqlFmsRepository:
             finally:
                 cursor.close()
 
+    def cancel_job(
+        self, job_id: int, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """Close a job and hand every resource it was holding back in one transaction.
+
+        예약 lifecycle 은 `rmf_task_repository` 가 이미 처리하지만 그 경로는 RMF task
+        update 가 도착해야 돈다. RMF 에 제출되기 전에 멈춘 job 은 그 경로를 타지
+        못하고 로봇·팔·Dock 을 영원히 쥔다. 그래서 취소가 필요하고, 스크립트가 아니라
+        여기에 두는 이유는 행 잠금과 상태 전이 불변식이 이미 이 저장소 안에 있기
+        때문이다 — 두 곳에서 같은 전이를 하면 어긋난다.
+        """
+        canonical_request = {
+            "reason": str(request["reason"]),
+            "requested_by": str(request["requested_by"]),
+        }
+        fingerprint = {"job_id": job_id, "request": canonical_request}
+        event_uuid = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"trihouse:job-cancel:{idempotency_key}")
+        )
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                # Global lock order: Job -> Steps -> Reservations.
+                cursor.execute(
+                    "SELECT job_id, state FROM jobs WHERE job_id = %s FOR UPDATE",
+                    (job_id,),
+                )
+                job = cursor.fetchone()
+                if job is None:
+                    raise JobNotFound
+                cursor.execute(
+                    "SELECT payload FROM operation_events WHERE event_uuid = %s",
+                    (event_uuid,),
+                )
+                replay_event = cursor.fetchone()
+                if replay_event is not None:
+                    replay_payload = _json(replay_event["payload"]) or {}
+                    if replay_payload.get("request") != fingerprint:
+                        raise IdempotencyConflict
+                    if replay_payload.get("response") is None:
+                        raise RuntimeError(
+                            "cancellation idempotency response was not committed"
+                        )
+                    return replay_payload["response"]
+
+                if job["state"] in {"completed", "failed"}:
+                    raise JobCancellationConflict("JOB_ALREADY_FINISHED")
+                if job["state"] == "cancelled":
+                    # 되돌릴 것이 없을 뿐 오류가 아니다. 새 사건을 적지 않는 이유는
+                    # 취소가 두 번 일어났다고 원장이 말하게 되기 때문이다.
+                    connection.rollback()
+                    return {
+                        "job_id": job_id,
+                        "state": "cancelled",
+                        "cancelled_step_ids": [],
+                        "cancelled_reservation_ids": [],
+                        "released_device_ids": [],
+                    }
+
+                # `actor_worker_id` 는 workers 를 참조한다. 취소 요청자는 사람이
+                # 아닐 수도 있으므로(job_runner 등) 등록된 작업자일 때만 채우고,
+                # 원문은 언제나 payload 에 남긴다.
+                cursor.execute(
+                    "SELECT worker_id FROM workers WHERE worker_id = %s",
+                    (canonical_request["requested_by"],),
+                )
+                actor = cursor.fetchone()
+                cursor.execute(
+                    """
+                    INSERT IGNORE INTO operation_events
+                      (event_uuid, occurred_at, actor_worker_id, job_id,
+                       severity, category, event_type, message, payload)
+                    VALUES (%s, NOW(6), %s, %s, 'warning', 'operation',
+                            'job.cancelled', %s, %s)
+                    """,
+                    (
+                        event_uuid,
+                        actor["worker_id"] if actor is not None else None,
+                        job_id,
+                        canonical_request["reason"][:512],
+                        json.dumps(
+                            {"request": fingerprint, "response": None},
+                            ensure_ascii=False,
+                        ),
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    cursor.execute(
+                        "SELECT payload FROM operation_events WHERE event_uuid = %s",
+                        (event_uuid,),
+                    )
+                    existing = cursor.fetchone()
+                    if existing is None:
+                        raise RuntimeError(
+                            "cancellation idempotency event was not readable"
+                        )
+                    payload = _json(existing["payload"]) or {}
+                    if payload.get("request") != fingerprint:
+                        raise IdempotencyConflict
+                    if payload.get("response") is None:
+                        raise RuntimeError(
+                            "cancellation idempotency response was not committed"
+                        )
+                    return payload["response"]
+
+                cursor.execute(
+                    """
+                    SELECT job_step_id FROM job_steps
+                    WHERE job_id = %s AND state IN ('pending','running')
+                    ORDER BY job_step_id
+                    FOR UPDATE
+                    """,
+                    (job_id,),
+                )
+                step_ids = [int(row["job_step_id"]) for row in cursor.fetchall()]
+                cursor.execute(
+                    """
+                    SELECT reservation_id, device_id FROM reservations
+                    WHERE job_id = %s AND state IN ('reserved','in_use')
+                    ORDER BY reservation_id
+                    FOR UPDATE
+                    """,
+                    (job_id,),
+                )
+                held = [dict(row) for row in cursor.fetchall()]
+                reservation_ids = [int(row["reservation_id"]) for row in held]
+                device_ids = sorted(
+                    {str(row["device_id"]) for row in held if row["device_id"]}
+                )
+
+                if step_ids:
+                    placeholders = ", ".join(["%s"] * len(step_ids))
+                    cursor.execute(
+                        f"""
+                        UPDATE job_steps
+                        SET state = 'cancelled', completed_at = NOW(6),
+                            failure_reason = %s
+                        WHERE job_step_id IN ({placeholders})
+                        """,
+                        (canonical_request["reason"][:512], *step_ids),
+                    )
+                if reservation_ids:
+                    placeholders = ", ".join(["%s"] * len(reservation_ids))
+                    cursor.execute(
+                        f"""
+                        UPDATE reservations
+                        SET state = 'cancelled', released_at = NOW(6)
+                        WHERE reservation_id IN ({placeholders})
+                        """,
+                        tuple(reservation_ids),
+                    )
+                cursor.execute(
+                    """
+                    UPDATE jobs SET state = 'cancelled', revision = revision + 1
+                    WHERE job_id = %s
+                    """,
+                    (job_id,),
+                )
+
+                response = {
+                    "job_id": job_id,
+                    "state": "cancelled",
+                    "cancelled_step_ids": step_ids,
+                    "cancelled_reservation_ids": reservation_ids,
+                    "released_device_ids": device_ids,
+                }
+                cursor.execute(
+                    "UPDATE operation_events SET payload = %s WHERE event_uuid = %s",
+                    (
+                        json.dumps(
+                            {"request": fingerprint, "response": response},
+                            ensure_ascii=False,
+                        ),
+                        event_uuid,
+                    ),
+                )
+                connection.commit()
+                return response
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                cursor.close()
+
     def record_load_attempt(
         self, job_step_id: int, request: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
@@ -5321,6 +5517,9 @@ class InMemoryFmsRepository:
         self._dispatch_attempts: dict[str, int] = {}
         self._claims: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]] = {}
         self._reserved_assignment_resources: dict[str, int] = {}
+        self._reservation_ids: dict[str, int] = {}
+        self._next_reservation_id = 1
+        self._cancellations: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
         self._assignment_lock = threading.RLock()
         self._assignment_locations: dict[str, dict[str, Any]] = {
             "PACKING-01-DOCK-01": {
@@ -6022,8 +6221,12 @@ class InMemoryFmsRepository:
                 ):
                     if self._reserved_assignment_resources.get(value) == job_id:
                         self._reserved_assignment_resources.pop(value)
+                        self._reservation_ids.pop(value, None)
             for resource in resources:
                 self._reserved_assignment_resources[resource] = job_id
+                if resource not in self._reservation_ids:
+                    self._reservation_ids[resource] = self._next_reservation_id
+                    self._next_reservation_id += 1
             context["assignment"] = deepcopy(assignment)
             job["assigned_mobile_id"] = assignment["mobile_id"]
             job["destination_location_id"] = packing["location_id"]
@@ -6054,6 +6257,78 @@ class InMemoryFmsRepository:
             self._append_event(
                 job_id, None, "job.assignment.persisted", {"assignment": assignment}
             )
+            return response
+
+    def force_job_state(self, job_id: int, state: str) -> None:
+        """테스트가 실행 경로를 거치지 않고 종료 상태를 만들기 위한 좁은 문."""
+        self._jobs[job_id]["state"] = state
+
+    def cancel_job(
+        self, job_id: int, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        canonical_request = {
+            "reason": str(request["reason"]),
+            "requested_by": str(request["requested_by"]),
+        }
+        fingerprint = {"job_id": job_id, "request": canonical_request}
+        with self._assignment_lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise JobNotFound
+            replay = self._cancellations.get(idempotency_key)
+            if replay is not None:
+                if replay[0] != fingerprint:
+                    raise IdempotencyConflict
+                return deepcopy(replay[1])
+            if job["state"] in {"completed", "failed"}:
+                raise JobCancellationConflict("JOB_ALREADY_FINISHED")
+            if job["state"] == "cancelled":
+                return {
+                    "job_id": job_id,
+                    "state": "cancelled",
+                    "cancelled_step_ids": [],
+                    "cancelled_reservation_ids": [],
+                    "released_device_ids": [],
+                }
+
+            step_ids = sorted(
+                step_id
+                for step_id, step in self._steps.items()
+                if step["job_id"] == job_id and step["state"] in {"pending", "running"}
+            )
+            for step_id in step_ids:
+                self._steps[step_id]["state"] = "cancelled"
+
+            held = sorted(
+                resource
+                for resource, owner in self._reserved_assignment_resources.items()
+                if owner == job_id
+            )
+            reservation_ids = sorted(
+                self._reservation_ids.pop(resource) for resource in held
+            )
+            for resource in held:
+                self._reserved_assignment_resources.pop(resource)
+            # Dock 은 코드로 예약되고 로봇·팔은 device_id 로 예약된다. 돌려주는
+            # 자원 중 장비만 device 로 보고한다.
+            assignment = (job.get("context") or {}).get("assignment") or {}
+            devices = {assignment.get("mobile_id"), assignment.get("omx_id")}
+            released_device_ids = sorted(
+                resource for resource in held if resource in devices
+            )
+
+            job["state"] = "cancelled"
+            self._append_event(
+                job_id, None, "job.cancelled", {"request": canonical_request}
+            )
+            response = {
+                "job_id": job_id,
+                "state": "cancelled",
+                "cancelled_step_ids": step_ids,
+                "cancelled_reservation_ids": reservation_ids,
+                "released_device_ids": released_device_ids,
+            }
+            self._cancellations[idempotency_key] = (fingerprint, deepcopy(response))
             return response
 
     def get_job_timeline(self, job_id: int) -> list[dict[str, Any]] | None:

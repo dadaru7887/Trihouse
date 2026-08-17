@@ -242,6 +242,25 @@ class JobAssignmentView(JobAssignmentRequest):
     job_id: int
 
 
+class JobCancelRequest(BaseModel):
+    """운영자 또는 관제가 job 을 닫고 그 자원을 돌려받겠다는 요청."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=512)
+    requested_by: str = Field(min_length=1, max_length=64)
+
+
+class JobCancelled(BaseModel):
+    """무엇이 실제로 닫혔고 어떤 자원이 돌아왔는지."""
+
+    job_id: int
+    state: Literal["cancelled"]
+    cancelled_step_ids: list[int]
+    cancelled_reservation_ids: list[int]
+    released_device_ids: list[str]
+
+
 LoadResult = Literal[
     "LOAD_CONFIRMED", "DROP_DETECTED", "LOAD_UNCERTAIN", "GRASP_RETAINED"
 ]

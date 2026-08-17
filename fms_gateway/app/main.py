@@ -48,6 +48,8 @@ from .models import (
     JobDetail,
     JobAssignmentRequest,
     JobAssignmentView,
+    JobCancelRequest,
+    JobCancelled,
     LoadAttemptRequest,
     LoadAttemptView,
     PickRecoveryRequest,
@@ -96,6 +98,7 @@ from .repositories import (
     JobStepNotDispatchable,
     StepOutcomeConflict,
     JobStepNotFound,
+    JobCancellationConflict,
     JobNotFound,
     ManualAcknowledgementRequired,
     MapDraftRevisionConflict,
@@ -886,6 +889,30 @@ def create_app(
             raise HTTPException(
                 status_code=409,
                 detail={"code": "RESOURCE_UNAVAILABLE", "message": str(error)},
+            ) from error
+
+    @app.post("/internal/v1/jobs/{job_id}/cancel", response_model=JobCancelled)
+    def cancel_job(
+        job_id: int,
+        cancellation: JobCancelRequest,
+        idempotency_key: str = Header(min_length=1, max_length=160),
+    ):
+        """Job 을 닫고 그것이 쥐고 있던 로봇·팔·Dock 을 한 트랜잭션으로 돌려준다.
+
+        RMF 에 제출되기 전에 멈춘 job 은 `rmf_task_repository` 의 해제 경로를 타지
+        못해 자원을 영원히 쥔다. 그때 원장을 손으로 고치는 대신 이 경로를 쓴다.
+        """
+        try:
+            return repo.cancel_job(job_id, cancellation.model_dump(), idempotency_key)
+        except JobNotFound as error:
+            raise HTTPException(status_code=404, detail="job not found") from error
+        except JobCancellationConflict as error:
+            raise HTTPException(
+                status_code=409, detail={"code": error.code}
+            ) from error
+        except IdempotencyConflict as error:
+            raise HTTPException(
+                status_code=409, detail={"code": "IDEMPOTENCY_CONFLICT"}
             ) from error
 
     @app.post(
