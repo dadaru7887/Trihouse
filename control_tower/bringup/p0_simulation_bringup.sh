@@ -57,6 +57,22 @@ done
 #   ROS_DOMAIN_ID=0 control_tower/bringup/p0_simulation_bringup.sh
 : "${ROS_DOMAIN_ID:=52}"
 export ROS_DOMAIN_ID
+# transport 도 domain 과 똑같은 이유로 못박는다. domain 이 같아도 전송 방식이
+# 어긋나면 서로를 못 본다.
+#
+# Docker 층은 `compose.simulation.yaml` 에서 UDPv4 로 뜨는데 호스트는 아무것도
+# 정하지 않아 FastDDS 기본값으로 떴다. 기본값은 공유메모리를 함께 광고하고,
+# 그러면 요청은 도착하는데 응답이 돌아오지 못하는 상태가 된다. 실제로
+# `map_server` 가 Configuring 을 끝냈는데도 lifecycle_manager 는 응답을 받지
+# 못해 거기서 멈췄고(`failed to send response to .../change_state`), AMCL 이
+# 아예 기동하지 못했다. 오류가 아니라 침묵으로 나타나므로 찾기 어렵다.
+#
+# `.env` 를 읽지 않는 것은 의도다. 거기엔 MySQL·MediaMTX 비밀값이 있고 source
+# 하면 그것들이 모든 ROS 노드 환경으로 새어 나간다. 두 층의 기본값을 같은
+# 값으로 적어 두는 쪽이 안전하고, 그 일치는 테스트가 지킨다.
+: "${RMW_IMPLEMENTATION:=rmw_fastrtps_cpp}"
+: "${FASTDDS_BUILTIN_TRANSPORTS:=UDPv4}"
+export RMW_IMPLEMENTATION FASTDDS_BUILTIN_TRANSPORTS
 : "${FMS_BASE_URL:=http://127.0.0.1:8080}"
 : "${TRIHOUSE_PROJECT:=trihouse_test_01}"
 # fleet 이름은 `trihouse_rmf_bridge/config/pinky_fleet.yaml` 의 `rmf_fleet.name`
@@ -240,6 +256,7 @@ start "two pinky order demo" \
     world:="$TRIHOUSE_RUNTIME_DIR/world.sdf" \
     nav2_params_file:="$PINKY_NAV2_PARAMS" \
     nav2_params_dir:="$TRIHOUSE_RUNTIME_DIR/nav2" \
+    runtime_state_dir:="$TRIHOUSE_RUNTIME_DIR" \
     nav2_slam:="$TRIHOUSE_NAV2_SLAM" \
     nav2_map:="$([[ "$TRIHOUSE_NAV2_SLAM" == true ]] && echo "" || echo "$TRIHOUSE_NAV2_MAP")" \
     start_nav2:="$TRIHOUSE_START_NAV2" \

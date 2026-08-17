@@ -339,3 +339,239 @@ def test_nav2_never_runs_composed_so_each_robot_keeps_its_own_localisation(
     assert includes, "nav2 bringup include not found"
     for resolved in includes:
         assert resolved["use_composition"] == "False"
+
+
+def _remappings(context, node: Node) -> list[tuple[str, str]]:
+    """`Node` 에 걸린 remap 규칙을 문자열 쌍으로 푼다."""
+    raw = getattr(node, "_Node__remappings", None) or []
+    resolved = []
+    for source, target in raw:
+        def _text(value):
+            if isinstance(value, str):
+                return value
+            if isinstance(value, (list, tuple)):
+                return perform_substitutions(context, list(value))
+            return perform_substitutions(context, [value])
+
+        resolved.append((_text(source), _text(target)))
+    return resolved
+
+
+def _nodes_in_groups(context, actions):
+    """namespace 그룹 안의 Node 를 (namespace, node) 로 낸다."""
+    for timer in (action for action in actions if hasattr(action, "actions")):
+        for group in timer.actions:
+            if not isinstance(group, GroupAction):
+                continue
+            entities = list(group.get_sub_entities())
+            pushes = [e for e in entities if isinstance(e, PushRosNamespace)]
+            if not pushes:
+                continue
+            namespace = perform_substitutions(
+                context, pushes[0]._PushROSNamespace__namespace
+            )
+            for entity in entities:
+                if isinstance(entity, Node):
+                    yield namespace, entity
+
+
+def _nodes_outside_groups(actions):
+    for timer in (action for action in actions if hasattr(action, "actions")):
+        for entity in timer.actions:
+            if isinstance(entity, Node):
+                yield entity
+
+
+def test_tf_reaches_nav2_because_nav2_listens_inside_the_namespace(
+    tmp_path: Path,
+) -> None:
+    """nav2 는 TF 를 전역 `/tf` 에서 읽지 않는다.
+
+    `nav2_bringup` 의 localization/navigation launch 는 모든 노드에
+    `[('/tf', 'tf'), ('/tf_static', 'tf_static')]` 을 무조건 건다. 상대 이름이
+    되었으므로 바깥 PushRosNamespace 가 접두사를 붙여 nav2 노드는
+    `/pinky_01/tf` 와 `/pinky_01/tf_static` 을 듣는다.
+
+    그런데 이 시스템의 TF 발행자는 전역 `/tf` 에 쓴다. 그래서 한동안
+    `/tf` 는 발행자 3 구독자 0, `/pinky_02/tf_static` 은 발행자 0 구독자 8 이었다.
+    AMCL 의 TF 버퍼가 비어 스캔이 전량 폐기되고(`Message Filter dropping
+    message`), 위치추정이 한 번도 돌지 않아 `amcl_pose` 가 나오지 않았다.
+    그러면 status 의 `frame_id` 가 `map` 이 되지 못해 RMF adapter 가 로봇을
+    거부하고 주문이 배정되지 않는다. costmap 도 TF 없이는 활성되지 못해
+    controller_server 활성이 실패했다.
+
+    프레임 이름에는 이미 로봇 namespace 가 붙어 있으므로(URDF 의 `frame_prefix`)
+    같은 트리를 로봇 namespace 안에서 주고받아도 서로 섞이지 않는다.
+    """
+    module, context, actions = _runtime_actions(tmp_path)
+
+    publishers = [
+        (namespace, node)
+        for namespace, node in _nodes_in_groups(context, actions)
+        if "robot_state_publisher" in str(node.node_executable)
+    ]
+    assert len(publishers) == 2, "로봇마다 robot_state_publisher 가 하나 있어야 한다"
+
+    for _namespace, node in publishers:
+        remaps = dict(_remappings(context, node))
+        # 상대 이름으로 remap 해야 PushRosNamespace 가 접두사를 붙인다.
+        assert remaps.get("/tf") == "tf"
+        assert remaps.get("/tf_static") == "tf_static"
+
+
+def test_the_gazebo_odom_transform_is_bridged_into_each_namespace(
+    tmp_path: Path,
+) -> None:
+    """정적 사슬만으로는 부족하다. `odom -> base_footprint` 가 있어야 한다.
+
+    그 변환은 Gazebo 의 DiffDrive 플러그인이 gz `/tf` 로 내보내고 bridge 가
+    ROS 로 넘긴다. 전역 `/tf` 로만 넘기면 nav2 는 그것을 보지 못하므로 로봇
+    namespace 안으로도 넣어야 한다. bridge 는 준 이름을 gz 와 ROS 양쪽에 쓰기
+    때문에 namespace 밖에서 띄우고 ROS 쪽만 remap 한다.
+    """
+    module, context, actions = _runtime_actions(tmp_path)
+
+    namespaces = [namespace for _robot, namespace, _charger in module.ROBOT_CHARGERS]
+    targets = set()
+    for node in _nodes_outside_groups(actions):
+        for source, target in _remappings(context, node):
+            if source == "/tf":
+                targets.add(target)
+
+    assert targets == {f"/{namespace}/tf" for namespace in namespaces}
+
+
+def test_each_robot_gets_the_nodes_that_make_it_dispatchable(tmp_path: Path) -> None:
+    """`dispatchable` 이 false 면 RMF 는 그 로봇에 작업을 주지 않는다.
+
+    adapter 는 status 의 `dispatchable` 을 자기 `ready` 로 복사하고, false 면
+    `PINKY_NOT_READY` 로 로봇을 RMF 에 내보내지 않는다. 주행과 위치추정이
+    완벽해도 그렇다.
+
+    그 값은 `status_node` 가 스스로 정하지 않는다. 다른 노드들의 telemetry 를
+    모아 `build_status` 에 넘긴 결과이고, 그중 넷은 여기서 띄우지 않으면 영영
+    false 로 남는다 — 오류가 아니라 발행자가 없는 것이라 조용하다.
+
+      battery_stale             <- trihouse/battery            (sim_hardware)
+      nav_unavailable           <- trihouse/readiness          (readiness_checker)
+      battery_not_dispatchable  <- trihouse/battery/policy_state (battery_policy,
+                                   그 입력은 battery_condition 이 낸다)
+      control_link_offline      <- trihouse/fms/state          (fleet_gateway)
+
+    `safety_supervisor`·`recovery_health`·`fleet_node` 는 여기에 필요하지 않다.
+    safety 는 기본값이 이미 clear 이고 나머지는 이 판정에 들어가지 않는다.
+    """
+    module, context, actions = _runtime_actions(tmp_path)
+
+    required = {
+        "sim_hardware",
+        "readiness_checker",
+        "battery_condition",
+        "battery_policy",
+        "fleet_gateway",
+        "status_node",
+    }
+
+    by_namespace: dict[str, set[str]] = {}
+    for namespace, node in _nodes_in_groups(context, actions):
+        by_namespace.setdefault(namespace, set()).add(str(node.node_executable))
+
+    expected = [namespace for _robot, namespace, _charger in module.ROBOT_CHARGERS]
+    assert sorted(by_namespace) == sorted(expected)
+    for namespace in expected:
+        missing = required - by_namespace[namespace]
+        assert not missing, f"{namespace} 에 없는 노드: {sorted(missing)}"
+
+
+def test_each_robot_keeps_its_own_event_outbox(tmp_path: Path) -> None:
+    """outbox 는 event identity 를 재시작 간 유지하는 저장소다.
+
+    `fleet_gateway` 의 기본값은 `/tmp/trihouse_event_outbox_<pid>.sqlite3` 라서
+    프로세스마다 새로 생긴다. 그러면 session 과 sequence 가 매번 초기화되어
+    재전송·ACK 의 근거가 사라진다. 로봇마다 고정된 경로를 준다.
+    """
+    module, context, actions = _runtime_actions(tmp_path)
+
+    def _text(value) -> str:
+        # launch_ros 는 파라미터의 키와 값을 모두 치환 목록으로 정규화한다.
+        # 그래서 문자열로 그대로 비교할 수 없다.
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (list, tuple)):
+            return perform_substitutions(context, list(value))
+        return perform_substitutions(context, [value])
+
+    paths = {}
+    for namespace, node in _nodes_in_groups(context, actions):
+        if "fleet_gateway" not in str(node.node_executable):
+            continue
+        for parameter in node._Node__parameters:
+            if not hasattr(parameter, "items"):
+                continue
+            for key, value in parameter.items():
+                if _text(key) == "event_outbox_path":
+                    paths[namespace] = _text(value)
+
+    expected = [namespace for _robot, namespace, _charger in module.ROBOT_CHARGERS]
+    assert sorted(paths) == sorted(expected)
+    # 로봇끼리 같은 파일을 쓰면 sequence 가 서로를 덮어쓴다.
+    assert len(set(paths.values())) == len(expected)
+    for namespace, path in paths.items():
+        assert namespace in path
+        assert not path.startswith("/tmp/"), path
+
+
+def _nav2_includes(context, actions) -> list[dict[str, str]]:
+    """`bringup_launch.py` include 로 넘어가는 인자를 로봇 순서대로 모은다."""
+
+    def _text(value):
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (list, tuple)):
+            return perform_substitutions(context, list(value))
+        return perform_substitutions(context, [value])
+
+    includes = []
+    for timer in (action for action in actions if hasattr(action, "actions")):
+        for group in timer.actions:
+            if not isinstance(group, GroupAction):
+                continue
+            for entity in group.get_sub_entities():
+                arguments = getattr(entity, "launch_arguments", None)
+                if arguments is None:
+                    continue
+                resolved = {_text(name): _text(value) for name, value in arguments}
+                if "use_composition" in resolved:
+                    includes.append(resolved)
+    return includes
+
+
+def test_nav2_gets_the_namespace_so_its_parameter_keys_match_the_node_names(
+    tmp_path: Path,
+) -> None:
+    """`namespace` 는 파라미터 root key 를 정하는 값이기도 하다.
+
+    nav2_bringup 은 `RewrittenYaml(root_key=namespace)` 로 파라미터 파일 전체를
+    namespace 아래에 감싼다. 빈 문자열을 주면 그 감싸기가 사라져서 키가
+    `controller_server` 로 남는데, 노드는 바깥 PushRosNamespace 때문에
+    `/pinky_01/controller_server` 다. 키가 어긋나면 파라미터가 한 개도 적용되지
+    않고 노드는 조용히 기본값으로 뜬다 — controller_server 는 기본 플러그인인
+    DWB 를 집어들고 `No critics defined for FollowPath` 로 죽었고, AMCL 은
+    `set_initial_pose` 를 못 받아 위치추정을 시작하지 못했다.
+
+    이중 접힘은 `use_namespace` 가 켜져 있을 때만 생긴다. 노드 이름에 namespace
+    를 입히는 것은 bringup 안의 `PushROSNamespace` 이고 그것은
+    `IfCondition(use_namespace)` 로 묶여 있다. 하위 launch 는 어떤 Node 에도
+    namespace 를 붙이지 않고 주변 namespace 를 물려받는다. 그래서 이름은 바깥
+    PushRosNamespace 하나가, 파라미터 키는 이 인자가 맡는다.
+    """
+    module, context, actions = _runtime_actions(tmp_path)
+
+    includes = _nav2_includes(context, actions)
+    assert includes, "nav2 bringup include not found"
+
+    expected = [namespace for _robot, namespace, _charger in module.ROBOT_CHARGERS]
+    assert [resolved["namespace"] for resolved in includes] == expected
+    for resolved in includes:
+        # 이름을 두 번 입히지 않도록 이것은 계속 꺼져 있어야 한다.
+        assert resolved["use_namespace"] == "false"

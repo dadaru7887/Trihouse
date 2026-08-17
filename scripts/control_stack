@@ -40,7 +40,12 @@ COMPOSE_PROJECT = "trihouse_p0"
 # 의 개발용 MySQL 도 같은 `${FMS_DB_PORT}` 를 보기 때문에, P0 가 3308 을 쓰려고
 # `.env` 를 고치면 개발 DB 가 다음 기동에서 같은 포트를 물고 충돌한다.
 # 그래서 P0 는 `.env.p0` 만 본다. 없으면 `.env` 로 되돌아간다.
-ENV_FILE = ROOT / ".env.p0"
+# `.env.example` 이 정본으로 가리키는 파일이다. 다른 파일을 읽으면 두 파일이 서로
+# 다른 방향으로 낡는다. 실제로 MediaMTX 인가 변수 4개가 `.env` 에만 들어가 있어서
+# `docker compose` 가 설정 단계에서 실패했고, 그 결과 `up`·`status`·`logs`·`down`·
+# `doctor` 가 전부 못 쓰게 되었다. `doctor` 는 그 실패를 "서비스 없음" 으로 바꿔
+# 읽어서 여덟 개가 정상 실행 중인데도 전부 `absent` 라고 보고했다.
+ENV_FILE = ROOT / ".env"
 
 # Docker 기동 순서. 앞의 서비스가 healthy가 된 뒤에 다음이 올라간다.
 STARTUP_ORDER = (

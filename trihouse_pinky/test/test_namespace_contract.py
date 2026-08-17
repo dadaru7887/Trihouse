@@ -154,8 +154,10 @@ class SimulationStatusPathContractTest(unittest.TestCase):
     """P0 시뮬레이션에서 status_node 의 양 끝이 실제로 이어지는지 확인한다.
 
     `two_pinky_order_demo.launch.py` 는 `status_node` 를
-    `PushRosNamespace(namespace)` 그룹 안에서 **remapping 없이** 띄우고, fleet
-    adapter 에게는 `/<namespace>/trihouse/status` 를 읽으라고 알려 준다. 그래서
+    `PushRosNamespace(namespace)` 그룹 안에서 띄우고, fleet adapter 에게는
+    `/<namespace>/trihouse/status` 를 읽으라고 알려 준다. 토픽 remap 은 TF 두
+    개뿐이다(nav2 가 TF 를 로봇 namespace 안에서 주고받기 때문이며, 아래
+    `test_status_node_gets_tf_where_nav2_publishes_it` 가 그것을 지킨다). 그래서
     `status_node` 가 토픽을 절대 이름으로 적으면 namespace 가 통째로 무시되어
     양쪽이 어긋난다 — 노드는 루트에 발행하고 adapter 는 namespace 아래를
     듣는다. 입력도 마찬가지로 gz bridge 는 `<namespace>/odom` 을 내보내는데
@@ -182,13 +184,57 @@ class SimulationStatusPathContractTest(unittest.TestCase):
         self.assertIn("trihouse/status", names)
         self.assertNotIn("/trihouse/status", names)
 
-    def test_status_node_reads_the_namespaced_pose_and_sensor_topics(self) -> None:
+    def test_status_node_reads_the_namespaced_sensor_topics(self) -> None:
         names = dict.fromkeys(name for _line, name in _declared_names(self.STATUS_NODE))
 
-        for relative in ("odom", "scan", "amcl_pose"):
+        for relative in ("odom", "scan"):
             with self.subTest(topic=relative):
                 self.assertIn(relative, names)
                 self.assertNotIn(f"/{relative}", names)
+
+    def test_status_node_takes_the_map_pose_from_tf_not_from_amcl_pose(self) -> None:
+        """`amcl_pose` 를 신선도의 근거로 쓰면 정지한 로봇이 영영 못 움직인다.
+
+        nav2 AMCL 은 `amcl_pose` 를 이벤트로만 낸다 — 첫 스캔에 한 번, 그 뒤로는
+        로봇이 `update_min_d` 만큼 움직여 재표집될 때만이다. 그래서 그 토픽의
+        신선도는 위치추정이 살아 있는지가 아니라 로봇이 움직였는지를 잰다.
+
+        충전기에 세워 둔 로봇은 이렇게 막힌다. amcl_pose 가 한 번 오고 timeout 이
+        지나 `map_pose_stale` 이 되면 frame_id 가 odom 으로 떨어지고, adapter 는
+        frame_id 가 `map` 이 아닌 로봇을 거부하고, 그러면 job 이 배정되지 않아
+        로봇은 움직이지 않고, 움직이지 않으니 amcl_pose 도 다시 오지 않는다.
+
+        AMCL 이 지속적으로 내보내는 것은 `map -> odom` 변환이다. 그것을 보면
+        위치추정이 지금 살아 있는지를 그대로 알 수 있고, 최신 odometry 까지
+        합성된 pose 를 얻는다. nav2 자신의 소비자(costmap, controller)도 모두
+        TF 를 본다.
+        """
+        source = self.STATUS_NODE.read_text(encoding="utf-8")
+        names = dict.fromkeys(name for _line, name in _declared_names(self.STATUS_NODE))
+
+        self.assertNotIn("amcl_pose", names)
+        self.assertIn("TransformListener", source)
+        self.assertIn("lookup_transform", source)
+
+    def test_status_node_gets_tf_where_nav2_publishes_it(self) -> None:
+        """TF 는 이제 로봇 namespace 안에 있다.
+
+        nav2_bringup 이 자기 노드 전부에 `[('/tf','tf'), ('/tf_static','tf_static')]`
+        을 걸어 두어서 AMCL 은 `/<namespace>/tf` 로 방송한다. status_node 가 루트
+        `/tf` 를 들으면 아무것도 받지 못하므로 같은 remap 을 받아야 한다.
+        """
+        source = self.DEMO_LAUNCH.read_text(encoding="utf-8")
+        # status_node 항목은 그룹의 마지막이라 `return GroupAction` 이 그 끝이다.
+        # `),` 로 자르면 remappings 튜플 안에서 끊긴다.
+        block = source.split('executable="status_node"', 1)[1].split(
+            "return GroupAction", 1
+        )[0]
+
+        self.assertIn('("/tf", "tf")', block)
+        self.assertIn('("/tf_static", "tf_static")', block)
+        # 프레임 이름에는 로봇 접두사가 붙어 있다(robot_state_publisher 의
+        # `frame_prefix`). 노드가 그 이름을 알아야 조회가 성립한다.
+        self.assertIn('f"{namespace}/base_footprint"', block)
 
     def test_gazebo_bridge_topics_stay_relative_so_they_get_the_prefix(self) -> None:
         # 브리지는 `f"{namespace}/{topic}"` 으로 접두사를 직접 붙인다. 여기에

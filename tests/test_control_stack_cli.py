@@ -213,3 +213,48 @@ def test_the_simulation_stack_defines_no_ai_5080_service() -> None:
     for name in module.COMPOSE_FILES:
         document = yaml.safe_load((ROOT / name).read_text(encoding="utf-8")) or {}
         assert "ai_5080" not in str(document.get("services", {}))
+
+
+def _required_compose_variables(module) -> set[str]:
+    """`${VAR:?...}` 로 적힌 변수. 값이 없으면 compose 가 설정 단계에서 죽는다."""
+    import re
+
+    pattern = re.compile(r"\$\{([A-Z0-9_]+):\?")
+    required: set[str] = set()
+    for name in module.COMPOSE_FILES:
+        if name in module.FORBIDDEN_IN_SIMULATION:
+            continue
+        required |= set(pattern.findall((ROOT / name).read_text(encoding="utf-8")))
+    return required
+
+
+def test_control_stack_reads_the_env_file_that_env_example_documents() -> None:
+    """env 파일이 둘로 갈라지면 CLI 전체가 조용히 죽는다.
+
+    `docs/deployment/environment_overview.md` 는 `.env.example` 을 참고해 호스트별
+    비밀값을 `.env` 에 두라고 계약을 정해 두었다. 그런데 CLI 가 다른 파일을 읽으면
+    두 파일이 서로 다른 방향으로 낡는다.
+
+    2026-08-18 에 실제로 그랬다. MediaMTX 인가 변수 4개는 `.env` 에 들어갔는데 CLI
+    는 `.env.p0` 를 읽고 있어서 `docker compose` 가 설정 단계에서 실패했고,
+    `up`·`status`·`logs`·`down`·`doctor` 가 모두 못 쓰게 되었다. 그중 `doctor` 는
+    가장 나쁘게 실패했다 — compose 실패를 "서비스 없음" 으로 바꿔 읽어서, 여덟 개가
+    정상 실행 중인데도 전부 `absent` 라고 보고했다.
+    """
+    module = _module()
+
+    assert module.ENV_FILE.name == ".env"
+
+
+def test_env_example_declares_every_variable_compose_requires() -> None:
+    """필수 변수를 compose 에 추가하고 예시에 적지 않으면 아무도 채울 수 없다."""
+    module = _module()
+
+    documented = {
+        line.split("=", 1)[0].strip()
+        for line in (ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
+        if "=" in line and not line.lstrip().startswith("#")
+    }
+
+    missing = sorted(_required_compose_variables(module) - documented)
+    assert missing == [], f".env.example 에 없는 필수 변수: {missing}"

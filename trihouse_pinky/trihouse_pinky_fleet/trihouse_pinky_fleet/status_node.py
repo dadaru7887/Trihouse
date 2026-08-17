@@ -1,13 +1,13 @@
 """SR_03 RobotStatus를 1초 heartbeat와 상태 변경 시 발행하는 ROS 2 노드."""
 
-from time import monotonic
-
 import rclpy
 from rclpy.node import Node
+from rclpy.time import Time
+
+import tf2_ros
 
 from nav_msgs.msg import Odometry                       # 주행거리 측정 패키지
 from sensor_msgs.msg import BatteryState, LaserScan     # 배터리 잔량 반영, 라이다 데이터 수신 여부 확인
-from geometry_msgs.msg import PoseWithCovarianceStamped
 
 from trihouse_interfaces.msg import (
     BatteryCondition,
@@ -35,16 +35,37 @@ class StatusNode(Node):
         self.declare_parameter('robot_id', 'PK_01')         # 로봇 식별자
         self.declare_parameter('map_revision', '')
         self.declare_parameter('sensor_timeout_s', 1.5)     # 센서 타임아웃(초)
+        # map 은 두 로봇이 공유하므로 접두사가 없다. base 프레임에는 URDF 의
+        # `frame_prefix` 가 로봇 접두사를 붙여 두었으므로 launch 가 그 이름을 준다.
+        self.declare_parameter('map_frame', 'map')
+        self.declare_parameter('base_frame_id', 'base_footprint')
         self.robot_id = self.get_parameter('robot_id').value
         self.map_revision = self.get_parameter('map_revision').value
         self.timeout = float(self.get_parameter('sensor_timeout_s').value)
+        self.map_frame = self.get_parameter('map_frame').value
+        self.base_frame_id = self.get_parameter('base_frame_id').value
 
-        # 각 센서 메시지를 마지막으로 받은 monotonic 시각; 초기 상태는 0.0 -> stale
+        # 각 센서 메시지를 마지막으로 받은 ROS 시계 시각; 초기 상태는 0.0 -> stale
         self.last_scan = self.last_odom = self.last_battery = 0.0
-        self.last_map_pose = 0.0
         self.odom: Odometry | None = None
-        self.map_pose: PoseWithCovarianceStamped | None = None
         self.battery = 0.0
+
+        # map 좌표 pose 는 토픽이 아니라 TF 에서 읽는다.
+        #
+        # nav2 AMCL 은 `amcl_pose` 를 이벤트로만 낸다 — 첫 스캔에 한 번, 그 뒤로는
+        # 로봇이 `update_min_d` 만큼 움직여 재표집될 때만이다. 그래서 그 토픽의
+        # 신선도는 위치추정이 살아 있는지가 아니라 로봇이 움직였는지를 잰다.
+        # 충전기에 세워 둔 로봇은 그 때문에 영영 못 움직였다. amcl_pose 가 한 번
+        # 오고 timeout 이 지나면 `map_pose_stale` 이 되어 frame_id 가 odom 으로
+        # 떨어지고, adapter 는 frame_id 가 `map` 이 아닌 로봇을 거부하고, job 이
+        # 배정되지 않으니 로봇은 움직이지 않고, 움직이지 않으니 amcl_pose 도 다시
+        # 오지 않는다.
+        #
+        # AMCL 이 지속적으로 내보내는 것은 `map -> odom` 변환이다. 그것을 조회하면
+        # 위치추정이 지금 살아 있는지를 그대로 알 수 있고, 최신 odometry 까지
+        # 합성된 pose 를 얻는다. nav2 자신의 소비자도 모두 TF 를 본다.
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         self.task_context = TaskContext()
         self.nav_available = False
@@ -60,8 +81,6 @@ class StatusNode(Node):
 
         self.create_subscription(LaserScan, 'scan', self._scan, 10)
         self.create_subscription(Odometry, 'odom', self._odom, 10)
-        self.create_subscription(
-            PoseWithCovarianceStamped, 'amcl_pose', self._map_pose, 10)
         self.create_subscription(BatteryState, 'trihouse/battery', self._battery, 10)
         self.create_subscription(BatteryCondition, 'trihouse/battery/condition', self._battery_condition, 10)
         self.create_subscription(SafetyState, 'trihouse/safety/state', self._safety, 10)
@@ -75,26 +94,53 @@ class StatusNode(Node):
 
         self.create_timer(1.0, self._publish)   # heartbeat가 유지되도록 1초마다 _publish를 호출한다.
 
+    def _now(self) -> float:
+        """신선도를 재는 기준 시각을 초로 낸다.
+
+        `time.monotonic()` 을 쓰면 안 된다. `use_sim_time` 이 켜지면 발행자의
+        타이머는 sim 시간으로 뛰는데 이쪽만 벽시계로 재면 두 값이 다른 시계에
+        놓인다. 시뮬이 실시간보다 느리면 1 sim초 주기로 오는 배터리가 벽시계로는
+        몇 초 간격이 되어 임계값을 늘 넘고, 영구히 stale 로 판정된다. 실기에서는
+        ROS 시계가 곧 벽시계이므로 동작이 달라지지 않는다.
+        """
+        return self.get_clock().now().nanoseconds / 1e9
+
     def _scan(self, _: LaserScan) -> None:
         """라이다 데이터의 마지막 수신 시각을 기록한다."""
 
         # 메시지 내용은 사용하지 않으므로 인자 이름을 `_`로 표시한다.
-        self.last_scan = monotonic()
+        self.last_scan = self._now()
 
     def _odom(self, message: Odometry) -> None:
         """최신 위치·속도와 odometry 수신 시각을 기록한다."""
         self.odom = message                                 # pose와 twist를 복사할 원본 메시지를 보관한다.
-        self.last_odom = monotonic()
+        self.last_odom = self._now()
 
-    def _map_pose(self, message: PoseWithCovarianceStamped) -> None:
-        """AMCL의 map 좌표 pose와 마지막 수신 시각을 저장한다."""
-        self.map_pose = message
-        self.last_map_pose = monotonic()
+    def _lookup_map_pose(self):
+        """`map -> base` 변환을 조회한다. 없거나 낡으면 None 을 낸다.
+
+        가장 최근 변환을 받아 그 시각을 지금과 견준다. 시각을 `now()` 로 지정해
+        조회하면 아직 오지 않은 미래를 요구해 늘 실패하므로 그렇게 하지 않는다.
+        낡은 변환을 그냥 쓰면 AMCL 이 죽은 뒤에도 map pose 가 있는 것처럼 보이므로
+        신선도는 반드시 여기서 확인한다.
+        """
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.map_frame, self.base_frame_id, Time()
+            )
+        except tf2_ros.TransformException:
+            return None
+
+        stamp = Time.from_msg(transform.header.stamp)
+        age_s = (self.get_clock().now() - stamp).nanoseconds / 1e9
+        if age_s > self.timeout:
+            return None
+        return transform
 
     def _battery(self, message: BatteryState) -> None:
         """최신 배터리 잔량과 배터리 메시지 수신 시각을 기록한다."""
         self.battery = message.percentage * 100.0           # BatteryState.percentage의 0.0~1.0 비율을 0.0~100.0 값으로 바꾼다.
-        self.last_battery = monotonic()
+        self.last_battery = self._now()
 
     def _battery_condition(self, message: BatteryCondition) -> None:
         """최신 검증 관측값을 정책 snapshot의 입력 필드에 보존한다."""
@@ -147,7 +193,10 @@ class StatusNode(Node):
         """현재 저장된 입력을 하나의 RobotStatus 메시지로 조합한다."""
 
         # 모든 경과 시간 계산이 같은 기준 시각을 사용하도록 현재 시각을 한 번 읽는다.
-        now = monotonic()
+        now = self._now()
+
+        # 한 메시지 안에서 판정과 pose 가 같은 조회 결과를 쓰도록 한 번만 읽는다.
+        map_transform = self._lookup_map_pose()
 
         # 각 센서가 timeout 이내에 들어왔는지를 정책 입력으로 전달한다.
         # build_status는 이 정보로 작업 할당 가능 여부와 오류 목록을 계산한다.
@@ -157,7 +206,7 @@ class StatusNode(Node):
                 scan_fresh=now - self.last_scan <= self.timeout,
                 odom_fresh=now - self.last_odom <= self.timeout,
                 battery_fresh=now - self.last_battery <= self.timeout,
-                map_pose_fresh=now - self.last_map_pose <= self.timeout,
+                map_pose_fresh=map_transform is not None,
                 nav_available=self.nav_available,
                 control_link_online=self.control_link_online,
                 safety_clear=self.safety.state == SafetyState.STATE_CLEAR,
@@ -196,15 +245,19 @@ class StatusNode(Node):
         message.navigation_state = self.navigation_state
         message.task_progress = self.task_progress
 
-        # RMF에는 odom 좌표를 map 좌표처럼 전달하면 안 된다. 신선한 AMCL pose가
+        # RMF에는 odom 좌표를 map 좌표처럼 전달하면 안 된다. 신선한 map 변환이
         # 있으면 이를 우선하고, 없거나 stale이면 frame_id를 odom으로 남겨 상위
         # adapter가 등록/갱신을 거절할 수 있게 한다.
-        if (
-            self.map_pose is not None
-            and now - self.last_map_pose <= self.timeout
-        ):
-            message.pose = self.map_pose.pose
-            message.frame_id = self.map_pose.header.frame_id
+        #
+        # covariance 는 채우지 않는다. TF 에는 그 값이 없고, 저장소 안에 이 필드를
+        # 읽는 곳도 없다. 필요해지면 그때 근거와 함께 넣는다.
+        if map_transform is not None:
+            translation = map_transform.transform.translation
+            message.pose.pose.position.x = translation.x
+            message.pose.pose.position.y = translation.y
+            message.pose.pose.position.z = translation.z
+            message.pose.pose.orientation = map_transform.transform.rotation
+            message.frame_id = self.map_frame
         elif self.odom is not None:
             message.pose.pose = self.odom.pose.pose
             message.frame_id = self.odom.header.frame_id

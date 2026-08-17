@@ -51,10 +51,100 @@ LANE_TOPOLOGY: tuple[tuple[str, str], ...] = (
 )
 
 # Nav2 파라미터에서 로봇마다 갈라져야 하는 프레임 이름.
-FRAME_KEYS = ("base_frame_id", "odom_frame_id", "robot_base_frame")
+#
+# `base_frame` 과 `fixed_frame` 은 docking_server 가 쓰는 이름이다. 같은 뜻의 키를
+# 노드마다 다르게 부르므로 둘 다 적어 둔다.
+FRAME_KEYS = (
+    "base_frame_id",
+    "odom_frame_id",
+    "robot_base_frame",
+    "base_frame",
+    "fixed_frame",
+)
 
 # 절대 경로로 적혀 있어 두 로봇이 서로의 것을 보게 되는 토픽.
 ABSOLUTE_TOPIC_KEYS = ("topic", "scan_topic", "odom_topic")
+
+# 벤더 params 에 없어서 우리가 채워야 하는 collision_monitor 설정.
+#
+# `nav2_bringup/launch/navigation_launch.py` 는 controller_server 와
+# velocity_smoother 와 behavior_server 의 `cmd_vel` 을 모두 `cmd_vel_nav` 로
+# remap 하고 collision_monitor 에만 remap 을 걸지 않는다. 그래서 `cmd_vel` 을
+# 발행하는 노드는 collision_monitor 하나뿐이고, 그것이 Gazebo bridge 가 듣는
+# 토픽이다. 이 노드는 `lifecycle_nodes` 에 무조건 들어 있는데 `observation_sources`
+# 에 기본값이 없어서, 절이 비어 있으면 configure 에서 죽고 navigation lifecycle
+# 전체가 그 자리에서 멈춘다. 곧 이 절이 없으면 로봇은 한 발도 움직이지 못한다.
+#
+# 값은 `nav2_bringup/params/nav2_params.yaml` 의 기본값을 그대로 따른다. 토픽과
+# 프레임은 상대 이름으로 두어 아래 `rewrite` 가 로봇마다 갈라 준다.
+#
+# 폴리곤은 nav2 기본값이다. 실물 Pinky 의 정지거리로 검증된 값이 아니므로 실기
+# 배포 전에 `time_before_collision` 과 `min_points` 를 실측으로 다시 잡아야 한다.
+COLLISION_MONITOR_DEFAULTS: dict[str, Any] = {
+    "ros__parameters": {
+        "base_frame_id": "base_footprint",
+        "odom_frame_id": "odom",
+        "cmd_vel_in_topic": "cmd_vel_smoothed",
+        "cmd_vel_out_topic": "cmd_vel",
+        "state_topic": "collision_monitor_state",
+        "transform_tolerance": 0.2,
+        "source_timeout": 1.0,
+        "base_shift_correction": True,
+        "stop_pub_timeout": 2.0,
+        "polygons": ["FootprintApproach"],
+        "FootprintApproach": {
+            "type": "polygon",
+            "action_type": "approach",
+            # 상대 이름이라 `/<namespace>/local_costmap/published_footprint` 로
+            # 풀린다. 벤더도 behavior_server 에서 같은 형태를 쓴다.
+            "footprint_topic": "local_costmap/published_footprint",
+            "time_before_collision": 1.2,
+            "simulation_time_step": 0.1,
+            "min_points": 6,
+            "visualize": False,
+            "enabled": True,
+        },
+        "observation_sources": ["scan"],
+        "scan": {
+            "type": "scan",
+            # `topic` 은 ABSOLUTE_TOPIC_KEYS 라서 로봇 namespace 가 붙는다.
+            # 붙지 않으면 두 로봇이 서로의 스캔을 보고 서로를 장애물로 여긴다.
+            "topic": "scan",
+            "min_height": 0.15,
+            "max_height": 2.0,
+            "enabled": True,
+        },
+    }
+}
+
+# 벤더 params 에 없어서 우리가 채워야 하는 docking_server 설정.
+#
+# P0 는 도킹을 쓰지 않는다. 충전은 RMF 가 충전기 waypoint 로 관리한다. 그런데
+# `docking_server` 는 navigation `lifecycle_nodes` 의 마지막 항목이고 목록에 무조건
+# 들어 있어서, `dock_plugins` 가 없으면 `Charging dock plugins not given!` 로
+# configure 에 실패한다. lifecycle_manager 는 그 하나 때문에 navigation 전체를
+# abort 하므로, 앞의 노드가 다 정상이어도 로봇은 뜨지 않는다.
+#
+# 그래서 여기서 하려는 것은 도킹을 켜는 것이 아니라 노드가 configure 를 통과해
+# 조용히 대기하게 만드는 것이다. dock 인스턴스(`docks`)는 두지 않는다 — 두면
+# 쓰지도 않는 기능이 설정된 것처럼 보인다. 외부 검출 pose 도 끈다. 그것은 aruco
+# 파이프라인을 전제하는데 P0 에는 없고, 켜 두면 오지 않는 검출을 기다린다.
+DOCKING_SERVER_DEFAULTS: dict[str, Any] = {
+    "ros__parameters": {
+        "controller_frequency": 50.0,
+        "base_frame": "base_link",
+        "fixed_frame": "odom",
+        "dock_plugins": ["simple_charging_dock"],
+        "simple_charging_dock": {
+            "plugin": "opennav_docking::SimpleChargingDock",
+            "docking_threshold": 0.05,
+            "staging_x_offset": -0.7,
+            "use_external_detection_pose": False,
+            "use_battery_status": False,
+            "use_stall_detection": False,
+        },
+    }
+}
 
 
 def fetch_published(fms_base_url: str, map_name: str) -> dict[str, Any]:
@@ -204,6 +294,9 @@ def derive_nav2_params(
     참값이다.
     """
     document = yaml.safe_load(source.read_text(encoding="utf-8"))
+    # 벤더가 이 절을 채우면 그것을 그대로 쓴다. 우리 기본값은 빈 자리만 메운다.
+    document.setdefault("collision_monitor", COLLISION_MONITOR_DEFAULTS)
+    document.setdefault("docking_server", DOCKING_SERVER_DEFAULTS)
 
     def rewrite(node: Any) -> Any:
         if isinstance(node, dict):

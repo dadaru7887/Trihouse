@@ -170,3 +170,120 @@ def test_omitting_the_initial_pose_leaves_the_source_untouched(tmp_path: Path) -
         "ros__parameters"
     ]
     assert "initial_pose" not in amcl
+
+
+def test_collision_monitor_is_configured_because_it_publishes_the_only_cmd_vel(
+    tmp_path: Path,
+) -> None:
+    """이 절이 없으면 로봇은 한 발도 움직이지 못한다.
+
+    `nav2_bringup/launch/navigation_launch.py` 는 controller_server 와
+    velocity_smoother 와 behavior_server 의 `cmd_vel` 을 전부 `cmd_vel_nav` 로
+    remap 하고, collision_monitor 에만 remap 을 걸지 않는다. 그래서
+    `cmd_vel` 을 실제로 발행하는 노드는 collision_monitor 하나뿐이고 그것이
+    Gazebo bridge 가 듣는 토픽이다.
+
+    그런데 collision_monitor 는 `lifecycle_nodes` 에 무조건 들어 있는데
+    벤더 params 에는 그 절이 없다. `observation_sources` 는 기본값이 없어서
+    노드는 `parameter 'observation_sources' is not initialized` 로 configure 에
+    실패하고, navigation lifecycle 전체가 그 자리에서 중단된다.
+    """
+    module = _module()
+    source = tmp_path / "nav2.yaml"
+    source.write_text(
+        yaml.safe_dump({"amcl": {"ros__parameters": {"base_frame_id": "base_footprint"}}}),
+        encoding="utf-8",
+    )
+    destination = tmp_path / "pinky_02.yaml"
+
+    module.derive_nav2_params(source, "pinky_02", destination)
+
+    monitor = yaml.safe_load(destination.read_text(encoding="utf-8"))[
+        "collision_monitor"
+    ]["ros__parameters"]
+
+    # 관측원이 있어야 configure 를 통과한다.
+    assert monitor["observation_sources"] == ["scan"]
+    # 이웃 로봇의 스캔을 보면 서로를 장애물로 여겨 둘 다 멈춘다.
+    assert monitor["scan"]["topic"] == "/pinky_02/scan"
+    assert monitor["base_frame_id"] == "pinky_02/base_footprint"
+    assert monitor["odom_frame_id"] == "pinky_02/odom"
+    # 출력은 상대 이름이어야 namespace 안의 `/pinky_02/cmd_vel` 로 나간다.
+    # 절대 이름으로 적으면 두 로봇이 루트의 한 토픽을 함께 밀어 서로를 덮어쓴다.
+    assert monitor["cmd_vel_out_topic"] == "cmd_vel"
+    assert monitor["cmd_vel_in_topic"] == "cmd_vel_smoothed"
+    assert (
+        monitor["FootprintApproach"]["footprint_topic"]
+        == "local_costmap/published_footprint"
+    )
+    # 선언한 폴리곤 이름은 반드시 같은 이름의 절을 가져야 한다.
+    for name in monitor["polygons"]:
+        assert name in monitor
+
+
+def test_docking_server_configures_even_though_p0_never_docks(tmp_path: Path) -> None:
+    """P0 는 도킹을 쓰지 않지만 이 절이 없으면 주행 자체가 뜨지 않는다.
+
+    `docking_server` 는 navigation `lifecycle_nodes` 의 마지막 항목이고 목록에
+    무조건 들어 있다. `dock_plugins` 가 없으면 `Charging dock plugins not given!`
+    으로 configure 에 실패하고, lifecycle_manager 는 그 하나 때문에 navigation
+    전체를 abort 한다 — 앞의 노드가 모두 정상이어도 그렇다.
+
+    충전은 RMF 가 충전기 waypoint 로 관리하므로 dock 인스턴스(`docks`)는 두지
+    않는다. 노드가 configure 를 통과해 조용히 대기하는 것이 여기서 필요한 전부다.
+    """
+    module = _module()
+    source = tmp_path / "nav2.yaml"
+    source.write_text(
+        yaml.safe_dump({"amcl": {"ros__parameters": {"base_frame_id": "base_footprint"}}}),
+        encoding="utf-8",
+    )
+    destination = tmp_path / "pinky_02.yaml"
+
+    module.derive_nav2_params(source, "pinky_02", destination)
+
+    docking = yaml.safe_load(destination.read_text(encoding="utf-8"))["docking_server"][
+        "ros__parameters"
+    ]
+
+    assert docking["dock_plugins"], "dock_plugins 가 비면 configure 에서 죽는다"
+    # 선언한 plugin 이름은 반드시 같은 이름의 절을 가져야 한다.
+    for name in docking["dock_plugins"]:
+        assert docking[name]["plugin"]
+
+    # 프레임은 로봇마다 갈라져야 한다. URDF 가 frame_prefix 로 접두사를 붙인다.
+    assert docking["base_frame"] == "pinky_02/base_link"
+    assert docking["fixed_frame"] == "pinky_02/odom"
+
+    # 실제 도킹 동작은 P0 범위가 아니다. 인스턴스를 두면 쓰는 것처럼 보인다.
+    assert "docks" not in docking
+    # 외부 검출 pose 는 aruco 파이프라인을 전제한다. P0 에는 없다.
+    assert docking[docking["dock_plugins"][0]]["use_external_detection_pose"] is False
+
+
+def test_a_source_that_already_configures_collision_monitor_wins(tmp_path: Path) -> None:
+    """벤더가 나중에 이 절을 채우면 우리 기본값이 그것을 덮어써서는 안 된다."""
+    module = _module()
+    source = tmp_path / "nav2.yaml"
+    source.write_text(
+        yaml.safe_dump(
+            {
+                "collision_monitor": {
+                    "ros__parameters": {
+                        "observation_sources": ["front_scan"],
+                        "front_scan": {"type": "scan", "topic": "scan"},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    destination = tmp_path / "pinky_01.yaml"
+
+    module.derive_nav2_params(source, "pinky_01", destination)
+
+    monitor = yaml.safe_load(destination.read_text(encoding="utf-8"))[
+        "collision_monitor"
+    ]["ros__parameters"]
+    assert monitor["observation_sources"] == ["front_scan"]
+    assert monitor["front_scan"]["topic"] == "/pinky_01/scan"

@@ -162,6 +162,18 @@ def _robot_group(
                     value_type=str,
                 ),
             }],
+            # nav2 는 TF 를 전역 `/tf` 에서 읽지 않는다. `nav2_bringup` 이 모든
+            # 노드에 `[('/tf','tf'), ('/tf_static','tf_static')]` 을 무조건 걸어
+            # 두어서, 바깥 PushRosNamespace 가 접두사를 붙인 `/pinky_01/tf` 와
+            # `/pinky_01/tf_static` 을 듣는다. 발행자가 전역에만 쓰면 nav2 의 TF
+            # 버퍼는 비어 있고, AMCL 은 스캔마다 변환을 찾지 못해 전량 폐기한다
+            # (`Message Filter dropping message`). 그러면 위치추정이 한 번도 돌지
+            # 않아 `amcl_pose` 가 없고, status 의 frame_id 가 `map` 이 되지 못해
+            # RMF adapter 가 로봇을 거부한다.
+            #
+            # 프레임 이름에는 위의 `frame_prefix` 가 이미 namespace 를 붙여 두었다.
+            # 그래서 트리를 로봇 namespace 안에서 주고받아도 두 로봇이 섞이지 않는다.
+            remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
         ),
         Node(
             package="ros_gz_sim",
@@ -208,9 +220,21 @@ def _robot_group(
                 )
             ),
             launch_arguments={
-                # 이미 PushRosNamespace 안이다. 여기서 namespace 를 또 주면
-                # nav2 노드가 `/pinky_01/pinky_01/...` 로 두 번 접힌다.
-                "namespace": "",
+                # `namespace` 는 두 가지를 정하는데 여기서 필요한 것은 두 번째다.
+                # 이름을 입히는 쪽은 bringup 안의 `PushROSNamespace` 이고 그것은
+                # `IfCondition(use_namespace)` 로 묶여 있다. 그래서
+                # `use_namespace` 를 끈 채 namespace 를 주면 이름은 바깥
+                # PushRosNamespace 하나만 입히고 두 번 접히지 않는다.
+                #
+                # 두 번째가 파라미터 root key 다. nav2 는
+                # `RewrittenYaml(root_key=namespace)` 로 파라미터 파일 전체를
+                # namespace 아래에 감싼다. 빈 문자열이면 그 감싸기가 사라져 키가
+                # `controller_server` 로 남는데 노드는 `/pinky_01/controller_server`
+                # 라서 파라미터가 한 개도 붙지 않고 조용히 기본값으로 뜬다.
+                # controller_server 가 기본 플러그인 DWB 를 집어 들어
+                # `No critics defined for FollowPath` 로 죽고 AMCL 이
+                # `set_initial_pose` 를 못 받아 위치추정을 시작하지 못한 원인이다.
+                "namespace": namespace,
                 "use_namespace": "false",
                 # 합성(composition)은 반드시 꺼야 한다. nav2_bringup 의
                 # `ComposableNode` 에는 namespace 인자가 없어서, 바깥
@@ -240,6 +264,83 @@ def _robot_group(
                 "robot_id": robot_id,
                 "map_revision": map_revision,
                 "use_sim_time": use_sim_time,
+                # map 은 두 로봇이 공유하므로 접두사가 없다. base 프레임에는 위의
+                # `frame_prefix` 가 접두사를 붙여 두었으므로 그 이름을 그대로 준다.
+                "map_frame": "map",
+                "base_frame_id": f"{namespace}/base_footprint",
+            }],
+            # status_node 는 map pose 를 `map -> base` 변환에서 읽고, 그 변환은
+            # AMCL 이 낸다. nav2 가 자기 노드 전부에 같은 remap 을 걸어 두어서
+            # AMCL 은 `/<namespace>/tf` 로 방송하므로 여기도 같은 곳을 봐야 한다.
+            remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
+        ),
+        # 아래 네 노드가 없으면 `dispatchable` 이 영영 false 로 남고 RMF 는 이
+        # 로봇에 작업을 주지 않는다 — 주행과 위치추정이 완벽해도 그렇다. adapter 가
+        # status 의 그 값을 자기 `ready` 로 복사하기 때문이다. 오류가 아니라 발행자가
+        # 없는 것이라 조용하고, 그래서 찾기 어려웠다.
+        #
+        # 여기 있는 것은 그 판정에 실제로 들어가는 것만이다. `safety_supervisor` 와
+        # `recovery_health` 와 `fleet_node` 는 빠져 있다 — safety 는 기본값이 이미
+        # clear 이고 나머지 둘은 이 판정에 들어가지 않는다. 이름은 모두 상대
+        # 이름이라 위의 PushRosNamespace 가 로봇 아래로 넣어 준다.
+        #
+        # `trihouse/battery` 를 낸다. 실기에서는 trihouse_pinky_io 의
+        # battery_adapter 가 같은 자리를 맡는다.
+        Node(
+            package="trihouse_pinky_bringup",
+            executable="sim_hardware",
+            name="trihouse_sim_hardware",
+            output="screen",
+            parameters=[{"use_sim_time": use_sim_time}],
+        ),
+        # `trihouse/battery/condition` 을 낸다. 아래 battery_policy 의 입력이다.
+        Node(
+            package="trihouse_pinky_fleet",
+            executable="battery_condition",
+            name="trihouse_battery_condition",
+            output="screen",
+            parameters=[{"robot_id": robot_id, "use_sim_time": use_sim_time}],
+        ),
+        # `trihouse/battery/policy_state` 를 낸다. `battery_not_dispatchable` 이
+        # 이것 없이는 풀리지 않는다.
+        Node(
+            package="trihouse_pinky_fleet",
+            executable="battery_policy",
+            name="trihouse_battery_policy",
+            output="screen",
+            parameters=[{"use_sim_time": use_sim_time}],
+        ),
+        # `trihouse/readiness` 를 낸다. scan·odom 신선도와 `navigate_to_pose`
+        # 액션 서버 가용을 함께 보므로, nav2 navigation 이 활성이어야 READY 가 된다.
+        Node(
+            package="trihouse_pinky_bringup",
+            executable="readiness_checker",
+            name="trihouse_readiness",
+            output="screen",
+            parameters=[{"robot_id": robot_id, "use_sim_time": use_sim_time}],
+        ),
+        # `trihouse/fms/state` 를 낸다. FMS Gateway 의 TCP 포트에 붙으면 ONLINE 이
+        # 되고 `control_link_offline` 이 풀린다. 그 포트는 compose.control.yaml 이
+        # `FMS_TCP_PORT` 로 내보낸다.
+        Node(
+            package="trihouse_pinky_fleet",
+            executable="fleet_gateway",
+            name="trihouse_fleet_gateway",
+            output="screen",
+            parameters=[{
+                "robot_id": robot_id,
+                "use_sim_time": use_sim_time,
+                "control_host": LaunchConfiguration("fms_tcp_host"),
+                "control_port": ParameterValue(
+                    LaunchConfiguration("fms_tcp_port"), value_type=int,
+                ),
+                # 기본값은 `/tmp/trihouse_event_outbox_<pid>.sqlite3` 라서 프로세스
+                # 마다 새로 생긴다. 그러면 session 과 sequence 가 매번 초기화되어
+                # 재전송과 ACK 의 근거가 사라지므로 로봇마다 고정 경로를 준다.
+                "event_outbox_path": PathJoinSubstitution([
+                    LaunchConfiguration("runtime_state_dir"),
+                    f"{namespace}_task_events.sqlite3",
+                ]),
             }],
         ),
     ]
@@ -350,12 +451,36 @@ def _runtime(context):
         for _robot_id, namespace, _charger in ROBOT_CHARGERS
     ]
 
+    # `odom -> base_footprint` 는 robot_state_publisher 가 아니라 Gazebo 의
+    # DiffDrive 플러그인이 낸다. 그것 없이는 정적 사슬만 있어서 AMCL 이 스캔을
+    # 여전히 맞출 수 없다. URDF 가 gz `/tf` 로 내보내므로(`<tf_topic>/tf</tf_topic>`,
+    # pinky_pro 는 고치지 않는다) 그 하나를 로봇 namespace 안으로 넣어 준다.
+    #
+    # gz `/tf` 에는 두 로봇의 odom 변환이 함께 실려서 각 namespace 가 양쪽을 받는다.
+    # 프레임 이름에 namespace 가 붙어 있으므로 트리는 그대로 일관되고, 로봇은 자기
+    # 변환만 조회한다.
+    tf_bridges = [
+        Node(
+            package="ros_gz_bridge",
+            executable="parameter_bridge",
+            name=f"trihouse_tf_bridge_{namespace}",
+            output="screen",
+            arguments=["/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V"],
+            parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],
+            # bridge 는 준 이름을 gz 와 ROS 양쪽에 쓴다. 그래서 namespace 밖에서
+            # 띄우고 ROS 쪽만 옮긴다 — gz 는 계속 `/tf` 를 구독한다.
+            remappings=[("/tf", f"/{namespace}/tf")],
+        )
+        for _robot_id, namespace, _charger in ROBOT_CHARGERS
+    ]
+
     actions.append(
         TimerAction(
             period=LaunchConfiguration("startup_delay_s"),
             actions=[
                 *groups,
                 *bridges,
+                *tf_bridges,
                 # 러너가 `queued` Job 에 자원을 배정하고 현재 Step 을 outbox 로
                 # 내보낸다. 아래 worker 는 그 행을 claim 해 RMF 로 넘긴다.
                 # 러너 없이 worker 만 띄우면 claim 할 것이 없어 주문이 로봇을
@@ -447,6 +572,12 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("fleet_name", default_value="trihouse_pinky"),
         DeclareLaunchArgument("rmf_worker_id", default_value="trihouse-rmf-worker"),
         DeclareLaunchArgument("fms_base_url", default_value="http://127.0.0.1:8080"),
+        # `fleet_gateway` 가 붙는 FMS Gateway 의 TCP 경계다. HTTP(8080)와 다른
+        # 포트이며 기본값은 `compose.control.yaml` 의 `FMS_TCP_PORT` 와 같다.
+        DeclareLaunchArgument("fms_tcp_host", default_value="127.0.0.1"),
+        DeclareLaunchArgument("fms_tcp_port", default_value="8788"),
+        # 재시작을 넘겨 보존해야 하는 로봇별 상태(event outbox)를 두는 곳.
+        DeclareLaunchArgument("runtime_state_dir", default_value=str(repository_root)),
         DeclareLaunchArgument("use_sim_time", default_value="true"),
         DeclareLaunchArgument("headless", default_value="true"),
         DeclareLaunchArgument("start_rmf_core", default_value="true"),
