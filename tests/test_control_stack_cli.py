@@ -156,6 +156,9 @@ def test_the_bringup_starts_every_ros_component_together() -> None:
     assert "two_pinky_order_demo.launch.py" in source
     assert "trihouse_omx_adapter.simulator_node" in source
     assert "control_tower.rmf_adapter.rmf_gateway_worker_node" in source
+    # 러너와 worker 는 짝이다. 러너가 빠지면 outbox 가 비어 worker 가 claim 할
+    # 것이 없고, 주문은 `queued` 에서 멈춘다.
+    assert "control_tower.task_manager.job_runner_node" in source
     for omx in ("OMX_01", "OMX_02"):
         assert omx in source
 

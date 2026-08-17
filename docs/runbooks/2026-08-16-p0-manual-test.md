@@ -6,26 +6,26 @@
 
 ## 0. 이 문서의 검증 상태 — 먼저 읽을 것
 
-**정직하게 적는다. 이 절차 전체를 끝까지 실행해 본 적은 아직 없다.**
-작성 환경에 Docker 데몬 접근 권한이 없어 컨테이너를 띄우지 못했고, 그래서
-Gazebo 에서 로봇이 실제로 움직이는 것도 확인하지 못했다.
+**갱신: 2026-08-17.** 2026-08-16 추가 세션에서 스택을 실제로 띄웠고, 그때
+막았던 결함 20여 건을 고쳤다. 실측 기록은
+`docs/validation/2026-08-16-p0-simulation.md` 3절에 있다.
 
 | 항목 | 상태 |
 |---|---|
-| compose 4개 파일이 하나의 project 로 병합됨 | `docker compose config` 로 **확인** |
-| `flutter build web` 성공 | **확인** |
-| Gateway `/api/v1/operations/ws` 라우트 동작 | 테스트로 **확인** |
-| RMF core 노드 6개가 이 ROS 설치에 존재 | `ros2 pkg executables` 로 **확인** |
-| 기동 스크립트의 PYTHONPATH 로 OMX/worker 모듈 import | **확인** |
-| 포트 3308/8080/3100 이 비어 있음 | **확인** (3306·3307 은 이미 사용 중) |
-| seed 상품 코드 (`SKU-ORANGE` 등) 존재 | **확인** |
-| Docker 이미지 실제 빌드 (`up`) | **미실행** |
-| ROS 층 실제 기동 (`ros`) | **미실행** |
-| Gazebo 에서 두 Pinky 주행 | **미실행** |
-| `doctor` 가 11개 모두 healthy | **미실행** |
+| Docker 층 6개 서비스 기동 (`up`) | **확인** — 모두 healthy |
+| 지도 발행 (staged → validated → published) | **확인** |
+| 주문 → DB 실시간 반영, 운영 WebSocket | **확인** |
+| ROS 층 실제 기동 (`ros`) | **확인** — 프로세스 사망 0건 |
+| Gazebo 에서 두 Pinky 주행 | **확인** (단, `cmd_vel` 직접 지령) |
+| `doctor` 가 모두 healthy | **확인** (당시 11개, 지금 12개) |
+| Job 러너가 주문에 자원 배정 + Step dispatch | **확인** (2026-08-17, 실 DB) |
+| **주문이 로봇을 실제로 출발시킴** | **미실행 — 아래 참고** |
 
-즉 **명령과 경로는 실물과 대조해 고쳤지만, 처음 실행할 때 한두 군데는 더
-막힐 수 있다.** 특히 4절(지도 발행)과 5절(ROS 기동)이 가장 불확실하다.
+> **8.2~8.5 는 아직 통과할 수 없다.** 공개 주문의 첫 단계가 `pick(arm)` 인데
+> Gateway 의 `omx` 채널 outbox 를 소비하는 프로세스가 없다. Step 이 열리지
+> 않으므로 뒤따르는 `navigate` 가 RMF 로 나가지 못한다. 원인과 범위는
+> 검증 문서 3.4.2 절에 있다. **1~7절과 8.1 절은 지금 그대로 유효하다.**
+
 막히면 10절 문제 해결표를 먼저 보고, 그래도 안 되면 `control_system` 의
 같은 기능 구현을 참고하면 된다 — RMF core 구성은 이미 거기서 가져왔다
 (`control_system/rmf_maps/project1/project1.launch.xml`).
@@ -37,7 +37,7 @@ Gazebo 에서 로봇이 실제로 움직이는 것도 확인하지 못했다.
 | 층 | 무엇이 도는가 | 띄우는 명령 |
 |---|---|---|
 | **Docker** | MySQL, FMS Gateway, MediaMTX, RMF API/Dashboard, 관제 UI | `./scripts/control_stack up` |
-| **호스트 ROS 2** | RMF core, Gazebo, Pinky×2 Nav2/fleet adapter, OMX×2, RMF dispatch worker | `./scripts/control_stack ros` |
+| **호스트 ROS 2** | RMF core, Gazebo, Pinky×2 Nav2/fleet adapter, OMX×2, Job 러너, RMF dispatch worker | `./scripts/control_stack ros` |
 
 ROS 쪽은 `rclpy`, DDS 멀티캐스트, GPU 가 필요해 컨테이너로 옮기지 않았다.
 그래서 명령이 두 개다. 두 층을 함께 점검하는 것은 `doctor` 하나다.
@@ -55,11 +55,17 @@ ROS 쪽은 `rclpy`, DDS 멀티캐스트, GPU 가 필요해 컨테이너로 옮�
 ### 2.1 비밀번호 환경 파일
 
 `compose.yaml` 과 `compose.control.yaml` 이 `${MYSQL_ROOT_PASSWORD}`,
-`${FMS_DB_PASSWORD}` 를 요구한다. 저장소 루트에 `.env` 를 만든다.
+`${FMS_DB_PASSWORD}` 를 요구한다.
+
+> **저장소 루트의 `.env` 를 고치지 말 것.** `compose.db.yaml` 의 개발용
+> MySQL 도 같은 `${FMS_DB_PORT}` 를 본다. P0 를 위해 `.env` 를 3308 로 바꾸면
+> 개발 DB 가 다음 기동에서 같은 포트를 물고 충돌한다. 그래서 P0 는 전용
+> **`.env.p0`** 만 쓴다 — `scripts/control_stack` 이 이 파일을 자동으로
+> `--env-file` 로 넘긴다 (없으면 `.env` 로 되돌아간다).
 
 ```bash
 cd /home/syw/Trihouse
-cat > .env <<'EOF'
+cat > .env.p0 <<'EOF'
 MYSQL_ROOT_PASSWORD=change_me_root
 FMS_DB_USER=fms_gateway
 FMS_DB_PASSWORD=change_me_gateway
@@ -70,7 +76,7 @@ FMS_DB_PORT=3308
 FMS_API_PORT=8080
 CONTROL_UI_PORT=3100
 EOF
-chmod 600 .env
+chmod 600 .env.p0
 ```
 
 쓰려는 포트가 비어 있는지 먼저 확인한다.
@@ -78,11 +84,11 @@ chmod 600 .env
 ```bash
 for port in 3308 8080 3100; do
   (timeout 2 bash -c "cat </dev/null >/dev/tcp/127.0.0.1/$port" 2>/dev/null \
-     && echo "$port 사용 중 — .env 에서 바꾸세요") || echo "$port 사용 가능"
+     && echo "$port 사용 중 — .env.p0 에서 바꾸세요") || echo "$port 사용 가능"
 done
 ```
 
-`.env` 는 커밋하지 않는다.
+`.env.p0` 는 커밋하지 않는다.
 
 ### 2.2 Docker 권한 확인
 
@@ -99,6 +105,10 @@ sudo usermod -aG docker "$USER"
 
 ### 2.3 ROS 워크스페이스 빌드
 
+**두 개의 워크스페이스가 필요하다.** `pinky_pro` 는 별도 colcon 워크스페이스라
+따로 빌드하고 따로 source 한다. Pinky 의 URDF(`pinky_description`), Gazebo
+world, plugin 이 거기에 있어서, 빠지면 로봇 spawn 자체가 안 된다.
+
 ```bash
 cd /home/syw/Trihouse
 source /opt/ros/jazzy/setup.bash
@@ -108,51 +118,26 @@ colcon build --symlink-install \
                     trihouse_pinky_safety trihouse_omx_adapter
 ```
 
-성공하면 `install/setup.bash` 가 생긴다. 기동 스크립트가 이 오버레이를
-자동으로 얹는다.
+성공하면 `install/setup.bash` 가 생긴다. 기동 스크립트가 이 오버레이와
+`pinky_pro/install/setup.bash` 를 모두 자동으로 얹는다.
+
+> `trihouse_pinky_bringup` 빌드가 실패하면 `build/` 에 삭제된 launch 파일을
+> 가리키는 symlink 가 남은 것이다. `rm -rf build install` 후 다시 빌드한다.
 
 ### 2.4 좌표 원본 확인
 
-P0 좌표는 **오직** 아래 파일에서만 온다. 13줄이어야 하고, 병목 2건은
-`source_diameter_m: 0.2` / `radius_m: 0.1` 을 갖고 있어야 한다.
+P0 좌표는 **오직** 아래 파일에서만 온다. git 에 들어 있는 정본은 `control_ui/`
+쪽이고, 지도 발행과 자동 테스트가 모두 이 파일을 쓴다. 13줄이어야 하고,
+병목 2건은 `source_diameter_m: 0.2` / `radius_m: 0.1` 을 갖고 있어야 한다.
 
 ```bash
-FEATURES=control_system_test/rmf_control_ui/data/import/trihouse_test_01_physical_features.jsonl
-wc -l < "$FEATURES"                      # 13
+FEATURES=control_ui/rmf_control_ui/data/import/trihouse_test_01_physical_features.jsonl
+wc -l < "$FEATURES"                              # 13
 grep -c '"source_diameter_m": 0.2' "$FEATURES"   # 2
 ```
 
-`source_diameter_m` 가 0 이면 아래를 실행해 표기를 고친다. 이 파일은
-`.gitignore` 대상이라 새 작업 환경마다 다시 필요할 수 있다.
-
-```bash
-python3 - <<'PY'
-import json
-from collections import OrderedDict
-from pathlib import Path
-path = Path("control_system_test/rmf_control_ui/data/import/"
-            "trihouse_test_01_physical_features.jsonl")
-out = []
-for line in path.read_text(encoding="utf-8").splitlines():
-    record = json.loads(line, object_pairs_hook=OrderedDict)
-    if record.get("record_type") == "bottleneck" and "source_radius_m" in record:
-        rebuilt = OrderedDict()
-        for key, value in record.items():
-            rebuilt["source_diameter_m" if key == "source_radius_m" else key] = value
-        for measurement in rebuilt["source_measurements"]:
-            if "radius_m" in measurement:
-                renamed = OrderedDict(
-                    ("source_diameter_m" if k == "radius_m" else k, v)
-                    for k, v in measurement.items()
-                )
-                measurement.clear()
-                measurement.update(renamed)
-        record = rebuilt
-    out.append(json.dumps(record, ensure_ascii=False))
-path.write_text("\n".join(out) + "\n", encoding="utf-8")
-print("bottleneck provenance normalised")
-PY
-```
+두 값이 맞으면 손댈 것이 없다. `control_system_test/` 아래 사본은 `.gitignore`
+대상이라 새 클론에는 없을 수 있으며, 되돌아갈 자리로만 남긴다 (좌표는 동일).
 
 ---
 
@@ -160,12 +145,16 @@ PY
 
 ```bash
 cd /home/syw/Trihouse
-./scripts/control_stack up --mode simulation --project trihouse_test_01
+./scripts/control_stack up --mode simulation --project trihouse_test_01 --build
 ```
 
 MySQL → Gateway → MediaMTX → RMF API → RMF Dashboard → 관제 UI 순서로 올라가고,
 각 단계가 healthy 가 된 뒤에 다음이 시작된다. 최초 실행은 Flutter 웹 번들과
 Gateway 이미지를 빌드하므로 몇 분 걸린다.
+
+> **`--build` 를 빼면 소스 수정이 컨테이너에 반영되지 않는다.** compose 는
+> 이미지가 이미 있으면 다시 빌드하지 않는다. 코드를 고친 뒤 `up` 만 다시
+> 돌리면 예전 이미지가 그대로 뜬다.
 
 확인:
 
@@ -202,7 +191,7 @@ xdg-open http://127.0.0.1:3100
 cd /home/syw/Trihouse
 cat > /tmp/trihouse_db_counts.sh <<'EOF'
 #!/usr/bin/env bash
-set -a; . /home/syw/Trihouse/.env; set +a
+set -a; . /home/syw/Trihouse/.env.p0; set +a
 docker compose --project-name trihouse_p0 exec -T mysql \
   mysql -u"$FMS_DB_USER" -p"$FMS_DB_PASSWORD" "$FMS_DB_DATABASE" -e \
   "SELECT
@@ -326,9 +315,30 @@ export TRIHOUSE_MAP_REVISION='trihouse_test_01:<복사한_해시>'
 2. Gazebo + `PK_01`(`pinky_01`) / `PK_02`(`pinky_02`) 와 각자의 Nav2·fleet adapter
    — spawn pose 는 승인된 JSONL 의 충전 스테이션 기록에서만 읽는다
 3. OMX 시뮬레이터 `OMX_01`, `OMX_02`
-4. RMF dispatch worker
+4. **Job 러너** (`trihouse_job_runner`)
+5. RMF dispatch worker
 
 Ctrl+C 한 번이면 여기서 띄운 프로세스가 모두 정리된다.
+
+> **Job 러너와 dispatch worker 는 짝이다.** 러너가 `queued` 주문에 로봇·OMX·
+> 포장 Dock·충전기를 배정하고 현재 Step 을 outbox 로 내보내면, worker 가 그
+> 행을 claim 해 RMF 로 넘긴다. 러너가 없으면 worker 는 claim 할 것이 없어
+> 주문이 `queued` 에서 멈춘다 (2026-08-16 세션에서 실제로 그랬다).
+> 러너만 빼고 띄우려면 `--no-job-runner` 를 준다.
+
+러너가 무엇을 하고 있는지는 로그로 바로 보인다.
+
+```
+[INFO] [trihouse_job_runner]: job runner cycle: assigned=[2, 3] dispatched=[2, 3]
+[WARN] [trihouse_job_runner]: job runner blocked: job 4: no free robot, arm, or dock
+```
+
+한 주기만 돌려 보려면 (기동 없이 진단용):
+
+```bash
+python3 -m control_tower.task_manager.job_runner_node \
+  --fms-base-url http://127.0.0.1:8080 --once
+```
 
 동등한 직접 실행 (스크립트를 거치지 않고 싶을 때):
 
@@ -344,7 +354,7 @@ control_tower/bringup/p0_simulation_bringup.sh --gui
 ./scripts/control_stack doctor --mode simulation
 ```
 
-열한 개 항목이 모두 `healthy` 여야 하고 종료 코드가 `0` 이다.
+**열두 개** 항목이 모두 `healthy` 여야 하고 종료 코드가 `0` 이다.
 
 ```json
 {
@@ -352,12 +362,23 @@ control_tower/bringup/p0_simulation_bringup.sh --gui
     "mysql": "healthy", "fms_gateway": "healthy", "control_ui": "healthy",
     "mediamtx": "healthy", "control_tower": "healthy", "rmf_schedule": "healthy",
     "gazebo": "healthy", "nav2:PK_01": "healthy", "nav2:PK_02": "healthy",
-    "omx:OMX_01": "healthy", "omx:OMX_02": "healthy"
+    "omx:OMX_01": "healthy", "omx:OMX_02": "healthy",
+    "job_runner": "healthy"
   },
   "healthy": true,
   "layers": { "docker": [...], "host_ros": [...] }
 }
 ```
+
+> `sg docker` 로 새 그룹 셸을 열어 쓰는 중이라면 `doctor` 는 Docker 와 ROS 를
+> 함께 본다. `sg` 는 setgid 라 `LD_LIBRARY_PATH` 를 지우므로 그 안에서 ROS 를
+> 부르면 `librcl_action.so` 를 못 찾는다. 다시 넣어 줘야 한다.
+>
+> ```bash
+> sg docker -c "LD_LIBRARY_PATH='$LD_LIBRARY_PATH' ./scripts/control_stack doctor --mode simulation"
+> ```
+>
+> 재로그인하면 `sg` 자체가 필요 없다.
 
 `absent` 가 남으면 어느 층인지 `layers` 로 확인한다. Docker 쪽이면
 `control_stack logs`, ROS 쪽이면 `ros2 node list` 를 본다.
@@ -370,6 +391,22 @@ ros2 topic list | grep -E 'pinky_0[12]'
 ---
 
 ## 8. 2 Pinky / 2 OMX 수동 시험
+
+> **지금 어디까지 되는가.** 8.1(자원 배정)은 통과한다 — Job 러너가 실제 DB 에서
+> 하는 것을 2026-08-17 에 확인했다. **8.2~8.5 는 아직 통과할 수 없다.** 공개
+> 주문의 첫 단계가 `pick(arm)` → `omx` 채널인데 그 채널을 소비하는 프로세스가
+> 없어서 Step 이 `pending` 에 머무르고, 순서상 뒤인 `navigate` 가 RMF 로 나가지
+> 못한다. 상세는 `docs/validation/2026-08-16-p0-simulation.md` 3.4.2 절.
+>
+> 확인 방법 — 이 질의가 `omx` 행만 보여 주고 `rmf` 행이 없으면 그 상태다.
+>
+> ```bash
+> set -a; . ./.env.p0; set +a
+> docker compose --project-name trihouse_p0 exec -T mysql \
+>   mysql -u"$FMS_DB_USER" -p"$FMS_DB_PASSWORD" "$FMS_DB_DATABASE" -e \
+>   "SELECT channel, state, COUNT(*) FROM integration_messages
+>      WHERE direction='outbound' GROUP BY channel, state;"
+> ```
 
 ### 8.1 동시 주문 두 건 → 서로 다른 로봇에 배정
 
@@ -389,7 +426,7 @@ done
 배정 결과 확인:
 
 ```bash
-set -a; . ./.env; set +a
+set -a; . ./.env.p0; set +a
 docker compose --project-name trihouse_p0 exec -T mysql \
   mysql -u"$FMS_DB_USER" -p"$FMS_DB_PASSWORD" "$FMS_DB_DATABASE" -e \
   "SELECT job_id, assigned_mobile_id,
@@ -498,7 +535,7 @@ docker compose --project-name trihouse_p0 down -v
 |---|---|
 | UI 가 흰 화면 / 설정 예외 | Gateway 를 `:8080` 으로 직접 열었다. 반드시 `:3100` 으로 접속한다. UI 는 페이지 origin 을 Gateway 로 쓰므로 nginx 를 거쳐야 한다. |
 | `docker: permission denied` | 1.2 절의 `usermod -aG docker` 후 재로그인. |
-| `up` 이 `mysql` 에서 멈춤 | `.env` 의 `MYSQL_ROOT_PASSWORD` / `FMS_DB_PASSWORD` 가 비었다. |
+| `up` 이 `mysql` 에서 멈춤 | `.env.p0` 의 `MYSQL_ROOT_PASSWORD` / `FMS_DB_PASSWORD` 가 비었다. |
 | ROS 기동이 `Gateway 가 준비되지 않았습니다` 로 종료 | Docker 층을 먼저 올린다. |
 | ROS 기동이 `TRIHOUSE_MAP_REVISION 이 비어 있습니다` 로 종료 | 4절에서 지도를 발행하고 revision 을 export 한다. |
 | `line 9: missing field source_diameter_m` | 1.4 절의 보정 스크립트를 실행한다. |
@@ -509,22 +546,47 @@ docker compose --project-name trihouse_p0 down -v
 
 ## 11. 자동 검증과의 관계
 
-이 문서는 **수동** 절차다. 같은 동작을 자동으로 확인하려면:
+이 문서는 **수동** 절차다. 같은 동작을 자동으로 확인하려면 먼저 환경을
+갖춘다. Gateway 의존성(`pydantic-settings` 등)은 시스템 파이썬에 없고, 이
+호스트는 `externally-managed-environment` 라 `pip install --user` 가 막혀
+있으므로 저장소 안의 `.venv` 를 쓴다 (`.gitignore` 대상).
+
+```bash
+cd /home/syw/Trihouse
+python3 -m venv --system-site-packages .venv       # 최초 1회
+.venv/bin/pip install -r fms_gateway/requirements-dev.txt
+```
+
+`--system-site-packages` 는 ROS 의 `rclpy` 를 그대로 쓰기 위한 것이다.
+
+DB 를 쓰는 시험은 **테스트 MySQL(:3307)** 이 떠 있어야 한다. P0 스택의
+MySQL(:3308)과는 별개다.
+
+```bash
+docker compose -f compose.db_test.yaml up -d
+```
+
+그다음:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+source pinky_pro/install/setup.bash
 export FMS_DB_HOST=127.0.0.1 FMS_DB_PORT=3307 \
        FMS_DB_USER=fms_gateway FMS_DB_PASSWORD=test_gateway_password
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 
-pytest -q db/tests control_tower/tests trihouse_rmf_bridge/test \
+.venv/bin/pytest -q db/tests control_tower/tests trihouse_rmf_bridge/test \
           trihouse_omx_adapter/tests trihouse_pinky/test vision_edge/tests \
           media tests --ignore=trihouse_rmf_bridge/test/test_office_service.py
 
-cd fms_gateway && pytest -q tests
+cd fms_gateway && ../.venv/bin/pytest -q tests
 ```
 
+> `pinky_pro/install/setup.bash` 를 빼면 `pinky_description` 을 못 찾아
+> launch 계약 시험이 실패한다. 코드 결함이 아니라 오버레이 누락이다.
+
 두 pytest 명령은 **같은 테스트 DB(:3307)** 를 초기화하므로 동시에 돌리면 안
-된다. 운영 DB(:3306)와는 포트가 다르니 서로 영향을 주지 않는다.
+된다. 운영 DB(:3306), P0 DB(:3308)와는 포트가 다르니 서로 영향을 주지 않는다.
 
 결과 기록은 `docs/validation/2026-08-16-p0-simulation.md` 에 있다.

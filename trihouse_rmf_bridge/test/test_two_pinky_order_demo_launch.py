@@ -89,6 +89,21 @@ def test_no_coordinate_literal_is_written_into_the_launch_file() -> None:
     assert "PhysicalFeatureImporter" in source
 
 
+def _declared_defaults(module, context: LaunchContext) -> dict[str, str]:
+    """Resolve every launch argument that declares a default value."""
+    defaults: dict[str, str] = {}
+    for entity in module.generate_launch_description().entities:
+        if not isinstance(entity, DeclareLaunchArgument):
+            continue
+        if entity.default_value is None:
+            # Required arguments have no default; the caller supplies them.
+            continue
+        defaults[entity.name] = perform_substitutions(
+            context, list(entity.default_value)
+        )
+    return defaults
+
+
 def _runtime_actions(tmp_path: Path):
     module = _module()
     nav_graph = tmp_path / "0.yaml"
@@ -101,6 +116,11 @@ def _runtime_actions(tmp_path: Path):
     fleet_config.write_text("rmf_fleet: {}\n", encoding="utf-8")
 
     context = LaunchContext()
+    # `ros2 launch` supplies every declared argument before the OpaqueFunction
+    # runs; a bare LaunchContext supplies none. Seeding from the launch file's
+    # own declared defaults keeps this fixture in step automatically, so adding
+    # an argument to the launch file cannot break these tests on its own.
+    context.launch_configurations.update(_declared_defaults(module, context))
     context.launch_configurations.update({
         "trihouse_root": str(REPOSITORY),
         "physical_features_file": str(FEATURES),

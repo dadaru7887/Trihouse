@@ -21,6 +21,16 @@ COPY control_tower/task_manager/__init__.py /app/control_tower/task_manager/__in
 COPY control_tower/task_manager/outbound_planner.py /app/control_tower/task_manager/outbound_planner.py
 COPY control_tower/task_manager/outbound_sequence.py /app/control_tower/task_manager/outbound_sequence.py
 
+# 런타임 프로파일이 해시하는 고정 소스 두 개. UI 는 이 해시 없이는 지도
+# 초안을 저장할 수 없으므로 이미지 안에 반드시 있어야 한다.
+COPY pinky_pro/pinky_navigation/params/nav2_params.yaml /app/pinky_pro/pinky_navigation/params/nav2_params.yaml
+COPY pinky_pro/pinky_bringup/config/pinky_params.yaml /app/pinky_pro/pinky_bringup/config/pinky_params.yaml
+
+# 지도 소스 staging 과 발행된 지도 산출물이 쓰이는 유일한 경로다. 컨테이너는
+# read_only 로 돌기 때문에 여기에 named volume 을 얹는다. 이미지 안에 미리
+# 만들어 두어야 새 volume 이 이 소유권을 물려받고, trihouse 사용자가 쓸 수 있다.
+RUN mkdir -p /app/runtime && chown trihouse:trihouse /app/runtime
+
 # DB/TCP 자격 증명에 문제가 생겨도 root 권한으로 확산되지 않도록 한다.
 USER trihouse
 

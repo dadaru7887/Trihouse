@@ -43,6 +43,11 @@ venv/
 htmlcov/
 runtime/
 
+# 호스트 ROS 층이 발행된 지도 revision 을 펼쳐 두는 곳
+# (control_tower/bringup/p0_runtime_assets.py). `runtime/` 은 MediaMTX 의
+# bind mount 때문에 root 소유로 만들어져서 쓸 수 없다.
+.trihouse/
+
 # Local Git clone used to validate and promote control_system integration.
 # Its changes are tracked by control_system_test/.git, not this repository.
 /control_system_test/

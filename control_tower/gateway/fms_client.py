@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Protocol
+from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import OpenerDirector, Request, build_opener
 
@@ -92,6 +93,116 @@ class StepDispatchResponse:
 
 
 @dataclass(frozen=True)
+class DeviceSummary:
+    """One registered device as the Gateway projects it for planning."""
+
+    device_id: str
+    device_type: str
+    control_mode: str
+    state: str | None = None
+    health: str | None = None
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "DeviceSummary":
+        return cls(**{name: value.get(name) for name in cls.__dataclass_fields__})
+
+    @property
+    def assignable(self) -> bool:
+        """Mirror the Gateway's availability rule without owning it.
+
+        The Gateway re-checks this under a row lock and is the authority.  The
+        runner only uses it to avoid proposing an assignment that is certain to
+        be rejected.
+        """
+        return (
+            self.control_mode == "automatic"
+            and self.state in {"idle", "charging"}
+            and self.health == "ok"
+        )
+
+
+@dataclass(frozen=True)
+class JobSummary:
+    """Job list projection used to find work that still needs advancing."""
+
+    job_id: int
+    job_code: str
+    state: str
+    operation_type: str = "outbound"
+    priority: str = "normal"
+    assigned_mobile_id: str | None = None
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "JobSummary":
+        return cls(**{name: value.get(name) for name in cls.__dataclass_fields__})
+
+
+@dataclass(frozen=True)
+class JobStepDetail:
+    """One persisted step with the state the runner sequences on."""
+
+    job_step_id: int
+    step_no: int
+    action_type: str
+    executor_type: str
+    state: str
+    target_location_id: int | None = None
+    assigned_device_id: str | None = None
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "JobStepDetail":
+        return cls(**{name: value.get(name) for name in cls.__dataclass_fields__})
+
+
+@dataclass(frozen=True)
+class JobDetailResponse:
+    """Full job projection: the runner reads context and ordered steps here."""
+
+    job_id: int
+    job_code: str
+    state: str
+    context: JsonObject = field(default_factory=dict)
+    steps: tuple[JobStepDetail, ...] = ()
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "JobDetailResponse":
+        return cls(
+            job_id=int(value["job_id"]),
+            job_code=str(value["job_code"]),
+            state=str(value["state"]),
+            context=dict(value.get("context") or {}),
+            steps=tuple(
+                JobStepDetail.from_dict(step) for step in value.get("steps") or ()
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class JobAssignmentRequest:
+    """One complete Control Tower selection; the Gateway persists it atomically."""
+
+    revision: int
+    mobile_id: str
+    omx_id: str
+    packing_dock_code: str
+    charger_code: str
+
+
+@dataclass(frozen=True)
+class JobAssignmentResponse:
+    job_id: int
+    revision: int
+    mobile_id: str
+    omx_id: str
+    packing_dock_code: str
+    charger_code: str
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "JobAssignmentResponse":
+        return cls(**{name: value[name] for name in cls.__dataclass_fields__})
+
+
+@dataclass(frozen=True)
 class RmfDispatchClaimRequest:
     worker_id: str
     limit: int = 10
@@ -138,6 +249,33 @@ class FMSGatewayClient(Protocol):
     """Dependency injected into Control Tower orchestration runtime."""
 
     def create_job(self, request: JobCreateRequest) -> JobCreateResponse: ...
+
+    def dispatch_step(
+        self,
+        job_step_id: int,
+        request: StepDispatchRequest,
+    ) -> StepDispatchResponse: ...
+
+
+class JobRunnerGatewayClient(Protocol):
+    """Read/advance boundary required by the standalone job runner.
+
+    Deliberately HTTP-only: the runner never reaches the database, so the
+    Gateway stays the single writer and the single arbiter of resource
+    reservations.
+    """
+
+    def list_devices(self) -> tuple[DeviceSummary, ...]: ...
+
+    def list_jobs(self) -> tuple[JobSummary, ...]: ...
+
+    def get_job(self, job_id: int) -> JobDetailResponse | None: ...
+
+    def assign_job_resources(
+        self,
+        job_id: int,
+        request: JobAssignmentRequest,
+    ) -> JobAssignmentResponse: ...
 
     def dispatch_step(
         self,
@@ -194,6 +332,31 @@ class FMSGatewayHttpClient:
         )
         return StepDispatchResponse.from_dict(response)
 
+    def list_devices(self) -> tuple[DeviceSummary, ...]:
+        response = self._get("/api/v1/devices")
+        return tuple(DeviceSummary.from_dict(device) for device in response)
+
+    def list_jobs(self) -> tuple[JobSummary, ...]:
+        response = self._get("/api/v1/jobs")
+        return tuple(JobSummary.from_dict(job) for job in response)
+
+    def get_job(self, job_id: int) -> JobDetailResponse | None:
+        response = self._get(f"/api/v1/jobs/{job_id}", allow_missing=True)
+        if response is None:
+            return None
+        return JobDetailResponse.from_dict(response)
+
+    def assign_job_resources(
+        self,
+        job_id: int,
+        request: JobAssignmentRequest,
+    ) -> JobAssignmentResponse:
+        response = self._post(
+            f"/internal/v1/jobs/{job_id}/assignment",
+            _omit_none(asdict(request)),
+        )
+        return JobAssignmentResponse.from_dict(response)
+
     def claim_rmf_dispatches(
         self,
         request: RmfDispatchClaimRequest,
@@ -214,6 +377,18 @@ class FMSGatewayHttpClient:
             _omit_none(asdict(request)),
         )
         return RmfDispatchAcceptanceResponse.from_dict(response)
+
+    def _get(self, path: str, *, allow_missing: bool = False) -> Any:
+        request = Request(f"{self._base_url}{path}", method="GET")
+        try:
+            with self._opener.open(request, timeout=self._timeout) as response:
+                return json.loads(response.read())
+        except HTTPError as error:
+            # A job that vanished between listing and reading is normal in a
+            # polling loop; anything else is a real fault worth raising.
+            if allow_missing and error.code == 404:
+                return None
+            raise
 
     def _post(
         self,
