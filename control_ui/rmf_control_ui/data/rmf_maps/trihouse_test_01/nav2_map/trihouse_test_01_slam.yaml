@@ -1,9 +1,0 @@
-# rmf_control_ui 가 넣은 SLAM 지도. 로봇이 뜬 것이다.
-# 원점은 아직 SLAM 을 시작한 자리 기준이다 — 그리드맵 화면에서 RMF 월드에 맞춰야 한다.
-image: trihouse_test_01_slam.pgm
-mode: trinary
-resolution: 0.050000
-origin: [-0.277000, -1.452000, 0.000000]
-negate: 0
-occupied_thresh: 0.65
-free_thresh: 0.196
