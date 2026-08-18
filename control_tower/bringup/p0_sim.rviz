@@ -1,0 +1,189 @@
+# P0 시뮬레이션 관측용 RViz 설정 (단일 로봇 pinky_01).
+#
+# 이 파일이 있는 이유는 GUI 를 손으로 맞추면 매번 같은 곳에서 막히기 때문이다.
+# 세 가지가 미리 박혀 있다.
+#
+#   1. Fixed Frame 이 `map` 이다. 기본값 `pinky_01/odom` 이면 지도가 안 보인다.
+#   2. Map display 의 Durability 가 `Transient Local` 이다. `map_server` 는 지도를
+#      latch 로 한 번만 보내므로 `Volatile` 이면 늦게 붙은 RViz 는 영영 못 받는다.
+#   3. 카메라 Distance 가 3 이다. 이 맵은 2.2m x 2.7m 라 기본값 10 에서는 점처럼 보인다.
+#
+# TF 는 전역 `/tf` 가 아니라 `/pinky_01/tf` 에 있다. nav2 노드가 `__ns:=/pinky_01`
+# 과 `-r /tf:=tf` 로 뜨기 때문이다. 그래서 실행할 때 remap 을 함께 준다.
+#
+#   source /opt/ros/jazzy/setup.bash
+#   source install/setup.bash
+#   source pinky_pro/install/setup.bash      # <- 이것이 빠지면 RobotModel 이
+#                                            #    package://pinky_description/... 을
+#                                            #    못 찾아 로봇 형체가 안 보인다
+#   export ROS_DOMAIN_ID=0
+#   rviz2 -d control_tower/bringup/p0_sim.rviz --ros-args -p use_sim_time:=true
+#
+# TF 는 scripts/tf_relay.py 가 /pinky_01/tf 를 전역 /tf 로 흘려 준다. relay 를 쓰지
+# 않으려면 대신 remap 을 준다:
+#   -r /tf:=/pinky_01/tf -r /tf_static:=/pinky_01/tf_static
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /Map1
+      Splitter Ratio: 0.5
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Name: root
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: map
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.5
+      Plane Cell Count: 20
+      Color: 160; 160; 164
+      Alpha: 0.35
+      Reference Frame: <Fixed Frame>
+
+    # SLAM 으로 그린 우리 지도. map_server 가 trihouse_map_01.pgm 을 읽어 낸다.
+    - Class: rviz_default_plugins/Map
+      Name: Map
+      Enabled: true
+      Topic:
+        Value: /pinky_01/map
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Alpha: 0.7
+      Color Scheme: map
+      Draw Behind: true
+
+    # 전역 costmap. 지도 위에 장애물 팽창이 어떻게 깔리는지 본다. 기본은 꺼 둔다.
+    - Class: rviz_default_plugins/Map
+      Name: Global Costmap
+      Enabled: false
+      Topic:
+        Value: /pinky_01/global_costmap/costmap
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Alpha: 0.5
+      Color Scheme: costmap
+      Draw Behind: false
+
+    # 로봇 위치를 가장 확실히 보여주는 것. map -> odom -> base_link 축이 보인다.
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: true
+      Show Axes: true
+      Show Arrows: false
+      Marker Scale: 0.3
+      Update Interval: 0
+
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Enabled: true
+      # URDF 는 링크를 `base_link` 로 부르는데 실제 TF 프레임은
+      # `pinky_01/base_link` 다. 이 접두사를 주지 않으면 링크마다
+      # "No transform from [base_link]" 가 뜨고 형체가 안 보인다.
+      TF Prefix: pinky_01
+      Description Source: Topic
+      Description Topic:
+        Value: /pinky_01/robot_description
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Alpha: 1
+
+    - Class: rviz_default_plugins/LaserScan
+      Name: LaserScan
+      Enabled: true
+      Topic:
+        Value: /pinky_01/scan
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Best Effort
+        History Policy: Keep Last
+      Size (m): 0.02
+      Style: Points
+      Color: 255; 85; 0
+      Color Transformer: FlatColor
+      Decay Time: 0
+
+    # Nav2 가 계획한 경로. 주행 단계에서 이 선이 그려진다.
+    - Class: rviz_default_plugins/Path
+      Name: Global Plan
+      Enabled: true
+      Topic:
+        Value: /pinky_01/plan
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Color: 0; 255; 128
+      Line Style: Lines
+      Alpha: 1
+
+    - Class: rviz_default_plugins/Path
+      Name: Local Plan
+      Enabled: true
+      Topic:
+        Value: /pinky_01/local_plan
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Color: 255; 255; 0
+      Line Style: Lines
+      Alpha: 1
+
+    # AMCL 입자. 위치추정이 수렴했는지 눈으로 보는 자리다.
+    # 입자가 흩어져 있으면 맞출 특징이 없다는 뜻이다.
+    - Class: rviz_default_plugins/PoseArray
+      Name: AMCL Particles
+      Enabled: true
+      Topic:
+        Value: /pinky_01/particle_cloud
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Best Effort
+        History Policy: Keep Last
+      Color: 0; 180; 255
+      Shape: Arrow (Flat)
+      Arrow Length: 0.1
+      Alpha: 0.6
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      # 이 맵은 2.2m x 2.7m 다. 기본값 10 이면 로봇이 점으로 보인다.
+      Distance: 3
+      Pitch: 1.2
+      Yaw: 3.14
+      Focal Point:
+        X: 0.6
+        Y: -0.4
+        Z: 0
+      Near Clip Distance: 0.01
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Views:
+    collapsed: false
+  Height: 900
+  Width: 1400

@@ -323,7 +323,8 @@ if [[ "$START_WORKER" == true ]]; then
     python3 -m control_tower.rmf_adapter.rmf_gateway_worker_node \
       --fms-base-url "$FMS_BASE_URL" \
       --fleet-name "$TRIHOUSE_FLEET_NAME" \
-      --worker-id trihouse-rmf-worker
+      --worker-id trihouse-rmf-worker \
+      --use-sim-time
 fi
 
 echo

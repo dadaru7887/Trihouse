@@ -105,3 +105,22 @@ def test_the_script_documents_its_exclusions() -> None:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
+
+
+def test_the_camera_streamer_is_a_teardown_target() -> None:
+    """카메라 송신 노드도 시뮬 층의 일부다. 남기면 세대가 겹친다.
+
+    `trihouse_pinky_vision/camera_streamer` 가 패턴에 없어서 세대마다 살아남았다.
+    2026-08-19 실측으로 **3개**가 동시에 떠 있었고, 그 유령 발행자 때문에
+    `verify_robot_status.py` 가 `publishers=2` 를 보고 "이전 세대가 남았다" 로
+    판정했다. 측정이 오염되면 그 위의 모든 판단이 흔들린다.
+    """
+    assert _selects(
+        [
+            sys.executable,
+            "-c",
+            "import time; time.sleep(30)",
+            "/home/syw/Trihouse/install/trihouse_pinky_vision/lib/"
+            "trihouse_pinky_vision/camera_streamer",
+        ]
+    )

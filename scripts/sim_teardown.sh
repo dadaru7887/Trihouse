@@ -98,6 +98,11 @@ PATTERNS=(
   'trihouse_pinky_bringup'
   'gazebo_omx_adapter'
   'trihouse_omx_adapter'
+  # 카메라 송신도 시뮬 층의 일부다. 빠져 있어서 세대마다 살아남았고, 그 유령
+  # 발행자 때문에 `verify_robot_status.py` 가 `publishers=2` 를 보고 "이전 세대가
+  # 남았다" 로 판정했다. 측정이 오염되면 그 위의 모든 판단이 흔들린다.
+  'trihouse_pinky_vision'
+  'camera_streamer'
 
   # 관제 워커
   'control_tower.task_manager'
