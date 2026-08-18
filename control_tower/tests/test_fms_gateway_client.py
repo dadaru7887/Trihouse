@@ -14,6 +14,7 @@ from control_tower.gateway.fms_client import (
     RmfDispatchAcceptanceResponse,
     RmfDispatchClaimRequest,
     RmfDispatchClaimResponse,
+    RmfTaskUpdateRequest,
     StepDispatchRequest,
     StepDispatchResponse,
 )
@@ -238,3 +239,75 @@ def test_report_rmf_acceptance_posts_exact_optional_assignment_fields() -> None:
         state="acknowledged",
         rmf_task_id="rmf-task-1",
     )
+
+
+def test_apply_rmf_task_update_posts_to_the_task_update_route() -> None:
+    """observer 가 관측한 배정은 이 경로로만 원장에 닿는다.
+
+    Control Tower 는 DB 에 직접 붙지 않는다. 경로나 직렬화가 어긋나면 배정이
+    영원히 반영되지 않고 dispatch 가 dead_letter 로 간다.
+    """
+    opener = RecordingOpener(
+        _Response(
+            {
+                "rmf_task_id": "compose.dispatch-award",
+                "job_step_id": 38,
+                "assigned_device_id": "PK_01",
+                "settled": True,
+            },
+            200,
+        )
+    )
+    client = FMSGatewayHttpClient(
+        "http://127.0.0.1:18080/",
+        opener=opener,
+        timeout=2.0,
+    )
+
+    applied = client.apply_rmf_task_update(
+        RmfTaskUpdateRequest(
+            rmf_task_id="compose.dispatch-award",
+            fleet_name="project1_pinky",
+            robot_name="PK_01",
+            rmf_status="underway",
+            step_state="running",
+            observed_at_ms=1787060295000,
+        )
+    )
+
+    request, _ = opener.requests[0]
+    assert request.full_url == (
+        "http://127.0.0.1:18080/internal/v1/rmf/tasks/compose.dispatch-award/updates"
+    )
+    body = json.loads(request.data.decode("utf-8"))
+    assert body["robot_name"] == "PK_01"
+    assert "rmf_task_id" not in body
+    assert applied.settled is True
+    assert applied.assigned_device_id == "PK_01"
+
+
+def test_apply_rmf_task_update_returns_none_for_a_task_the_gateway_does_not_know() -> None:
+    """우리가 만들지 않은 RMF task 는 원장을 건드리지 못한다.
+
+    로봇 하나에 fleet adapter 하나가 붙어도 TaskSummary 는 fleet 전체 것이 온다.
+    남의 task 를 조용히 무시하지 않으면 엉뚱한 step 에 배정을 쓰게 된다.
+    """
+    opener = RecordingOpener(_Response({"detail": "unknown"}, 404))
+    client = FMSGatewayHttpClient(
+        "http://127.0.0.1:18080/",
+        opener=opener,
+        timeout=2.0,
+    )
+
+    applied = client.apply_rmf_task_update(
+        RmfTaskUpdateRequest(
+            rmf_task_id="compose.dispatch-someone-else",
+            fleet_name="project1_pinky",
+            robot_name="PK_01",
+            rmf_status="underway",
+            step_state="running",
+            observed_at_ms=1787060295000,
+        )
+    )
+
+    assert applied is None

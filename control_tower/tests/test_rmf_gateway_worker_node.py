@@ -1,5 +1,7 @@
 """Runnable RMF worker node lifecycle tests."""
 
+from pathlib import Path
+
 from control_tower.rmf_adapter.rmf_gateway_worker import RmfGatewayWorkerReport
 from control_tower.rmf_adapter.rmf_gateway_worker_node import run_poll_loop
 
@@ -149,3 +151,69 @@ def test_a_failing_cycle_in_once_mode_still_returns() -> None:
 
     assert worker.calls == 1
     assert node.logger.errors
+
+
+def test_worker_node_attaches_the_assignment_observer() -> None:
+    """배정 관측자가 런타임에 붙어 있어야 한다.
+
+    RMF 는 제출 즉시 booking 만 만들고 배정은 입찰이 끝난 뒤에 정해진다. 그 배정을
+    되돌려 줄 관측자가 붙지 않으면 outbox 는 `RMF_ASSIGNMENT_PENDING` 에서 못
+    벗어나고 재시도를 소진해 dead_letter 가 된다. 2026-08-18 에 job 4·6·7·8 이
+    모두 이 자리에서 죽었다.
+    """
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "rmf_adapter"
+        / "rmf_gateway_worker_node.py"
+    ).read_text(encoding="utf-8")
+
+    assert "RosTaskSummaryObserver" in source, "관측자를 만들지 않는다"
+    assert ".attach(" in source, "관측자를 node 에 붙이지 않는다"
+
+
+def test_worker_node_stamps_start_time_from_the_ros_clock() -> None:
+    """워커는 RMF 와 같은 시계를 써야 한다.
+
+    시뮬에서 fleet adapter 는 `use_sim_time` 으로 돌아 기동 후 몇백 초짜리 시계를
+    본다. 워커가 원장의 벽시계를 시작 시각으로 보내면 RMF 는 그 작업을 수십 년
+    뒤에나 시작할 수 있는 것으로 읽고, 입찰과 배정은 되지만 로봇은 움직이지 않는다.
+    2026-08-19 에 job 9 가 이 자리에서 멈췄다.
+    """
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "rmf_adapter"
+        / "rmf_gateway_worker_node.py"
+    ).read_text(encoding="utf-8")
+
+    assert "now_ms=" in source, "워커에 시계를 넘기지 않는다"
+    assert "get_clock()" in source, "ROS 시계를 읽지 않는다"
+
+
+def test_worker_node_can_run_on_simulation_time() -> None:
+    """시뮬에서는 워커도 시뮬 시계로 돌아야 한다.
+
+    `--use-sim-time` 이 없으면 `get_clock()` 은 벽시계를 돌려주고, RMF 와 시계가
+    갈라져 작업이 시작되지 않는다. 실기에서는 이 플래그를 주지 않아 벽시계가 맞다.
+    """
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "rmf_adapter"
+        / "rmf_gateway_worker_node.py"
+    ).read_text(encoding="utf-8")
+
+    assert "--use-sim-time" in source, "시뮬 시계로 도는 길이 없다"
+    assert 'Parameter("use_sim_time"' in source, "노드 파라미터를 세우지 않는다"
+
+
+def test_simulation_bringup_runs_the_worker_on_simulation_time() -> None:
+    """시뮬 bringup 은 워커를 시뮬 시계로 띄워야 한다."""
+    script = (
+        Path(__file__).resolve().parents[2]
+        / "control_tower"
+        / "bringup"
+        / "p0_simulation_bringup.sh"
+    ).read_text(encoding="utf-8")
+
+    # 모듈 이름은 머리말 주석에도 나온다. 실제 실행 줄은 마지막 등장이다.
+    worker_block = script.rsplit("rmf_gateway_worker_node", 1)[1].split("\nfi")[0]
+    assert "--use-sim-time" in worker_block

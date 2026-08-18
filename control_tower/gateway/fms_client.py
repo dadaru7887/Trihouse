@@ -300,6 +300,31 @@ class RmfDispatchAcceptanceResponse:
         return cls(**{name: value.get(name) for name in cls.__dataclass_fields__})
 
 
+@dataclass(frozen=True)
+class RmfTaskUpdateRequest:
+    """RMF 가 관측한 task 진행 상태. 입찰이 끝난 뒤의 배정이 여기 실려 온다."""
+
+    rmf_task_id: str
+    fleet_name: str
+    robot_name: str
+    rmf_status: str
+    step_state: str
+    observed_at_ms: int
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class RmfTaskUpdateResponse:
+    rmf_task_id: str
+    job_step_id: int
+    assigned_device_id: str | None
+    settled: bool
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "RmfTaskUpdateResponse":
+        return cls(**{name: value.get(name) for name in cls.__dataclass_fields__})
+
+
 class FMSGatewayClient(Protocol):
     """Dependency injected into Control Tower orchestration runtime."""
 
@@ -481,6 +506,24 @@ class FMSGatewayHttpClient:
         )
         return RmfDispatchAcceptanceResponse.from_dict(response)
 
+    def apply_rmf_task_update(
+        self, request: RmfTaskUpdateRequest
+    ) -> RmfTaskUpdateResponse | None:
+        """관측한 배정을 원장에 반영한다. 우리 task 가 아니면 None 을 돌려준다.
+
+        TaskSummary 는 fleet 전체의 것이 온다. 남의 task 까지 반영하려 들면
+        엉뚱한 step 에 로봇을 쓰게 되므로, 아는 task 인지는 Gateway 가 판단한다.
+        """
+        body = _omit_none(asdict(request))
+        body.pop("rmf_task_id", None)
+        response = self._post_optional(
+            f"/internal/v1/rmf/tasks/{quote(request.rmf_task_id, safe='')}/updates",
+            body,
+        )
+        if response is None:
+            return None
+        return RmfTaskUpdateResponse.from_dict(response)
+
     def cancel_job(
         self,
         job_id: int,
@@ -555,6 +598,28 @@ class FMSGatewayHttpClient:
         )
         with self._opener.open(request, timeout=self._timeout) as response:
             return json.loads(response.read())
+
+    def _post_optional(
+        self,
+        path: str,
+        payload: JsonObject,
+    ) -> JsonObject | None:
+        """404 는 오류가 아니라 "우리 것이 아니다" 라는 답이다."""
+        request = Request(
+            f"{self._base_url}{path}",
+            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with self._opener.open(request, timeout=self._timeout) as response:
+                if getattr(response, "status", 200) == 404:
+                    return None
+                return json.loads(response.read())
+        except HTTPError as error:
+            if error.code == 404:
+                return None
+            raise
 
 
 def _omit_none(value: Any) -> Any:

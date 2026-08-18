@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import time
+
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Callable, Any, Mapping, Protocol
 
 from control_tower.gateway.fms_client import (
     RmfDispatchAcceptanceRequest,
@@ -47,6 +49,7 @@ class RmfGatewayWorker:
         worker_id: str,
         default_fleet_name: str,
         timeout_s: float = 5.0,
+        now_ms: Callable[[], int] | None = None,
     ) -> None:
         if not worker_id.strip() or not default_fleet_name.strip():
             raise ValueError("worker_id and default_fleet_name are required")
@@ -57,6 +60,11 @@ class RmfGatewayWorker:
         self._worker_id = worker_id
         self._default_fleet_name = default_fleet_name
         self._timeout_s = timeout_s
+        # RMF 와 같은 시계여야 한다. 시뮬에서 fleet adapter 는 use_sim_time 으로
+        # 돌므로 원장의 벽시계를 시작 시각으로 보내면 그 작업은 수십 년 뒤에나
+        # 시작할 수 있는 것이 된다. 주지 않으면 벽시계를 쓴다 — 실기는 두 시계가
+        # 같아서 그것으로 맞다.
+        self._now_ms = now_ms or (lambda: int(time.time() * 1000))
 
     def run_once(self, *, limit: int = 10) -> RmfGatewayWorkerReport:
         claimed = self._gateway.claim_rmf_dispatches(
@@ -159,6 +167,7 @@ class RmfGatewayWorker:
             fleet_name=fleet_name,
             robot_name=assigned_device_id,
             request_time_ms=request_time_ms,
+            earliest_start_time_ms=self._now_ms(),
         )
 
     def _reject(self, message_id: str, detail: str) -> None:

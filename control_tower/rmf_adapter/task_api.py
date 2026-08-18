@@ -14,6 +14,12 @@ class GoToPlaceRequest:
     fleet_name: str
     robot_name: str
     request_time_ms: int
+    # RMF 와 같은 시계로 읽은 "지금". 시뮬에서 fleet adapter 는 use_sim_time 으로
+    # 돌아 기동 후 몇백 초짜리 시계를 쓴다. 원장의 벽시계 값을 시작 시각으로
+    # 보내면 RMF 는 그 작업을 수십 년 뒤에나 시작할 수 있는 것으로 읽고, 입찰과
+    # 배정은 되지만 로봇은 영원히 움직이지 않는다. 비워 두면 request_time_ms 를
+    # 쓴다 — 실기는 두 시계가 같아서 그것으로 충분하다.
+    earliest_start_time_ms: int | None = None
     requester: str = "trihouse_control_tower"
 
     def __post_init__(self) -> None:
@@ -75,7 +81,11 @@ def build_dispatch_request(request: GoToPlaceRequest) -> dict[str, object]:
                 "phases": [{"activity": activity}],
             },
             "unix_millis_request_time": request.request_time_ms,
-            "unix_millis_earliest_start_time": request.request_time_ms,
+            "unix_millis_earliest_start_time": (
+                request.request_time_ms
+                if request.earliest_start_time_ms is None
+                else request.earliest_start_time_ms
+            ),
             "requester": request.requester,
             "fleet_name": request.fleet_name,
             "robot_name": request.robot_name,
@@ -160,6 +170,52 @@ def normalize_task_summary(summary: Any, *, observed_at_ms: int) -> RmfTaskUpdat
             getattr(summary, "end_time", None)
         ),
     )
+
+
+
+def normalize_fleet_state(
+    state: Any, *, observed_at_ms: int
+) -> tuple[RmfTaskUpdate, ...]:
+    """`fleet_states` 에서 "어느 로봇이 어느 작업을 들고 있는가" 만 뽑는다.
+
+    낙찰 결과가 원장으로 돌아오는 유일한 경로다. `task_summaries` 는 이 RMF
+    배포에서 아무도 발행하지 않는다(2026-08-19 실측: 12초에 0건, 같은 시간
+    `fleet_states` 는 97건). 워커는 제출 직후 응답을 받는데 그때는 입찰 전이라
+    `assignment` 가 없는 것이 정상이고, 나중에 채워 주는 것이 이 경로다.
+
+    **성패는 여기서 만들지 않는다.** `task_id` 가 빈 값으로 돌아가는 것은 완료와
+    취소가 구분되지 않으므로 아무 사실도 아니다. 완료·실패는 로봇이 `task_event`
+    로 직접 보고한다. 여기서 하는 일은 Gateway 가 outbox 를 닫을 수 있도록
+    `robot_name` 을 돌려주는 것 하나다(`repositories.py` 의 `apply_rmf_task_update`
+    가 `robot_name` 과 `message_state == 'sent'` 를 함께 볼 때 닫는다).
+
+    작업을 든 채 잠깐 서 있는 것(`MODE_PAUSED`·`MODE_WAITING`)도 낙찰은 유효하므로
+    mode 로 거르지 않는다. 거르면 로봇이 병목에서 대기하는 동안 배정이 사라진다.
+    """
+    if observed_at_ms < 0:
+        raise ValueError("observed_at_ms cannot be negative")
+    fleet_name = str(getattr(state, "name", ""))
+    updates: list[RmfTaskUpdate] = []
+    for robot in getattr(state, "robots", ()) or ():
+        task_id = str(getattr(robot, "task_id", "")).strip()
+        if not task_id:
+            continue
+        robot_name = str(getattr(robot, "name", "")).strip()
+        if not robot_name:
+            continue
+        updates.append(
+            RmfTaskUpdate(
+                task_id=task_id,
+                rmf_status="active",
+                step_state="running",
+                fleet_name=fleet_name,
+                robot_name=robot_name,
+                observed_at_ms=observed_at_ms,
+                detail="fleet_states",
+            )
+        )
+    return tuple(updates)
+
 
 
 def _error_detail(errors: object) -> str:

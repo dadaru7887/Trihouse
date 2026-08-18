@@ -46,7 +46,18 @@ def run_poll_loop(
     """Poll while ROS is alive; separated from construction for tests."""
 
     while keep_running():
-        report = worker.run_once(limit=limit)
+        # Gateway 는 빌드 이미지라 코드가 바뀌면 재시작한다. 그 순간 진행 중인
+        # HTTP 가 끊긴다(`Connection reset by peer`·`Broken pipe`). 그 예외로
+        # 이 프로세스가 죽으면 주문이 `queued` 에서 멈추고 사람이 알아채기까지
+        # 시간이 걸린다. 한 주기를 잃는 편이 프로세스를 잃는 것보다 낫다.
+        try:
+            report = worker.run_once(limit=limit)
+        except Exception as error:  # noqa: BLE001
+            node.get_logger().error(f"executor cycle failed: {error}")
+            if once:
+                return
+            sleep(poll_interval_s)
+            continue
         logger = node.get_logger()
         if report.changed:
             logger.info(

@@ -5,19 +5,61 @@ from __future__ import annotations
 import argparse
 import os
 import time
-from typing import Callable, Protocol, Sequence
+from typing import Any, Callable, Protocol, Sequence
 
 import rclpy
+from rclpy.parameter import Parameter
 
-from control_tower.gateway.fms_client import FMSGatewayHttpClient
+from control_tower.gateway.fms_client import (
+    FMSGatewayHttpClient,
+    RmfTaskUpdateRequest,
+)
 from control_tower.process_lifecycle import ShutdownSignal
 
 from .rmf_gateway_worker import RmfGatewayWorker, RmfGatewayWorkerReport
-from .ros_task_client import RosTaskApiClient
+from .ros_task_client import (
+    RosFleetStateObserver,
+    RosTaskApiClient,
+    RosTaskSummaryObserver,
+)
 
 
 class PollWorker(Protocol):
     def run_once(self, *, limit: int) -> RmfGatewayWorkerReport: ...
+
+
+class GatewayTaskUpdateSink:
+    """관측한 RMF task 갱신을 HTTP 로만 원장에 넘긴다.
+
+    Control Tower 는 DB 에 직접 붙지 않는다 — "DB 트랜잭션은 Gateway 만" 이
+    설계 경계다. `RosTaskSummaryObserver` 가 요구하는 두 메서드를 그 경계
+    안에서 채운다.
+
+    아는 task 인지는 Gateway 가 판단한다. TaskSummary 는 fleet 전체의 것이
+    오므로 여기서 미리 거르려면 task 목록을 따로 들고 있어야 하고, 그러면
+    같은 사실이 두 곳에 생긴다. 대신 Gateway 가 모르는 task 에 404 를 주고
+    클라이언트가 그것을 `None` 으로 돌려준다.
+    """
+
+    def __init__(self, gateway: FMSGatewayHttpClient) -> None:
+        self._gateway = gateway
+
+    def knows_task(self, task_id: str) -> bool:
+        return bool(task_id.strip())
+
+    def apply_task_update(self, update: Any) -> bool:
+        applied = self._gateway.apply_rmf_task_update(
+            RmfTaskUpdateRequest(
+                rmf_task_id=update.task_id,
+                fleet_name=update.fleet_name,
+                robot_name=update.robot_name,
+                rmf_status=update.rmf_status,
+                step_state=update.step_state,
+                observed_at_ms=update.observed_at_ms,
+                detail=update.detail,
+            )
+        )
+        return applied is not None
 
 
 def run_poll_loop(
@@ -66,7 +108,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-s", type=float, default=5.0)
     parser.add_argument("--request-topic", default="task_api_requests")
     parser.add_argument("--response-topic", default="task_api_responses")
+    parser.add_argument("--task-summary-topic", default="task_summaries")
+    parser.add_argument("--fleet-state-topic", default="fleet_states")
     parser.add_argument("--once", action="store_true")
+    # 시뮬에서는 RMF fleet adapter 가 use_sim_time 으로 돈다. 워커가 벽시계로
+    # 남으면 시작 시각이 수십 년 어긋나 작업이 시작되지 않는다. 실기에서는
+    # 주지 않는다 — 그쪽은 두 시계가 원래 같다.
+    parser.add_argument("--use-sim-time", action="store_true")
     return parser
 
 
@@ -82,6 +130,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     # 끝난 뒤 주기 경계에서 나가야 작업이 주인 없이 남지 않는다.
     shutdown = ShutdownSignal.installed()
     node = rclpy.create_node("trihouse_rmf_gateway_worker")
+    if args.use_sim_time:
+        node.set_parameters([Parameter("use_sim_time", value=True)])
     try:
         gateway = FMSGatewayHttpClient(args.fms_base_url, timeout=args.timeout_s)
         transport = RosTaskApiClient(
@@ -95,7 +145,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             worker_id=args.worker_id,
             default_fleet_name=args.fleet_name,
             timeout_s=args.timeout_s,
+            # RMF 와 같은 시계로 시작 시각을 찍는다. 이 노드가 use_sim_time 이면
+            # 시뮬 시계가, 실기면 벽시계가 그대로 온다. 원장의 created_at 을
+            # 쓰면 시뮬에서 두 시계가 수십 년 어긋나 작업이 시작되지 않는다.
+            now_ms=lambda: node.get_clock().now().nanoseconds // 1_000_000,
         )
+        # RMF 는 제출 즉시 booking 만 만들고 배정은 입찰이 끝난 뒤에 정해진다.
+        # 이 관측자가 없으면 그 배정이 원장에 닿지 못해 dispatch 가
+        # RMF_ASSIGNMENT_PENDING 에서 재시도를 소진하고 dead_letter 가 된다.
+        sink = GatewayTaskUpdateSink(gateway)
+        # 두 창구를 함께 연다. `task_summaries` 는 이 RMF 배포에서 비어 있지만
+        # (2026-08-19 실측 12초 0건) 다른 배포에서는 흐르므로 남겨 둔다. 실제로
+        # 배정을 물어다 주는 것은 `fleet_states` 다 — 같은 12초에 97건이 왔다.
+        # 이것이 없으면 dispatch 가 RMF_ASSIGNMENT_PENDING 으로 재시도를 소진해
+        # dead_letter 가 되고, RMF 와 로봇은 정상인데 원장만 실패로 남는다.
+        summary_observer = RosTaskSummaryObserver(sink)
+        summary_observer.attach(node, topic=args.task_summary_topic)
+        fleet_observer = RosFleetStateObserver(sink)
+        fleet_observer.attach(node, topic=args.fleet_state_topic)
         run_poll_loop(
             worker,
             node,

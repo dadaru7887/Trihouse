@@ -198,3 +198,28 @@ def test_task_summary_exposes_assignment_time_window() -> None:
 
     assert update.planned_start_ms == 2_500
     assert update.planned_end_ms == 8_000
+
+
+def test_earliest_start_time_uses_the_rmf_clock_not_the_ledger_clock() -> None:
+    """시작 시각은 RMF 와 같은 시계여야 한다.
+
+    `request_time_ms` 는 Gateway 가 원장에 적은 벽시계 시각이다. 시뮬에서
+    fleet adapter 는 `use_sim_time` 으로 돌아 기동 후 몇백 초짜리 시계를 쓰므로,
+    벽시계 값을 시작 시각으로 보내면 RMF 는 그 작업을 수십 년 뒤에나 시작할 수
+    있는 것으로 읽는다. 입찰과 배정은 되지만 로봇은 영원히 움직이지 않는다.
+    """
+    payload = build_dispatch_request(
+        GoToPlaceRequest(
+            request_id="req-1",
+            job_step_id=42,
+            waypoint="frozen_storage_loading_dock_01",
+            fleet_name="project1_pinky",
+            robot_name="PK_01",
+            request_time_ms=1_787_065_234_974,
+            earliest_start_time_ms=403_067,
+        )
+    )
+
+    request = payload["request"]
+    assert request["unix_millis_request_time"] == 1_787_065_234_974
+    assert request["unix_millis_earliest_start_time"] == 403_067

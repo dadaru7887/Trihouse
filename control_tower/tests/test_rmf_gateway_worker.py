@@ -98,6 +98,9 @@ def test_worker_claims_builds_rmf_request_and_reports_assignment() -> None:
         worker_id="rmf-worker-1",
         default_fleet_name="project1_pinky",
         timeout_s=2.5,
+        # 실기에서는 워커 시계와 원장 시계가 같다. 같은 값을 주어 그 경우의
+        # payload 를 그대로 못박는다. 시뮬처럼 갈라지는 경우는 별도 테스트가 본다.
+        now_ms=lambda: 1_786_500_000_000,
     )
 
     report = worker.run_once(limit=4)
@@ -307,3 +310,42 @@ def test_rmf_substituting_another_pinky_never_overwrites_the_assignment() -> Non
     )
     assert report.accepted == 0
     assert report.rejected == 1
+
+
+def test_worker_stamps_earliest_start_from_its_own_clock() -> None:
+    """시작 시각은 워커의 시계로 찍는다. 원장의 벽시계를 그대로 쓰지 않는다.
+
+    시뮬에서 워커와 fleet adapter 는 둘 다 `use_sim_time` 으로 돌아 같은 시계를
+    본다. 원장의 벽시계 값을 시작 시각으로 보내면 RMF 는 그 작업을 수십 년 뒤에나
+    시작할 수 있는 것으로 읽고, 입찰과 배정은 되지만 로봇은 움직이지 않는다.
+    """
+    gateway = FakeGateway((dispatch_record(),))
+    transport = FakeTransport(
+        DispatchAcceptance(
+            accepted=True,
+            rmf_task_id="rmf-task-1",
+            rmf_status="queued",
+            assignment=RmfAssignmentWindow(
+                task_id="rmf-task-1",
+                fleet_name="project1_pinky",
+                robot_name="PK_01",
+                start_ms=1,
+                end_ms=2,
+            ),
+        )
+    )
+    worker = RmfGatewayWorker(
+        gateway,
+        transport,
+        worker_id="rmf-worker-1",
+        default_fleet_name="project1_pinky",
+        timeout_s=2.5,
+        now_ms=lambda: 403_067,
+    )
+
+    worker.run_once(limit=1)
+
+    _, payload, _ = transport.submissions[0]
+    request = payload["request"]
+    assert request["unix_millis_request_time"] == 1_786_500_000_000
+    assert request["unix_millis_earliest_start_time"] == 403_067
