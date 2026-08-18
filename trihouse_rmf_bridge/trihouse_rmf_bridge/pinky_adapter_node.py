@@ -182,6 +182,21 @@ class PinkyRobotAdapter:
         rmf_task_id = ""
         if update_handle is not None:
             rmf_task_id = str(update_handle.more().current_task_id() or "")
+
+        # 실행할 수 없는 것을 원장에 먼저 적지 않는다. `claim` 은 Gateway 에
+        # 명령 행과 시도 행을 남기는 부수효과다. 확인을 뒤에 두면 실패해도 흔적이
+        # 남고, RMF 가 재시도할 때마다 그 흔적이 쌓인다.
+        if not self._transport.server_is_ready():
+            self._fail_without_finish(
+                "Pinky ExecuteTransport action server가 없습니다."
+            )
+            return
+
+        position = list(destination.position)
+        if len(position) != 3 or not all(math.isfinite(float(v)) for v in position):
+            self._fail_without_finish("RMF 목적지 pose가 유효하지 않습니다.")
+            return
+
         try:
             context = self._command_claims.claim(
                 rmf_task_id=rmf_task_id,
@@ -204,15 +219,6 @@ class PinkyRobotAdapter:
 
         with self._lock:
             self._executions[command_id] = execution
-
-        if not self._transport.server_is_ready():
-            self._fail_command(command_id, "Pinky ExecuteTransport action server가 없습니다.")
-            return
-
-        position = list(destination.position)
-        if len(position) != 3 or not all(math.isfinite(float(v)) for v in position):
-            self._fail_command(command_id, "RMF 목적지 pose가 유효하지 않습니다.")
-            return
 
         goal = ExecuteTransport.Goal()
         goal.task_context.active = context.active

@@ -377,6 +377,43 @@ def _robot_group(
             output="screen",
             parameters=[{"robot_id": robot_id, "use_sim_time": use_sim_time}],
         ),
+        # Nav2 의 속도 명령을 모터까지 잇는 유일한 노드다. launch 가 Nav2 를
+        # `cmd_vel -> cmd_vel_nav` 로 remap 하고, gz bridge 는 `cmd_vel` 을 Gazebo 로
+        # 넘긴다. 그 사이를 이 노드가 안전 gate 로 통과시킨다. 없으면 경로는
+        # 계획되고 step 은 running 이 되는데 **로봇이 영원히 움직이지 않는다.**
+        Node(
+            package="trihouse_pinky_safety",
+            executable="safety_supervisor",
+            name="trihouse_safety_supervisor",
+            output="screen",
+            parameters=[{
+                "robot_id": robot_id,
+                "use_sim_time": use_sim_time,
+                # 시뮬에는 초음파가 없다. `sim_hardware` 가 내는 것은
+                # `trihouse/proximity/front` 하나이고 그것으로 충분하다. 켜 두면
+                # 센서 미달로 gate 가 계속 정지를 걸어 로봇이 못 움직인다.
+                "require_ultrasonic": False,
+                # 신선도 판정만 시뮬 주기에 맞춘다. 안전 임계(정지·감속 거리)는
+                # 실기와 같게 둔다. 기본 0.5초는 시뮬 센서 주기와 RTF<1 을 견디지
+                # 못해 gate 가 깜빡이고, 그 깜빡임이 로봇을 RMF 에서 빼낸다.
+                "sensor_timeout_s": 2.0,
+            }],
+        ),
+        # RMF fleet adapter 가 낙찰된 작업을 넘기는 `trihouse/transport/execute`
+        # action 의 **서버**다. `fleet_gateway` 는 같은 action 의 클라이언트이므로
+        # 이것이 없으면 adapter 는 "ExecuteTransport action server 가 없습니다" 만
+        # 반복하고 로봇은 움직이지 않는다. 실기 launch 에는 처음부터 있었다.
+        Node(
+            package="trihouse_pinky_fleet",
+            executable="fleet_node",
+            name="trihouse_fleet",
+            output="screen",
+            parameters=[{
+                "robot_id": robot_id,
+                "map_revision": map_revision,
+                "use_sim_time": use_sim_time,
+            }],
+        ),
         # `trihouse/fms/state` 를 낸다. FMS Gateway 의 TCP 포트에 붙으면 ONLINE 이
         # 되고 `control_link_offline` 이 풀린다. 그 포트는 compose.control.yaml 이
         # `FMS_TCP_PORT` 로 내보낸다.

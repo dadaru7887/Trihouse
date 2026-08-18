@@ -671,3 +671,62 @@ def test_every_charger_graph_name_exists_in_the_generated_nav_graph() -> None:
 
     for robot_id, name in module.charger_graph_names(FEATURES).items():
         assert name in vertex_names, f"{robot_id}: {name} 이 nav_graph 에 없다"
+
+
+def test_each_group_serves_the_transport_action(tmp_path: Path) -> None:
+    """로봇마다 ExecuteTransport 서버가 있어야 한다.
+
+    RMF fleet adapter 는 낙찰된 작업을 `trihouse/transport/execute` action 으로
+    로봇에 넘긴다. 그 서버는 `fleet_node` 가 연다. 시뮬 launch 가 그것을 빼면
+    adapter 는 "ExecuteTransport action server 가 없습니다" 만 반복하고 로봇은
+    영원히 움직이지 않는다. 2026-08-19 에 job 10 이 이 자리에서 멈췄다.
+    """
+    _, _, actions = _runtime_actions(tmp_path)
+
+    timers = [action for action in actions if hasattr(action, "actions")]
+    groups = [
+        entity
+        for timer in timers
+        for entity in timer.actions
+        if isinstance(entity, GroupAction)
+    ]
+
+    for group in groups:
+        executables = [
+            entity.node_executable
+            for entity in group.get_sub_entities()
+            if isinstance(entity, Node)
+        ]
+        assert "fleet_node" in executables, executables
+
+
+def test_each_group_bridges_nav2_velocity_to_the_motors(tmp_path: Path) -> None:
+    """Nav2 의 속도 명령이 모터까지 가는 경로가 있어야 한다.
+
+    launch 는 Nav2 를 `cmd_vel -> cmd_vel_nav` 로 remap 한다. 모터용 `cmd_vel` 은
+    `safety_supervisor` 가 단독으로 소유하며, 그 노드가 `cmd_vel_nav` 를 받아 안전
+    gate 를 통과시킨 뒤 발행한다. gz bridge 는 `cmd_vel` 을 Gazebo 로 넘긴다.
+
+    그 노드가 없으면 `cmd_vel_nav` 와 `cmd_vel` 사이가 끊겨 **로봇이 영원히
+    움직이지 않는다.** 경로는 계획되고 step 은 `running` 이 되므로 로그만 보면
+    정상으로 보인다. 2026-08-19 에 job 13 이 이 자리에서 멈췄다.
+
+    실기 launch 에는 처음부터 있었다.
+    """
+    _, _, actions = _runtime_actions(tmp_path)
+
+    timers = [action for action in actions if hasattr(action, "actions")]
+    groups = [
+        entity
+        for timer in timers
+        for entity in timer.actions
+        if isinstance(entity, GroupAction)
+    ]
+
+    for group in groups:
+        executables = [
+            entity.node_executable
+            for entity in group.get_sub_entities()
+            if isinstance(entity, Node)
+        ]
+        assert "safety_supervisor" in executables, executables

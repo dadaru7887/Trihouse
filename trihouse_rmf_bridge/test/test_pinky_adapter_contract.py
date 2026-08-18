@@ -104,3 +104,24 @@ def test_robot_id_is_sanitized_before_use_as_ros_node_name() -> None:
     source = _source()
 
     assert 'robot_name.replace("-", "_")' in source
+
+
+def test_navigate_checks_the_transport_server_before_touching_the_ledger() -> None:
+    """실행할 수 없으면 원장을 건드리지 않는다.
+
+    `claim` 은 Gateway 원장에 명령 행과 시도 행을 남기는 부수효과다. 그것을
+    먼저 하고 나중에 실행 가능 여부를 보면, 실패해도 흔적은 남는다. 2026-08-19 에
+    action server 가 없던 동안 그 흔적이 step 하나에 463행까지 쌓였다.
+
+    멱등키 재설계로 행이 하나로 묶이지만, 순서 자체가 틀린 것은 그대로다.
+    검증이 부수효과보다 앞서야 한다.
+    """
+    source = _source()
+    navigate = source.split("def _navigate(")[1].split("\n    def ")[0]
+
+    server_check = navigate.index("server_is_ready")
+    claim_call = navigate.index("self._command_claims.claim(")
+
+    assert server_check < claim_call, (
+        "claim 이 server_is_ready 보다 먼저다 — 실행 못 할 명령을 원장에 남긴다"
+    )
