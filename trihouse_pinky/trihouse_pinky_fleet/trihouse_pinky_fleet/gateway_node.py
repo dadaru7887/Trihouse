@@ -8,6 +8,12 @@ from time import monotonic
 from uuid import uuid4
 
 import rclpy
+from rclpy.qos import (
+    QoSDurabilityPolicy,
+    QoSHistoryPolicy,
+    QoSProfile,
+    QoSReliabilityPolicy,
+)
 from geometry_msgs.msg import Point32, Quaternion
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
@@ -204,6 +210,19 @@ def _status_evidence_is_current(
     )
 
 
+
+# `trihouse/fms/state` 는 흘러가는 사건이 아니라 최신 값이 계속 유효한 사실이다.
+# `gateway_node` 는 연결 상태가 **바뀔 때만** 발행하므로, 늦게 뜬 구독자가 그 한
+# 번을 놓치면 영원히 모른다. 그러면 TCP 는 붙어 있는데 로봇이
+# `control_link_offline` 로 굳어 RMF 가 받아 주지 않는다. 발행·구독 양쪽을 함께
+# 바꿔야 한다 — 한쪽만 바꾸면 QoS 가 맞지 않아 아예 연결되지 않는다.
+CONNECTION_STATE_QOS = QoSProfile(
+    depth=1,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+)
+
 class GatewayNode(Node):
     """Pinky의 ROS graph와 Control Tower의 NDJSON 연결을 중계하는 노드."""
 
@@ -266,7 +285,9 @@ class GatewayNode(Node):
         self._measurement_warning_emitted = False
 
         # Control Tower 접속 상태를 로봇 내부의 다른 ROS 노드에 알린다.
-        self.state_pub = self.create_publisher(ConnectionState, 'trihouse/fms/state', 10)
+        self.state_pub = self.create_publisher(
+            ConnectionState, 'trihouse/fms/state', CONNECTION_STATE_QOS
+        )
         self.outbox_ready_pub = self.create_publisher(
             Bool, 'trihouse/fms/event_outbox_ready', 10
         )

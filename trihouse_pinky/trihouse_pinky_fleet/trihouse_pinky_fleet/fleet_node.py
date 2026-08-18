@@ -8,12 +8,19 @@ from nav_msgs.msg import Odometry
 from rclpy.action import ActionClient, ActionServer
 from rclpy.action import CancelResponse
 from rclpy.node import Node
+from rclpy.task import Future
 from std_msgs.msg import Bool, String
 from trihouse_interfaces.action import ExecuteTransport
 from trihouse_interfaces.msg import CargoState, HandoverState, NavigationState, Readiness, RobotHealth, SafetyState, TaskEvent
 
 from .workflow import JobCommand, JobPhase, TransportWorkflow
-from .arrival import within_tolerance
+from .arrival import may_report_arrival, within_tolerance
+
+
+def _complete_once(future: Future) -> None:
+    """timer 가 두 번 발화해도 Future 를 한 번만 완료시킨다."""
+    if not future.done():
+        future.set_result(None)
 
 
 def transport_admission_block_reason(outbox_ready: bool) -> str | None:
@@ -33,6 +40,11 @@ class FleetNode(Node):
     def __init__(self) -> None:
         super().__init__('fleet_node')
         self.declare_parameter('robot_id', 'PK_01'); self.declare_parameter('map_revision', '')
+        # Nav2 SUCCEEDED 와 실제 정차 사이의 감쇠 시간을 기다리는 상한.
+        # 끝내 멈추지 않는 것은 실제 결함이므로 무한히 기다리지 않는다 —
+        # 그때는 goal 이 ROBOT_NOT_STOPPED 로 정직하게 실패하는 편이
+        # action 이 영원히 매달려 있는 것보다 낫다.
+        self.declare_parameter('arrival_stop_timeout_s', 2.0)
         self.robot_id = self.get_parameter('robot_id').value
         self.workflow = TransportWorkflow(robot_id=self.robot_id, expected_map_revision=self.get_parameter('map_revision').value)
         self.ready = False; self.outbox_ready = False; self.cargo_confirmed = False; self.emergency = False; self.stationary = False; self.recovery_health_ok = False; self.current_pose: tuple[float, float, float] | None = None
@@ -192,6 +204,12 @@ class FleetNode(Node):
             result.completed_at = self.get_clock().now().to_msg()
             return result
         precise = not goal.requires_precise_stop or self._at_precise_goal(goal)
+        # Nav2 는 goal tolerance 안에 들어오면 SUCCEEDED 를 주고 속도 0 을 요구하지
+        # 않는다. 여기서 정차를 기다리지 않으면 workflow 가 "waiting for stop" 을
+        # 돌려주고 phase 가 NAVIGATING 에 갇혀, 이후 모든 명령이 "robot is not
+        # idle" 로 거절된다. `await` 로 양보하므로 그 사이 odom 콜백이 계속 돌아
+        # `self.stationary` 가 갱신된다.
+        await self._settle_before_arrival()
         arrived = self.workflow.nav_result(succeeded=nav_result.status == 4 and precise, stationary=self.stationary)
         if arrived.phase is JobPhase.HEALTH_CHECK:
             arrived = self.workflow.finish_return(health_ok=self.recovery_health_ok, cargo_present=self.cargo_confirmed)
@@ -206,16 +224,25 @@ class FleetNode(Node):
             result.message = arrived.detail
         else:
             self.display_pub.publish(String(data=''))
-            self._publish_event(
-                goal, TaskEvent.EVENT_FAILED, arrived.detail,
-                reason_code=(
-                    'GOAL_TOLERANCE_NOT_MET'
-                    if nav_result.status == 4 and not precise
-                    else 'ROBOT_NOT_STOPPED'
-                    if arrived.detail == 'waiting for stop'
-                    else 'NAV2_ABORTED'
-                ),
+            reason_code = (
+                'GOAL_TOLERANCE_NOT_MET'
+                if nav_result.status == 4 and not precise
+                else 'ROBOT_NOT_STOPPED'
+                if arrived.detail == 'waiting for stop'
+                else 'NAV2_ABORTED'
             )
+            self._publish_event(
+                goal, TaskEvent.EVENT_FAILED, arrived.detail, reason_code=reason_code
+            )
+            if reason_code == 'ROBOT_NOT_STOPPED':
+                # 상한까지 기다렸는데도 정차 판정이 안 났다. `nav_result` 는
+                # phase 를 NAVIGATING 에 남기고 다시 묻는 경로가 없으므로, 여기서
+                # 놓아 주지 않으면 이후 모든 명령이 "robot is not idle" 로
+                # 거절된다 — 대기를 넣은 것이 확률만 낮춘 셈이 된다.
+                #
+                # 다른 두 사유는 놓아 줄 필요가 없다. `nav_result(succeeded=False)`
+                # 가 이미 phase 를 IDLE 로 내린다.
+                self.workflow.cancel_navigation(context.command_id)
             goal_handle.abort(); result.success = False; result.code = ExecuteTransport.Result.CODE_NAVIGATION_FAILED; result.message = arrived.detail
         result.completed_at = self.get_clock().now().to_msg()
         return result
@@ -242,6 +269,46 @@ class FleetNode(Node):
         message.state = state_override if state_override is not None else (NavigationState.STATE_ACTIVE if outcome.phase is JobPhase.NAVIGATING else NavigationState.STATE_SUCCEEDED if outcome.phase in (JobPhase.WAITING_HANDOVER, JobPhase.IDLE) else NavigationState.STATE_FAILED)
         message.target_pose = goal.dropoff_pose; message.detail = detail_override or outcome.detail
         self.navigation_pub.publish(message)
+
+    async def _settle_before_arrival(self) -> None:
+        """정차하거나 상한에 닿을 때까지 기다린다. 판정은 `arrival` 이 한다."""
+        timeout_s = float(self.get_parameter('arrival_stop_timeout_s').value)
+        started_ns = self.get_clock().now().nanoseconds
+        while True:
+            waited_s = (self.get_clock().now().nanoseconds - started_ns) / 1e9
+            if may_report_arrival(
+                stationary=self.stationary, waited_s=waited_s, timeout_s=timeout_s
+            ):
+                return
+            await self._sleep(0.05)
+
+    def _sleep(self, seconds: float) -> Future:
+        """executor 에 `seconds` 만큼 양보한다. 그 사이 odom 콜백이 계속 돈다.
+
+        `asyncio.sleep` 은 쓸 수 없다. rclpy executor 는 asyncio 이벤트 루프를
+        돌리지 않고 `coro.send(None)` 으로 코루틴을 직접 밀며
+        (`rclpy/task.py` `Task._execute_coroutine_step`), 받아 주는 yield 값은
+        `Future` 와 `None` 둘뿐이다. `asyncio.sleep(delay)` 는 `delay > 0` 이면
+        `get_running_loop()` 를 먼저 부르므로 `RuntimeError: no running event loop`
+        로 죽는다. 하필 로봇이 감쇠 중일 때만 그 자리에 닿으므로, 고치려던 레이스
+        에서만 터져 정상으로 보인다.
+
+        `None` 을 yield 해 다음 spin 에 재개하는 방법도 rclpy 는 받아 주지만,
+        그러면 상한(기본 2초)까지 executor 를 바쁘게 돌린다. 이 PC 는 12코어에
+        GPU 가 없어 부하가 이미 제약이므로 timer 로 실제 간격을 둔다.
+
+        clock 은 노드 것을 쓴다 — `use_sim_time` 이면 timer 도 시뮬 시계를 따르므로
+        `_settle_before_arrival` 의 경과 계산과 같은 시계가 된다.
+
+        timer 정리는 `add_done_callback` 에 맡긴다. 발화 콜백 안에서 `timer` 를
+        참조하면 `create_timer` 가 돌아오기 전에 발화하는 경우 아직 이름이 묶이지
+        않아 `NameError` 가 난다. 완료 콜백은 `timer` 가 확실히 묶인 뒤에 등록되고,
+        이미 완료된 Future 에도 rclpy 가 즉시 불러 준다.
+        """
+        future = Future()
+        timer = self.create_timer(seconds, lambda: _complete_once(future))
+        future.add_done_callback(lambda _: self.destroy_timer(timer))
+        return future
 
     def _at_precise_goal(self, goal: ExecuteTransport.Goal) -> bool:
         if self.current_pose is None:

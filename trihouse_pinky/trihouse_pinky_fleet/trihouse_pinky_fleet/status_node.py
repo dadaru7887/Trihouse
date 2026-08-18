@@ -1,6 +1,12 @@
 """SR_03 RobotStatus를 1초 heartbeat와 상태 변경 시 발행하는 ROS 2 노드."""
 
 import rclpy
+from rclpy.qos import (
+    QoSDurabilityPolicy,
+    QoSHistoryPolicy,
+    QoSProfile,
+    QoSReliabilityPolicy,
+)
 from rclpy.node import Node
 from rclpy.time import Time
 
@@ -23,6 +29,19 @@ from trihouse_interfaces.msg import (
 
 from .status import StatusInputs, build_status
 
+
+
+# `trihouse/fms/state` 는 흘러가는 사건이 아니라 최신 값이 계속 유효한 사실이다.
+# `gateway_node` 는 연결 상태가 **바뀔 때만** 발행하므로, 늦게 뜬 구독자가 그 한
+# 번을 놓치면 영원히 모른다. 그러면 TCP 는 붙어 있는데 로봇이
+# `control_link_offline` 로 굳어 RMF 가 받아 주지 않는다. 발행·구독 양쪽을 함께
+# 바꿔야 한다 — 한쪽만 바꾸면 QoS 가 맞지 않아 아예 연결되지 않는다.
+CONNECTION_STATE_QOS = QoSProfile(
+    depth=1,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+)
 
 class StatusNode(Node):
     """센서와 하위 상태를 모아 `/trihouse/status`로 발행하는 ROS 2 노드."""
@@ -88,7 +107,12 @@ class StatusNode(Node):
         self.create_subscription(BatteryPolicyState, 'trihouse/battery/policy_state', lambda m: setattr(self, 'battery_policy', m), 10)
         self.create_subscription(NavigationState, 'trihouse/navigation/state', self._navigation, 10)
         self.create_subscription(Readiness, 'trihouse/readiness', self._readiness, 10)
-        self.create_subscription(ConnectionState, 'trihouse/fms/state', self._connection, 10)
+        self.create_subscription(
+            ConnectionState,
+            'trihouse/fms/state',
+            self._connection,
+            CONNECTION_STATE_QOS,
+        )
 
         self.publisher = self.create_publisher(RobotStatus, 'trihouse/status', 10)
 

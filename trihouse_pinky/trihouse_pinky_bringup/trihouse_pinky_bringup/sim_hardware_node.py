@@ -63,6 +63,11 @@ def advance_battery(
 class SimHardware(Node):
     def __init__(self) -> None:
         super().__init__('sim_hardware')
+        # 안전 gate 는 `sensor_timeout_s` 안에 센서가 오지 않으면 STOP 을 건다.
+        # 1 Hz 로 내면 그 판정보다 느려 gate 가 깜빡이고, 그때마다 로봇이 RMF
+        # 에서 빠져 작업이 얹히지 않는다. 실기 초음파는 10 Hz 이상이므로 이
+        # 값이 실제에 더 가깝다.
+        self.declare_parameter('publish_period_s', 0.1)
         self.declare_parameter('front_distance_m', 3.0)
         self.declare_parameter('battery_percentage', 1.0)
         self.declare_parameter('charging', False)
@@ -79,7 +84,10 @@ class SimHardware(Node):
         )
         self.range_pub = self.create_publisher(Range, 'trihouse/proximity/front', 10)
         self.battery_pub = self.create_publisher(BatteryState, 'trihouse/battery', qos)
-        self.create_timer(1.0, self._publish)
+        # 배터리는 실제 경과 시간으로 적분하므로 주기를 바꿔도 거동이 같다.
+        self.create_timer(
+            float(self.get_parameter('publish_period_s').value), self._publish
+        )
 
     def _publish(self) -> None:
         now = monotonic()
