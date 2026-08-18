@@ -102,6 +102,10 @@ class FmsRepository(Protocol):
         self, message_id: str, acceptance: dict[str, Any]
     ) -> dict[str, Any]: ...
 
+    def apply_rmf_task_update(
+        self, rmf_task_id: str, update: dict[str, Any]
+    ) -> dict[str, Any]: ...
+
     def list_registered_robot_ids(self) -> set[str]: ...
 
     def ingest_robot_status(self, status: dict[str, Any]) -> None: ...
@@ -3347,6 +3351,13 @@ class MySqlFmsRepository:
                 job = cursor.fetchone()
                 if job is None:
                     raise JobNotFound
+                # 종료된 job 에 자원을 다시 붙이지 않는다. `cancel_job` 이 step 과
+                # 예약을 닫은 뒤 `job_runner` 가 같은 job 을 다시 집어 `assigned` 로
+                # 되돌리면, step 은 cancelled 인데 job 은 assigned 인 상태가 남아
+                # 로봇이 영원히 묶인다. 행은 위에서 FOR UPDATE 로 잠갔으므로 이
+                # 검사 하나로 취소와 배정의 경쟁이 사라진다.
+                if job["state"] in {"cancelled", "completed", "failed"}:
+                    raise ResourceAssignmentConflict("JOB_ALREADY_TERMINAL")
                 context = _json(job.get("context")) or {}
                 current = context.get("assignment")
                 if current is not None:
@@ -5380,6 +5391,10 @@ class MySqlFmsRepository:
                     JOIN job_steps js ON js.job_step_id = im.job_step_id
                     JOIN jobs ON jobs.job_id = js.job_id
                     WHERE im.direction = 'outbound' AND im.channel IN ({placeholders})
+                      -- 채널만으로는 부족하다. `pinky` 채널에는 executor 가 실행할
+                      -- `execute_fms_action` 과, `claim_command` 가 남기는 로봇
+                      -- 명령 기록 `execution_command` 가 함께 흐른다.
+                      AND im.message_type IN ('execute_action', 'execute_fms_action')
                       {self._CLAIMABLE_PREDICATE}
                     ORDER BY im.created_at, im.message_id
                     LIMIT %s FOR UPDATE SKIP LOCKED
@@ -5687,6 +5702,18 @@ class MySqlFmsRepository:
                         != acceptance["assigned_device_id"]
                     ):
                         raise IdempotencyConflict
+                elif pending_assignment:
+                    # 배정 전이라도 booking 은 이 step 의 것이다. observer 가
+                    # `rmf_task_id` 로 step 을 찾으므로 여기서 묶어 둔다.
+                    # 배정(assigned_device_id)과 revision 은 건드리지 않는다 —
+                    # 그것은 RMF 가 실제로 로봇을 정한 뒤에만 쓴다.
+                    cursor.execute(
+                        """
+                        UPDATE job_steps SET rmf_task_id = %s
+                        WHERE job_step_id = %s
+                        """,
+                        (acceptance["rmf_task_id"], message["job_step_id"]),
+                    )
                 elif acceptance["accepted"]:
                     if message["assigned_mobile_id"] is not None:
                         cursor.execute(
@@ -5744,11 +5771,69 @@ class MySqlFmsRepository:
             finally:
                 cursor.close()
 
+    def apply_rmf_task_update(
+        self, rmf_task_id: str, update: dict[str, Any]
+    ) -> dict[str, Any]:
+        """입찰이 끝난 뒤 RMF 가 관측한 배정을 대기 중이던 dispatch 에 반영한다.
+
+        배정 확정은 `record_rmf_dispatch_acceptance` 에 위임한다. 그쪽에 로봇
+        불일치·재전송 충돌 검사가 이미 있고, 같은 판단을 두 곳에 두면 한쪽만
+        고쳐지는 날이 온다.
+        """
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                cursor.execute(
+                    """
+                    SELECT js.job_step_id, js.assigned_device_id,
+                           im.message_id, im.state AS message_state
+                    FROM job_steps js
+                    LEFT JOIN integration_messages im
+                      ON im.job_step_id = js.job_step_id
+                     AND im.direction = 'outbound' AND im.channel = 'rmf'
+                     AND im.message_type = 'dispatch_task_request'
+                    WHERE js.rmf_task_id = %s
+                    LIMIT 1
+                    """,
+                    (rmf_task_id,),
+                )
+                row = cursor.fetchone()
+            finally:
+                cursor.close()
+        if row is None:
+            raise JobStepNotFound
+
+        robot_name = str(update.get("robot_name") or "").strip()
+        settled = False
+        if robot_name and row["message_id"] and row["message_state"] == "sent":
+            self.record_rmf_dispatch_acceptance(
+                row["message_id"],
+                {
+                    "accepted": True,
+                    "rmf_task_id": rmf_task_id,
+                    "assigned_device_id": robot_name,
+                    "detail": update.get("rmf_status"),
+                },
+            )
+            settled = True
+        return {
+            "rmf_task_id": rmf_task_id,
+            "job_step_id": row["job_step_id"],
+            "assigned_device_id": robot_name or row["assigned_device_id"],
+            "settled": settled,
+        }
+
     def claim_command(
         self, rmf_task_id: str, request: dict[str, Any]
     ) -> dict[str, Any]:
-        """RMF 배정과 robot identity를 확인하고 실행용 task_context를 발급한다."""
-        external_reference = f"rmf:{rmf_task_id}:execution:{request['execution_id']}"
+        """RMF 배정과 robot identity를 확인하고 실행용 task_context를 발급한다.
+
+        멱등 단위는 **일**이지 **시도**가 아니다. RMF 는 실패한 작업을 재시도할
+        때마다 새 execution handle 을 준다. 그 값을 키에 넣으면 재시도마다 새 행이
+        생기고 상한이 없어 원장이 무한히 커진다. 같은 작업을 같은 로봇이 같은
+        배정으로 하는 한 그것은 같은 명령이다. 배정이 바뀌면
+        `assignment_revision` 이 올라 새 명령이 되는데, 그것은 의도한 동작이다.
+        """
         with self.database.connection() as connection:
             cursor = connection.cursor(dictionary=True)
             try:
@@ -5765,6 +5850,10 @@ class MySqlFmsRepository:
                     raise JobStepNotFound
                 if step["state"] not in {"pending", "running"}:
                     raise CommandClaimConflict
+                external_reference = (
+                    f"rmf:{rmf_task_id}:robot:{request['robot_id']}"
+                    f":rev:{step['assignment_revision']}"
+                )
                 cursor.execute(
                     """
                     SELECT payload FROM integration_messages
@@ -5778,7 +5867,12 @@ class MySqlFmsRepository:
                 if existing:
                     payload = _json(existing["payload"])
                     identity = payload["claim_identity"]
-                    if identity != request:
+                    # `execution_id` 는 재시도마다 달라지는 것이 정상이므로 충돌
+                    # 판정에서 뺀다. 로봇과 지도가 다르면 그것은 진짜 충돌이다.
+                    if (
+                        identity["robot_id"] != request["robot_id"]
+                        or identity["map_revision"] != request["map_revision"]
+                    ):
                         raise CommandClaimConflict
                     return {"task_context": payload["task_context"]}
                 if step["assigned_device_id"] != request["robot_id"]:
@@ -6509,6 +6603,9 @@ class InMemoryFmsRepository:
             job = self._jobs.get(job_id)
             if job is None:
                 raise JobNotFound
+            # 종료된 job 에 자원을 다시 붙이지 않는다. 실제 저장소와 같은 규칙이다.
+            if job["state"] in {"cancelled", "completed", "failed"}:
+                raise ResourceAssignmentConflict("JOB_ALREADY_TERMINAL")
             expected = {
                 "PK_01": "TRIHOUSE-TEST-01-CHG-01",
                 "PK_02": "TRIHOUSE-TEST-01-CHG-02",
@@ -7019,7 +7116,15 @@ class InMemoryFmsRepository:
         for _, response in self._dispatches.values():
             if len(claimed) >= limit:
                 break
-            if response["channel"] not in channels or not self._claimable(response, lease):
+            # 채널만으로는 부족하다. `pinky` 채널에는 executor 가 실행할
+            # `execute_fms_action` 과, `claim_command` 가 남기는 로봇 명령 기록
+            # `execution_command` 가 함께 흐른다.
+            if (
+                response["channel"] not in channels
+                or response["message_type"]
+                not in ("execute_action", "execute_fms_action")
+                or not self._claimable(response, lease)
+            ):
                 continue
             self._mark_claimed(response)
             step = self._steps[response["job_step_id"]]
@@ -7134,11 +7239,51 @@ class InMemoryFmsRepository:
             message["state"] = "failed"
         else:
             message["pending_rmf_task_id"] = acceptance["rmf_task_id"]
+            # 배정은 아직 없지만 booking 은 이 step 의 것이다. 나중에 배정을
+            # 되돌려 주는 observer 가 `rmf_task_id` 로 step 을 찾으므로 여기서
+            # 묶어 두지 않으면 그 작업을 알아보지 못한다.
+            self._steps[message["job_step_id"]]["rmf_task_id"] = acceptance[
+                "rmf_task_id"
+            ]
         return {
             "message_id": message_id,
             "job_step_id": message["job_step_id"],
             "state": message["state"],
             "rmf_task_id": acceptance.get("rmf_task_id") if acceptance["accepted"] or pending_assignment else None,
+        }
+
+    def apply_rmf_task_update(
+        self, rmf_task_id: str, update: dict[str, Any]
+    ) -> dict[str, Any]:
+        step = next(
+            (row for row in self._steps.values() if row["rmf_task_id"] == rmf_task_id),
+            None,
+        )
+        if step is None:
+            raise JobStepNotFound
+        settled = False
+        robot_name = (update.get("robot_name") or "").strip()
+        if robot_name:
+            message = next(
+                (
+                    response
+                    for _, response in self._dispatches.values()
+                    if response["job_step_id"] == step["job_step_id"]
+                    and response["state"] == "sent"
+                ),
+                None,
+            )
+            if message is not None:
+                self.record_rmf_acceptance(
+                    step["job_step_id"], rmf_task_id, robot_name
+                )
+                message["state"] = "acknowledged"
+                settled = True
+        return {
+            "rmf_task_id": rmf_task_id,
+            "job_step_id": step["job_step_id"],
+            "assigned_device_id": step["assigned_device_id"],
+            "settled": settled,
         }
 
     def claim_command(self, rmf_task_id: str, request: dict[str, Any]) -> dict[str, Any]:
@@ -7147,11 +7292,16 @@ class InMemoryFmsRepository:
             raise JobStepNotFound
         if step["state"] not in {"pending", "running"}:
             raise CommandClaimConflict
-        claim_key = (rmf_task_id, request["execution_id"])
+        # 멱등 단위는 일이지 시도가 아니다. 재시도마다 새로 오는
+        # `execution_id` 를 키에 넣으면 행이 무한히 쌓인다.
+        claim_key = (rmf_task_id, request["robot_id"], step["assignment_revision"])
         existing = self._claims.get(claim_key)
         if existing:
             identity, response = existing
-            if identity != request:
+            if (
+                identity["robot_id"] != request["robot_id"]
+                or identity["map_revision"] != request["map_revision"]
+            ):
                 raise CommandClaimConflict
             return deepcopy(response)
         if step["assigned_device_id"] != request["robot_id"]:
@@ -7169,4 +7319,26 @@ class InMemoryFmsRepository:
             }
         }
         self._claims[claim_key] = (deepcopy(request), response)
+        # 실제 저장소는 이 시점에 `pinky` 채널의 `execution_command` 를
+        # integration_messages 에 넣는다. 그 행이 여기 없으면 "executor 가 남의
+        # 채널 행까지 집는가" 같은 계약을 double 로는 검증할 수 없다.
+        command_id = response["task_context"]["command_id"]
+        self._dispatches[f"command:{rmf_task_id}:{request['execution_id']}"] = (
+            deepcopy(request),
+            {
+                "message_id": command_id,
+                "idempotency_key": f"command:{rmf_task_id}:{request['robot_id']}:{request['execution_id']}",
+                "job_id": step["job_id"],
+                "job_step_id": step["job_step_id"],
+                "channel": "pinky",
+                "message_type": "execution_command",
+                "state": "pending",
+                "payload": {"claim_identity": deepcopy(request)},
+                "action_type": step["action_type"],
+                "executor_type": step["executor_type"],
+                "assigned_device_id": step["assigned_device_id"],
+                "assignment_revision": step["assignment_revision"],
+                "assignment": None,
+            },
+        )
         return deepcopy(response)

@@ -402,6 +402,26 @@ class JobTimeline(BaseModel):
 # RMF와 로봇 명령 인계 DTO --------------------------------------------------
 
 
+class RmfTaskUpdate(BaseModel):
+    """RMF 가 관측한 task 진행 상태. 입찰이 끝난 뒤의 배정이 여기 실려 온다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fleet_name: str = Field(default="", max_length=64)
+    robot_name: str = Field(default="", max_length=64)
+    rmf_status: str = Field(min_length=1, max_length=64)
+    step_state: str = Field(min_length=1, max_length=24)
+    observed_at_ms: int = Field(ge=0)
+    detail: str = Field(default="", max_length=512)
+
+
+class RmfTaskUpdateApplied(BaseModel):
+    rmf_task_id: str
+    job_step_id: int
+    assigned_device_id: str | None = None
+    settled: bool
+
+
 class CommandClaim(BaseModel):
     """RMF task를 실제 로봇 실행 identity에 연결하는 요청."""
     robot_id: str = Field(min_length=1, max_length=64)

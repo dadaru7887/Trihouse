@@ -37,6 +37,8 @@ from .map_deployment import (
     MapWorkflowError,
 )
 from .models import (
+    RmfTaskUpdate,
+    RmfTaskUpdateApplied,
     CommandClaim,
     CommandClaimed,
     DeviceView,
@@ -822,6 +824,27 @@ def create_app(
             ) from error
         except (JobStepNotDispatchable, IdempotencyConflict) as error:
             raise HTTPException(status_code=409, detail="RMF dispatch state conflict") from error
+
+    @app.post(
+        "/internal/v1/rmf/tasks/{rmf_task_id}/updates",
+        response_model=RmfTaskUpdateApplied,
+    )
+    def apply_rmf_task_update(rmf_task_id: str, update: RmfTaskUpdate):
+        """입찰이 끝난 뒤 RMF 가 관측한 배정을 원래 Step 에 반영한다.
+
+        이 경로가 없으면 dispatch 는 `sent` 에 머물다 재시도를 소진해
+        dead_letter 가 되고, 주문이 로봇을 움직이지 못한다.
+        """
+        try:
+            return repo.apply_rmf_task_update(rmf_task_id, update.model_dump())
+        except JobStepNotFound as error:
+            raise HTTPException(
+                status_code=404, detail="RMF task is not known to this gateway"
+            ) from error
+        except ResourceAssignmentConflict as error:
+            raise HTTPException(
+                status_code=409, detail={"code": str(error)}
+            ) from error
 
     @app.post(
         "/internal/v1/rmf/tasks/{rmf_task_id}/commands/claim",
