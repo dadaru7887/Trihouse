@@ -494,9 +494,13 @@ class GatewayNode(Node):
                         event_id, str(payload.get('reason_code', 'UNKNOWN'))
                     )
                     self.last_event_attempt.pop(event_id, None)
+                # 어떤 메시지가 걸렸는지 함께 적는다. 사유만 적던 동안에는 이
+                # 한 문장이 모든 거절에 대해 똑같이 찍혀서, 42건이 쌓여도 원인을
+                # 되짚을 수 없었다. `message_type` 은 Gateway 가 실어 보낸다.
                 self.get_logger().error(
-                    'FMS rejected telemetry/event: '
-                    f"{payload.get('reason_code', 'UNKNOWN')}"
+                    'FMS rejected a robot message: '
+                    f"reason={payload.get('reason_code', 'UNKNOWN')} "
+                    f"type={payload.get('message_type', 'UNKNOWN')}"
                 )
                 continue
             if payload.get('type') in ('emergency_request', 'clear_emergency'):

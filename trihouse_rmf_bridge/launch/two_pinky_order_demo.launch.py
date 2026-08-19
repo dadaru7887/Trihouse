@@ -10,8 +10,10 @@
 """
 
 import os
+import re
 from pathlib import Path
 
+import xacro
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
@@ -27,14 +29,12 @@ from launch.actions import (
 from launch.conditions import IfCondition
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import (
-    Command,
     EnvironmentVariable,
     LaunchConfiguration,
     PathJoinSubstitution,
 )
 from launch_ros.actions import Node, PushRosNamespace
 from launch_ros.parameter_descriptions import ParameterValue
-from launch_ros.substitutions import FindPackageShare
 
 
 # Control Tower가 고정한 Pinky <-> 충전기 결속. 이 표는 운영 정책이며
@@ -166,6 +166,44 @@ def charger_graph_names(features_path: Path) -> dict[str, str]:
     }
 
 
+def _robot_description(namespace: str) -> str:
+    """xacro 를 펼치고 `<gazebo reference>` 의 링크 접두사만 벗긴다.
+
+    `pinky.urdf.xacro` 는 joint 이름에만 `${namespace}` 를 붙이고 link 이름에는
+    붙이지 않는다. 그런데 `pinky_gz.urdf.xacro` 는 링크를
+    `${namespace}rplidar_link` 로 참조한다. 가리키는 링크가 없으므로 sdformat 이
+    URDF 를 SDF 로 바꿀 때 그 `<gazebo>` 블록을 **조용히 버린다** — 오류도 경고도
+    없다. 그 결과 라이다·IMU·카메라가 Gazebo 에 아예 생기지 않고, 바퀴 마찰
+    설정도 사라진다. 스캔이 없으면 AMCL 이 map->odom 을 내지 못하고, `map`
+    프레임이 없어 global_costmap 이 활성화에 실패하며, planner_server 가 죽어
+    Nav2 navigation lifecycle 전체가 중단된다.
+
+    `pinky_pro` 는 고정된 서브모듈이자 읽기 전용 자산이므로 원본을 고치지 않고
+    펼친 결과에서만 되돌린다. **링크를 가리키는 참조만** 벗긴다 —
+    `robot_lamp_mount_fixed_joint` 처럼 joint 를 가리키는 참조는 접두사가 붙어
+    있는 것이 맞으므로 그대로 둔다.
+    """
+    source = (
+        Path(get_package_share_directory("pinky_description"))
+        / "urdf"
+        / "robot.urdf.xacro"
+    )
+    document = xacro.process_file(
+        str(source), mappings={"namespace": f"{namespace}/", "is_sim": "True"}
+    )
+    description = document.toxml()
+    link_names = set(re.findall(r'<link name="([^"]+)"', description))
+
+    def _strip(match: "re.Match[str]") -> str:
+        target = match.group(1)
+        bare = target[len(namespace) + 1 :]
+        if target.startswith(f"{namespace}/") and bare in link_names:
+            return f'<gazebo reference="{bare}"'
+        return match.group(0)
+
+    return re.sub(r'<gazebo reference="([^"]+)"', _strip, description)
+
+
 def _robot_group(
     context,
     *,
@@ -207,17 +245,7 @@ def _robot_group(
                 "use_sim_time": use_sim_time,
                 "frame_prefix": f"{namespace}/",
                 "robot_description": ParameterValue(
-                    Command([
-                        "xacro ",
-                        PathJoinSubstitution([
-                            FindPackageShare("pinky_description"),
-                            "urdf",
-                            "robot.urdf.xacro",
-                        ]),
-                        f" namespace:={namespace}/",
-                        " is_sim:=True",
-                    ]),
-                    value_type=str,
+                    _robot_description(namespace), value_type=str
                 ),
             }],
             # nav2 는 TF 를 전역 `/tf` 에서 읽지 않는다. `nav2_bringup` 이 모든

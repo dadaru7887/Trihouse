@@ -98,6 +98,78 @@ class _TeamAApi implements FmsApi {
   );
 
   @override
+  Future<List<JobSummaryDto>> listJobs() async => [
+    JobSummaryDto(
+      jobId: 18,
+      jobCode: 'OUT-0018',
+      operationType: 'outbound',
+      priority: 'normal',
+      state: 'running',
+      dueAt: DateTime(2026, 8, 19, 12),
+      assignedMobileId: 'PK_01',
+      itemCount: 1,
+      stepCount: 7,
+    ),
+    JobSummaryDto(
+      jobId: 17,
+      jobCode: 'OUT-0017',
+      operationType: 'outbound',
+      priority: 'normal',
+      state: 'cancelled',
+      dueAt: null,
+      assignedMobileId: 'PK_02',
+      itemCount: 1,
+      stepCount: 7,
+    ),
+  ];
+
+  @override
+  Future<List<DeviceDto>> listDevices() async => [
+    DeviceDto(
+      deviceId: 'PK_01',
+      deviceType: 'mobile',
+      name: 'Pinky-Pro #1',
+      controlMode: 'automatic',
+      state: 'idle',
+      health: 'ok',
+      batteryPct: 100.0,
+      observedAt: DateTime(2026, 8, 19, 11, 49),
+    ),
+    DeviceDto(
+      deviceId: 'PK_02',
+      deviceType: 'mobile',
+      name: 'Pinky-Pro #2',
+      controlMode: 'automatic',
+      state: 'idle',
+      health: 'degraded',
+      batteryPct: 88.0,
+      observedAt: DateTime(2026, 8, 19, 11, 49),
+    ),
+    DeviceDto(
+      deviceId: 'OMX_01',
+      deviceType: 'arm',
+      name: 'OMX-AI #1',
+      controlMode: 'automatic',
+      state: 'idle',
+      health: 'ok',
+      batteryPct: null,
+      observedAt: DateTime(2026, 8, 3, 9),
+    ),
+  ];
+
+  @override
+  Future<List<ReservationAnomalyDto>> listAnomalies() async => [
+    ReservationAnomalyDto(
+      correlationUuid: 'f2b1c0de-0000-4000-8000-000000000001',
+      jobId: 18,
+      deviceId: 'PK_01',
+      occurredAt: DateTime(2026, 8, 19, 11, 50),
+      message: '예약이 만료됐습니다.',
+      payload: null,
+    ),
+  ];
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
@@ -114,12 +186,40 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('운영 대시보드'), findsOneWidget);
-    expect(find.text('실시간 운영 맵'), findsOneWidget);
+    expect(find.text('진행 중인 작업'), findsOneWidget);
     expect(find.text('최근 작업 활동'), findsOneWidget);
     expect(find.text('빠른 실행'), findsOneWidget);
     expect(find.text('재고'), findsOneWidget);
     expect(find.text('MILK-1L'), findsOneWidget);
     expect(find.text('가용 12 · 예약 3'), findsOneWidget);
+
+    // 지표는 원장에서 온 값이어야 한다. 예전에는 셋 다 '—' 로 박혀 있었다.
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('metric-robots')),
+        matching: find.text('1/2'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('metric-open-jobs')),
+        matching: find.text('1'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('metric-anomalies')),
+        matching: find.text('1'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('—'), findsNothing);
+
+    // 작업 목록이 원장의 job 을 그대로 보여 준다.
+    expect(find.textContaining('OUT-0018'), findsOneWidget);
+    expect(find.text('실시간'), findsOneWidget);
 
     await tester.tap(find.text('맵 관리'));
     await tester.pumpAndSettle();
@@ -137,10 +237,46 @@ void main() {
     expect(find.text('PK_01'), findsWidgets);
     expect(find.text('브라우저 진단 모델'), findsOneWidget);
 
+    // 등록된 장비 전부가 보여야 한다. 예전에는 마지막 이벤트에 실린 하나만 보였다.
+    expect(find.byKey(const Key('device-PK_01')), findsOneWidget);
+    expect(find.byKey(const Key('device-PK_02')), findsOneWidget);
+    expect(find.text('100%'), findsOneWidget);
+    expect(find.text('88%'), findsOneWidget);
+
+    // 로봇팔은 목록 아래쪽이라 스크롤해야 만들어진다. 주행 로봇만이 아니라
+    // 등록된 장비 전부가 같은 명부에 실린다는 것을 확인한다.
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('device-OMX_01')),
+      120,
+      scrollable: find
+          .ancestor(
+            of: find.byKey(const Key('device-PK_01')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('device-OMX_01')), findsOneWidget);
+
     await tester.tap(find.text('작업'));
     await tester.pumpAndSettle();
     expect(find.text('작업 관리'), findsOneWidget);
     expect(find.text('Gateway 작업 조회'), findsOneWidget);
+
+    // 원장의 작업이 목록으로 보여야 한다. 예전에는 Job ID 를 외워 타이핑하지
+    // 않으면 아무것도 볼 수 없었다.
+    expect(find.byKey(const Key('job-row-18')), findsOneWidget);
+    expect(find.byKey(const Key('job-row-17')), findsOneWidget);
+
+    // 목록에서 골라도 ID 조회와 같은 상세로 간다.
+    await tester.tap(find.byKey(const Key('job-row-18')));
+    await tester.pumpAndSettle();
+    expect(find.text('OUT-18'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('back-to-job-list')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('job-row-18')), findsOneWidget);
+
     await tester.enterText(find.byKey(const Key('job-id-field')), '42');
     await tester.tap(find.text('작업 조회'));
     await tester.pumpAndSettle();

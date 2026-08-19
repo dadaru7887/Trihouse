@@ -4,12 +4,15 @@ import asyncio
 from dataclasses import dataclass
 import inspect
 import json
+import logging
 import math
 from typing import Any, Collection, Mapping
 from uuid import UUID
 
 
 SCHEMA_VERSION = 3
+
+logger = logging.getLogger(__name__)
 
 
 class ProtocolRejected(ValueError):
@@ -51,6 +54,11 @@ class ProtocolSession:
         self._robot_id: str | None = None
         self._session_id: str | None = None
         self._last_sequence = 0
+
+    @property
+    def robot_id(self) -> str | None:
+        """hello로 묶인 로봇. 거절 로그가 어느 연결인지 가리키게 한다."""
+        return self._robot_id
 
     def process(self, message: Mapping[str, Any]) -> ProcessedMessage:
         """연결 상태에 따라 hello를 강제하고 이후 메시지를 종류별 검증한다."""
@@ -247,19 +255,21 @@ class TcpIngestionServer:
         if inspect.isawaitable(registered):
             registered = await registered
         session = ProtocolSession(registered)
+        peer = writer.get_extra_info("peername")
         try:
             # StreamReader limit과 명시적 길이 검사로 메모리 사용을 제한한다.
             while True:
                 try:
                     line = await reader.readline()
                 except (ValueError, asyncio.LimitOverrunError):
-                    await self._write(writer, {"type": "event_rejected", "reason_code": "LINE_TOO_LARGE"})
+                    await self._reject_line(writer, "LINE_TOO_LARGE", None, session, peer)
                     break
                 if not line:
                     break
                 if len(line) > self._max_line_bytes:
-                    await self._write(writer, {"type": "event_rejected", "reason_code": "LINE_TOO_LARGE"})
+                    await self._reject_line(writer, "LINE_TOO_LARGE", None, session, peer)
                     break
+                message: object = None
                 try:
                     message = json.loads(line.decode("utf-8"))
                     if not isinstance(message, dict):
@@ -276,15 +286,45 @@ class TcpIngestionServer:
                         response["event_id"] = processed.payload["event_id"]
                     await self._write(writer, response)
                 except (UnicodeDecodeError, json.JSONDecodeError):
-                    await self._write(writer, {"type": "event_rejected", "reason_code": "SCHEMA_INVALID"})
+                    await self._reject_line(writer, "SCHEMA_INVALID", None, session, peer)
                 except ProtocolRejected as error:
-                    response = {"type": "event_rejected", "reason_code": str(error)}
-                    if isinstance(message, dict) and isinstance(message.get("event_id"), str):
-                        response["event_id"] = message["event_id"]
-                    await self._write(writer, response)
+                    await self._reject_line(writer, str(error), message, session, peer)
         finally:
             writer.close()
             await writer.wait_closed()
+
+    async def _reject_line(
+        self,
+        writer: asyncio.StreamWriter,
+        reason_code: str,
+        message: object,
+        session: "ProtocolSession",
+        peer: object,
+    ) -> None:
+        """거절 사유와 함께 **어떤 메시지가** 거절됐는지를 응답과 로그 양쪽에 남긴다.
+
+        거절 사유만으로는 원인을 찾을 수 없다. 로봇 쪽은 모든 거절을 같은 한 문장으로
+        적고(`gateway_node.py` 의 `_drain`) Gateway 는 지금까지 아무것도 남기지 않아서,
+        `MESSAGE_TYPE_UNSUPPORTED` 가 수십 건 쌓여도 어떤 메시지가 걸렸는지 알 수
+        없었다. `message_type` 은 그 물음에 답하기 위한 것이며, 로봇도 이것을 받아
+        자기 로그에 적는다.
+        """
+        response: dict[str, object] = {"type": "event_rejected", "reason_code": reason_code}
+        message_type: object = None
+        if isinstance(message, dict):
+            message_type = message.get("type")
+            if isinstance(message_type, str):
+                response["message_type"] = message_type
+            if isinstance(message.get("event_id"), str):
+                response["event_id"] = message["event_id"]
+        logger.warning(
+            "robot message rejected: reason=%s type=%r robot=%r peer=%r",
+            reason_code,
+            message_type,
+            session.robot_id,
+            peer,
+        )
+        await self._write(writer, response)
 
     @staticmethod
     async def _write(writer: asyncio.StreamWriter, response: dict[str, object]) -> None:

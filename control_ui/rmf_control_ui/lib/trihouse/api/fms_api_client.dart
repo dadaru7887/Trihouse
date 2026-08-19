@@ -363,6 +363,63 @@ class FmsApiClient implements FmsApi {
   }
 
   @override
+  Future<List<JobSummaryDto>> listJobs() async {
+    const operation = 'GET jobs';
+    final response = await _sendJson('GET', '/api/v1/jobs');
+    try {
+      return List.unmodifiable(
+        _objects(response, operation).map(JobSummaryDto.fromJson),
+      );
+    } on FmsApiException {
+      rethrow;
+    } catch (error) {
+      throw _invalidResponse(
+        operation,
+        response.request?.url ?? baseUri,
+        error,
+      );
+    }
+  }
+
+  @override
+  Future<List<DeviceDto>> listDevices() async {
+    const operation = 'GET devices';
+    final response = await _sendJson('GET', '/api/v1/devices');
+    try {
+      return List.unmodifiable(
+        _objects(response, operation).map(DeviceDto.fromJson),
+      );
+    } on FmsApiException {
+      rethrow;
+    } catch (error) {
+      throw _invalidResponse(
+        operation,
+        response.request?.url ?? baseUri,
+        error,
+      );
+    }
+  }
+
+  @override
+  Future<List<ReservationAnomalyDto>> listAnomalies() async {
+    const operation = 'GET operations anomalies';
+    final response = await _sendJson('GET', '/api/v1/operations/anomalies');
+    try {
+      return List.unmodifiable(
+        _objects(response, operation).map(ReservationAnomalyDto.fromJson),
+      );
+    } on FmsApiException {
+      rethrow;
+    } catch (error) {
+      throw _invalidResponse(
+        operation,
+        response.request?.url ?? baseUri,
+        error,
+      );
+    }
+  }
+
+  @override
   Future<List<MapProjectSummaryDto>> listMapProjects() async {
     const operation = 'GET map projects';
     final response = await _sendJson('GET', '/api/v1/map-projects');

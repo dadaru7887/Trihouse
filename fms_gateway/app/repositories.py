@@ -305,6 +305,34 @@ class PublishedMapProjectDeleteConflict(Exception):
     pass
 
 
+# 종료 navigation_state — 2 도착, 3 취소, 4 실패. 이 상태의 스냅샷만 증거가 된다.
+TERMINAL_NAVIGATION_STATES = frozenset({2, 3, 4})
+
+
+def _terminal_evidence_matches(
+    evidence: dict[str, Any], *, event: dict[str, Any], context: dict[str, Any]
+) -> bool:
+    """이 이벤트의 증거로 쓸 수 있는 스냅샷인지 본다.
+
+    같은 session, 같은 지도 revision, 같은 실행 문맥에서 나온 것이어야 한다.
+    증거가 아예 없으면(로봇이 종료 상태를 보고한 적이 없으면) 통과시키지 않는다 —
+    도착을 주장만 하고 증거를 못 내는 경우다.
+
+    신선도는 시각으로 재지 않는다. 증거는 `job_step_attempts` 의 그 명령 행에만
+    적히고 재시도는 새 행이 되므로, 다른 구간이나 지난 회차의 증거가 흘러들 수
+    없다. 시계 동기에 기대지 않는 편이 실물에서 재현 가능하다.
+    """
+    if not evidence:
+        return False
+    if evidence.get("navigation_state") not in TERMINAL_NAVIGATION_STATES:
+        return False
+    return (
+        evidence.get("session_id") == event.get("session_id")
+        and evidence.get("map_revision") == context["map_revision"]
+        and evidence.get("task_context") == context
+    )
+
+
 MAP_PROJECT_SOURCE_TYPES = frozenset(
     {"slam_yaml", "slam_image", "floor_plan", "physical_features_import"}
 )
@@ -2389,6 +2417,34 @@ class MySqlFmsRepository:
                         json.dumps(details, ensure_ascii=False),
                     ),
                 )
+                # 종료 상태의 스냅샷은 그 명령의 attempt 에도 남긴다.
+                #
+                # `device_states` 는 로봇당 한 줄이라 다음 상태가 오면 덮인다.
+                # 그런데 RMF 는 도착 보고 18ms 뒤에 다음 구간을 지시하므로, 도착
+                # 이벤트가 처리될 시점의 그 줄은 이미 "주행중" 이다. 도착을 낸
+                # 그 순간의 증거가 없으면 정상 도착이 거절된다(2026-08-19 실측).
+                #
+                # `after_observation` 은 "실행 후 관측된 상태" 를 담도록 이미
+                # 스키마에 있던 자리다. 명령당 한 행이고(`uq_attempts_command`)
+                # 재시도는 새 행이 되므로 증거가 다른 구간으로 새지 않는다.
+                if (
+                    status["navigation_state"] in TERMINAL_NAVIGATION_STATES
+                    and context["active"]
+                ):
+                    cursor.execute(
+                        """
+                        UPDATE job_step_attempts
+                        SET after_observation = %s
+                        WHERE command_uuid = %s AND job_step_id = %s
+                          AND assignment_revision = %s
+                        """,
+                        (
+                            json.dumps(details, ensure_ascii=False),
+                            context["command_id"],
+                            context["job_step_id"],
+                            context["assignment_revision"],
+                        ),
+                    )
                 connection.commit()
             finally:
                 cursor.close()
@@ -2421,7 +2477,8 @@ class MySqlFmsRepository:
                     SELECT js.job_id, js.job_step_id, js.assignment_revision,
                            js.assigned_device_id, js.rmf_task_id, js.state,
                            attempt.attempt_uuid, attempt.state AS attempt_state,
-                           attempt.parameters AS attempt_parameters
+                           attempt.parameters AS attempt_parameters,
+                           attempt.after_observation AS attempt_after_observation
                     FROM job_steps js
                     LEFT JOIN job_step_attempts attempt
                       ON attempt.job_step_id = js.job_step_id
@@ -2461,25 +2518,37 @@ class MySqlFmsRepository:
                 ):
                     raise RuntimeContextConflict
                 if event["event_type"] != "started":
-                    cursor.execute(
-                        """
-                        SELECT observed_at, details,
-                               TIMESTAMPDIFF(MICROSECOND, observed_at, NOW(6)) AS age_us
-                        FROM device_states WHERE device_id = %s FOR UPDATE
-                        """,
-                        (event["robot_id"],),
-                    )
-                    status = cursor.fetchone()
-                    status_details = _json(status["details"]) if status else {}
-                    if (
-                        status is None
-                        or int(status["age_us"]) < 0
-                        or int(status["age_us"]) > 2_000_000
-                        or status_details.get("session_id") != event.get("session_id")
-                        or status_details.get("map_revision") != context["map_revision"]
-                        or status_details.get("task_context") != context
-                    ):
-                        raise RuntimeContextConflict
+                    # 판정은 **그 명령이 종료 상태를 보고한 그 순간의 스냅샷**으로
+                    # 한다. 살아 있는 `device_states` 를 보면 다음 구간이 이미
+                    # 시작된 뒤라 정상 도착도 거절된다(위 ingest_robot_status 주석).
+                    #
+                    # 증거가 없으면 종전대로 최신 상태를 본다. 그래야 종료 상태를
+                    # 보고한 적도 없이 도착을 주장하는 경우가 **거절이 아니라
+                    # `failed` 로 원장에 남는다** — 거절하면 step 이 running 에
+                    # 갇혀 아무도 그것을 닫지 않는다.
+                    evidence = _json(step.get("attempt_after_observation")) or {}
+                    if _terminal_evidence_matches(evidence, event=event, context=context):
+                        status_details = evidence
+                    else:
+                        cursor.execute(
+                            """
+                            SELECT observed_at, details,
+                                   TIMESTAMPDIFF(MICROSECOND, observed_at, NOW(6)) AS age_us
+                            FROM device_states WHERE device_id = %s FOR UPDATE
+                            """,
+                            (event["robot_id"],),
+                        )
+                        status = cursor.fetchone()
+                        status_details = _json(status["details"]) if status else {}
+                        if (
+                            status is None
+                            or int(status["age_us"]) < 0
+                            or int(status["age_us"]) > 2_000_000
+                            or status_details.get("session_id") != event.get("session_id")
+                            or status_details.get("map_revision") != context["map_revision"]
+                            or status_details.get("task_context") != context
+                        ):
+                            raise RuntimeContextConflict
                 transition = {
                     "started": ("running", "navigation.segment.started"),
                     "arrived": ("succeeded", "navigation.waypoint.arrived"),
@@ -6000,6 +6069,9 @@ class InMemoryFmsRepository:
         self._next_event_id = 1
         self._operation_events: list[dict[str, Any]] = []
         self._device_states: dict[str, dict[str, Any]] = {}
+        # (job_step_id, assignment_revision, command_id) -> 종료 상태 스냅샷.
+        # MySQL 의 `job_step_attempts.after_observation` 에 대응한다.
+        self._terminal_evidence: dict[tuple[int, int, str], dict[str, Any]] = {}
         self._task_events: dict[str, dict[str, Any]] = {}
         self._map_projects: dict[str, dict[str, Any]] = {}
         self._map_publish_lock = threading.RLock()
@@ -6474,6 +6546,14 @@ class InMemoryFmsRepository:
                 "received_at": datetime.now(SEOUL),
             },
         }
+        # MySQL 구현이 `job_step_attempts.after_observation` 에 남기는 것과 같은
+        # 증거를 여기서도 명령별로 보관한다. 두 구현이 어긋나면 테스트는 통과하고
+        # 운영만 실패한다.
+        context = status["task_context"]
+        if status["navigation_state"] in TERMINAL_NAVIGATION_STATES and context["active"]:
+            self._terminal_evidence[
+                (context["job_step_id"], context["assignment_revision"], context["command_id"])
+            ] = deepcopy(self._device_states[status["robot_id"]]["details"])
 
     def get_device_state(self, robot_id: str) -> dict[str, Any] | None:
         state = self._device_states.get(robot_id)
@@ -6500,18 +6580,29 @@ class InMemoryFmsRepository:
             raise RuntimeContextConflict
         if event["event_type"] in {"failed", "canceled"} and step["state"] not in {"pending", "running"}:
             raise RuntimeContextConflict
+        details: dict[str, Any] = {}
         if event["event_type"] != "started":
-            status = self._device_states.get(event["robot_id"])
-            details = status.get("details", {}) if status else {}
-            received_at = details.get("received_at")
-            if (
-                details.get("session_id") != event.get("session_id")
-                or details.get("map_revision") != context["map_revision"]
-                or details.get("task_context") != context
-                or not isinstance(received_at, datetime)
-                or (datetime.now(SEOUL) - received_at).total_seconds() > 2.0
-            ):
-                raise RuntimeContextConflict
+            # 살아 있는 상태가 아니라 그 명령이 종료 상태를 보고한 스냅샷으로
+            # 판정한다. 증거가 없으면 종전대로 최신 상태를 본다. MySQL 구현과
+            # 같은 규칙이다.
+            evidence = self._terminal_evidence.get(
+                (context["job_step_id"], context["assignment_revision"], context["command_id"]),
+                {},
+            )
+            if _terminal_evidence_matches(evidence, event=event, context=context):
+                details = evidence
+            else:
+                status = self._device_states.get(event["robot_id"])
+                details = status.get("details", {}) if status else {}
+                received_at = details.get("received_at")
+                if (
+                    details.get("session_id") != event.get("session_id")
+                    or details.get("map_revision") != context["map_revision"]
+                    or details.get("task_context") != context
+                    or not isinstance(received_at, datetime)
+                    or (datetime.now(SEOUL) - received_at).total_seconds() > 2.0
+                ):
+                    raise RuntimeContextConflict
         state, event_type = {
             "started": ("running", "navigation.segment.started"),
             "arrived": ("succeeded", "navigation.waypoint.arrived"),

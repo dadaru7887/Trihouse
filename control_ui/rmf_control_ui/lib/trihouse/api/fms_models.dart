@@ -416,6 +416,124 @@ class OutboundOrderDto {
   final int outstandingQuantity;
 }
 
+/// `GET /api/v1/jobs` 의 한 줄. 대시보드와 작업 목록이 같은 형을 쓴다.
+class JobSummaryDto {
+  const JobSummaryDto({
+    required this.jobId,
+    required this.jobCode,
+    required this.operationType,
+    required this.priority,
+    required this.state,
+    required this.dueAt,
+    required this.assignedMobileId,
+    required this.itemCount,
+    required this.stepCount,
+  });
+
+  factory JobSummaryDto.fromJson(JsonObject json) => JobSummaryDto(
+    jobId: json['job_id'] as int,
+    jobCode: json['job_code'] as String,
+    operationType: json['operation_type'] as String,
+    priority: json['priority'] as String,
+    state: json['state'] as String,
+    dueAt: _optionalDateTime(json['due_at']),
+    assignedMobileId: json['assigned_mobile_id'] as String?,
+    itemCount: json['item_count'] as int,
+    stepCount: json['step_count'] as int,
+  );
+
+  final int jobId;
+  final String jobCode;
+  final String operationType;
+  final String priority;
+  final String state;
+  final DateTime? dueAt;
+  final String? assignedMobileId;
+  final int itemCount;
+  final int stepCount;
+
+  /// 원장이 아직 닫지 않은 작업. 대시보드의 "진행 작업" 은 이것을 센다.
+  static const Set<String> openStates = {
+    'queued',
+    'assigned',
+    'running',
+    'held',
+  };
+
+  bool get isOpen => openStates.contains(state);
+}
+
+/// `GET /api/v1/devices` 의 한 줄. 주행 로봇과 로봇팔이 같은 표에 실린다.
+class DeviceDto {
+  const DeviceDto({
+    required this.deviceId,
+    required this.deviceType,
+    required this.name,
+    required this.controlMode,
+    required this.state,
+    required this.health,
+    required this.batteryPct,
+    required this.observedAt,
+  });
+
+  factory DeviceDto.fromJson(JsonObject json) => DeviceDto(
+    deviceId: json['device_id'] as String,
+    deviceType: json['device_type'] as String,
+    name: json['name'] as String,
+    controlMode: json['control_mode'] as String,
+    state: json['state'] as String?,
+    health: json['health'] as String?,
+    // 정수로 오는 배터리도 받아들인다. JSON 은 100 과 100.0 을 구분하지 않는다.
+    batteryPct: (json['battery_pct'] as num?)?.toDouble(),
+    observedAt: _optionalDateTime(json['observed_at']),
+  );
+
+  final String deviceId;
+  final String deviceType;
+  final String name;
+  final String controlMode;
+  final String? state;
+  final String? health;
+  final double? batteryPct;
+  final DateTime? observedAt;
+
+  bool get isMobile => deviceType == 'mobile';
+
+  /// 운영 중으로 볼 수 있는 장비. `health` 를 모르는 장비는 세지 않는다.
+  bool get isOperational => health == 'ok';
+}
+
+/// `GET /api/v1/operations/anomalies` 의 한 줄. 아직 확인되지 않은 예약 이상.
+class ReservationAnomalyDto {
+  const ReservationAnomalyDto({
+    required this.correlationUuid,
+    required this.jobId,
+    required this.deviceId,
+    required this.occurredAt,
+    required this.message,
+    required this.payload,
+  });
+
+  factory ReservationAnomalyDto.fromJson(JsonObject json) =>
+      ReservationAnomalyDto(
+        correlationUuid: json['correlation_uuid'] as String,
+        jobId: json['job_id'] as int?,
+        deviceId: json['device_id'] as String?,
+        occurredAt: DateTime.parse(json['occurred_at'] as String),
+        message: json['message'] as String?,
+        payload: json['payload'] == null
+            ? null
+            : _immutableJsonObject(json['payload']),
+      );
+
+  final String correlationUuid;
+  final int? jobId;
+  final String? deviceId;
+  final DateTime occurredAt;
+  final String? message;
+  final JsonObject? payload;
+}
+
 class JobDetailDto {
   JobDetailDto({
     required this.jobId,

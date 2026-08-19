@@ -92,11 +92,39 @@ if robot_name and row["message_id"] and row["message_state"] == "sent":
 
 | 후보 | 무엇 | 왜 안 고쳤나 |
 |---|---|---|
-| **D19** | Gateway 가 로봇 메시지를 `MESSAGE_TYPE_UNSUPPORTED` 로 거절 (이전 세대 로그에 42건) | **근본 원인을 확정하지 못했다.** 로봇이 `command_ack`·`command_rejected` 를 보내는데 `tcp_protocol.py:66-73` 이 그 타입을 모른다. 그런데 그 두 메시지에는 `session_id` 가 없어 순서상 `SESSION_ID_MISMATCH` 가 먼저 나야 한다(`:64`). 로그는 그렇게 말하지 않는다 — **모순이 남아 있다.** 추측으로 고치면 안 된다 |
+| **D19** | Gateway 가 로봇 메시지를 `MESSAGE_TYPE_UNSUPPORTED` 로 거절 (이전 세대 로그에 42건) | **근본 원인은 여전히 미확정이지만, `command_ack` 가설은 반증됐다** — 아래 정정 참고. 진단 수단을 먼저 넣었으므로 다음 실행에서 한 번에 확정된다 |
 | **D21** | `execution_command` 가 `HTTP 409 Conflict` 로 5회 실패 | 409 가 **결함인지 정상 동작인지** 모른다. D11-a 가 멱등키를 `rmf:{task}:robot:{robot}:rev:{revision}` 로 바꿨으므로, 같은 revision 에서 두 번 쓰면 409 가 **맞는 동작**일 수 있다. 그렇다면 고칠 곳은 409 가 아니라 그것을 재시도로 처리하는 쪽이다 |
 
 **둘 다 이번 실행에서 다시 나오는지 봐야 한다.** 두 증거 모두 이전 세대 로그에
 있었고 그 로그는 재기동으로 지워졌다. **이번 실행이 곧 재현 시험이다.**
+
+### 정정 (2026-08-19) — D19 의 `command_ack` 가설은 반증됐다
+
+세 가지가 코드로 확인됐다.
+
+1. **로봇 쪽 로그는 어떤 메시지가 걸렸는지 말해 주지 않는다.** `FMS rejected
+   telemetry/event` 는 `classify_gateway_response` 가 `event_rejected` 로 분류한
+   **모든** 거절에 대해 찍힌다(`gateway_node.py` 의 `_drain`). 원래 메시지 종류와
+   무관하다. 이 로그를 근거로 메시지 종류를 추정한 것이 두 문서의 공통 실수다.
+2. **`command_ack`·`command_rejected` 는 `MESSAGE_TYPE_UNSUPPORTED` 를 낼 수 없다.**
+   `_hello` 가 `session_id` 를 필수로 받아 `_uuid()` 로 정규화하므로 `_session_id` 는
+   절대 `None` 이 아니다. 따라서 `session_id` 를 싣지 않는 그 두 메시지는 타입 판정에
+   닿기 전에 `SESSION_ID_MISMATCH` 로 걸린다. 위 표가 적어 둔 모순의 답이 이것이다.
+   `test_rejection_names_the_offending_message_type_in_response_and_log` 가 두 경로를
+   각각 실행해 이 사실을 고정한다.
+3. **Gateway 는 거절을 아무 데도 남기지 않았다.** 응답만 보내고 서버 로그도 DB 기록도
+   없었다. 그래서 42건이 쌓여도 되짚을 수단이 없었다.
+
+3번을 고쳤다. 이제 Gateway 는 거절할 때마다 사유·**메시지 종류**·robot·peer 를
+`WARNING` 으로 남기고, 같은 `message_type` 을 `event_rejected` 응답에도 실어 로봇 쪽
+로그에도 뜨게 한다. **다음 실행에서 `MESSAGE_TYPE_UNSUPPORTED` 가 다시 나오면 어떤
+타입인지 로그가 직접 말한다.** 추측할 필요가 없어졌다.
+
+> **번호 충돌 주의.** 정본인 `p0-stack-reference.md` 10절은 `D19` 를 "원장 밖의 이동이
+> 어댑터를 무한 루프에 빠뜨린다", `D20` 을 "다른 세션이 시뮬을 서로 죽인다" 로 이미
+> 쓰고 있다. 이 문서와 `2026-08-19-p0-scope-status-and-next.md` 의 D19~D22 는 그와 다른
+> 결함이며 아직 정본 번호를 받지 못했다. 정본의 다음 빈 번호는 **D21** 부터다.
+> 번호를 확정하기 전에는 이 문서들의 D19~D22 를 정본 번호로 인용하지 않는다.
 
 그리고 **로봇은 이 둘이 있는 상태에서도 주행했다.** 완주를 직접 막는 것이 아닐
 가능성이 있다.

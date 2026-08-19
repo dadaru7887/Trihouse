@@ -239,9 +239,12 @@ def test_tcp_server_acknowledges_ndjson_and_rejects_bad_schema():
     assert event_ack["type"] == "ack"
     assert event_ack["action"] == "task_event"
     assert isinstance(event_ack["event_id"], str)
+    # 거절 응답은 사유와 함께 **무엇이** 거절됐는지 싣는다. 로봇 쪽 로그가 모든
+    # 거절을 한 문장으로 적기 때문에, 이것이 없으면 원인을 되짚을 수 없다.
     assert rejection == {
         "type": "event_rejected",
         "reason_code": "ROBOT_ID_MISMATCH",
+        "message_type": "robot_status",
     }
     assert [message.action for message in accepted] == [
         "hello_accepted",
@@ -249,6 +252,82 @@ def test_tcp_server_acknowledges_ndjson_and_rejects_bad_schema():
         "robot_status",
         "task_event",
     ]
+
+
+def test_rejection_names_the_offending_message_type_in_response_and_log(caplog):
+    """거절이 **무엇을** 거절했는지 남기는지 확인한다.
+
+    이것이 없던 동안 `MESSAGE_TYPE_UNSUPPORTED` 42건의 원인을 찾지 못했다. 로봇 쪽
+    로그는 모든 거절을 같은 문장으로 적고, Gateway 는 아무것도 남기지 않았기 때문이다.
+
+    같은 테스트가 두 후보를 구분한다. `session_id` 가 없는 메시지는 타입 판정에
+    닿기 전에 `SESSION_ID_MISMATCH` 로 걸리므로, `command_ack` 는
+    `MESSAGE_TYPE_UNSUPPORTED` 의 원인이 될 수 없다.
+    """
+
+    async def scenario():
+        server = TcpIngestionServer(
+            host="127.0.0.1",
+            port=0,
+            registered_robot_ids=lambda: {"PK_01"},
+            on_message=lambda processed: None,
+        )
+        await server.start()
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", server.port)
+            writer.write((json.dumps(hello()) + "\n").encode())
+            await writer.drain()
+            await reader.readline()
+
+            # session_id 를 싣지 않는 메시지 — 로봇의 command_ack 가 이 모양이다.
+            writer.write(
+                (json.dumps({"type": "command_ack", "robot_id": "PK_01"}) + "\n").encode()
+            )
+            await writer.drain()
+            without_session = json.loads(await reader.readline())
+
+            # 신원은 온전하고 타입만 모르는 메시지.
+            writer.write(
+                (
+                    json.dumps(
+                        {
+                            "type": "telemetry",
+                            "schema_version": 3,
+                            "robot_id": "PK_01",
+                            "session_id": SESSION_ID,
+                        }
+                    )
+                    + "\n"
+                ).encode()
+            )
+            await writer.drain()
+            unknown_type = json.loads(await reader.readline())
+
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            await server.stop()
+        return without_session, unknown_type
+
+    with caplog.at_level("WARNING", logger="fms_gateway.app.tcp_protocol"):
+        without_session, unknown_type = asyncio.run(scenario())
+
+    assert without_session == {
+        "type": "event_rejected",
+        "reason_code": "SESSION_ID_MISMATCH",
+        "message_type": "command_ack",
+    }
+    assert unknown_type == {
+        "type": "event_rejected",
+        "reason_code": "MESSAGE_TYPE_UNSUPPORTED",
+        "message_type": "telemetry",
+    }
+
+    # 로그만 보고도 어느 로봇의 어떤 메시지가 걸렸는지 알 수 있어야 한다.
+    rejected = [record.getMessage() for record in caplog.records]
+    assert any("MESSAGE_TYPE_UNSUPPORTED" in line and "telemetry" in line for line in rejected)
+    assert any("SESSION_ID_MISMATCH" in line and "command_ack" in line for line in rejected)
+    assert all("PK_01" in line for line in rejected)
 
 
 def test_repository_ingestion_projects_status_and_terminal_task_event():
@@ -478,3 +557,97 @@ def test_arrived_with_active_motion_facts_does_not_succeed():
     })
 
     assert repository.get_job(1)["steps"][0]["state"] == "failed"
+
+
+def test_arrival_is_judged_on_the_snapshot_the_robot_reported_at_arrival():
+    """도착 뒤 다음 구간이 시작돼도 그 도착은 성립한다.
+
+    ## 왜
+
+    RMF 는 도착 보고 **18 ms 뒤**에 다음 구간을 지시한다(2026-08-19 실측).
+    로봇이 다시 움직이기 시작하면 `device_states` 의 그 한 줄은 곧바로
+    "주행중" 으로 덮인다. 도착 이벤트를 **살아 있는 최신 상태**로 판정하면,
+    로봇이 제대로 도착했는데도 `navigation_state != 2` 라서 거절된다.
+
+    실측에서 step 20 이 이렇게 죽었다 — 로봇은 두 구간을 다 정상 주행했고
+    냉동창고 도착도 성공했는데, 원장은 도착 25 초 **전에** 이미
+    `GOAL_TOLERANCE_NOT_MET` 으로 실패를 적었다. 로봇 쪽 정밀 정차 검사는
+    한 번도 실패하지 않았다.
+
+    로봇은 도착 순간의 스냅샷을 이벤트와 짝지어 보낸다
+    (`event_outbox._compatible_status`). 판정은 그 증거를 봐야 한다.
+    """
+    repository = InMemoryFmsRepository()
+    job = repository.create_job(
+        {
+            "job_code": "TCP-JOB-RACE",
+            "operation_type": "outbound",
+            "priority": "normal",
+            "context": {},
+            "steps": [
+                {
+                    "step_no": 1,
+                    "action_type": "navigate",
+                    "executor_type": "mobile",
+                    "target_location_id": 12,
+                    "input": {"waypoint": "PACK-01"},
+                }
+            ],
+        }
+    )
+    step_id = job["steps"][0]["job_step_id"]
+    repository.record_rmf_acceptance(step_id, "rmf-task-race", "PK_01")
+    context = repository.claim_command(
+        "rmf-task-race",
+        {
+            "robot_id": "PK_01",
+            "execution_id": "execution-race",
+            "map_revision": "warehouse:abc123",
+        },
+    )["task_context"]
+
+    repository.ingest_robot_status(status(sequence=9, task_context=context))
+    started = {
+        "type": "task_event",
+        "schema_version": 3,
+        "event_id": str(uuid.uuid4()),
+        "robot_id": "PK_01",
+        "session_id": SESSION_ID,
+        "event_type": "started",
+        "reason_code": "COMMAND_ACCEPTED",
+        "method_code": "NAV2_DEFAULT",
+        "detail": "started",
+        "task_context": context,
+    }
+    repository.ingest_task_event(started)
+
+    # 도착 — 로봇이 서고, 이 스냅샷이 도착의 증거가 된다.
+    repository.ingest_robot_status(
+        status(
+            sequence=10,
+            task_context=context,
+            navigation_state=2,
+            twist={"linear_x_mps": 0.0, "angular_z_rps": 0.0},
+        )
+    )
+    # RMF 가 다음 구간을 지시해 로봇이 다시 움직인다. 도착 이벤트가 서버에
+    # 닿기 전에 이 상태가 같은 줄을 덮는다.
+    repository.ingest_robot_status(
+        status(
+            sequence=11,
+            task_context=context,
+            navigation_state=1,
+            twist={"linear_x_mps": 0.18, "angular_z_rps": 0.0},
+        )
+    )
+
+    arrived = {
+        **started,
+        "event_id": str(uuid.uuid4()),
+        "event_type": "arrived",
+        "reason_code": "WAYPOINT_REACHED",
+        "detail": "arrived",
+    }
+    repository.ingest_task_event(arrived)
+
+    assert repository.get_job(job["job_id"])["steps"][0]["state"] == "succeeded"

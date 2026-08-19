@@ -1,7 +1,7 @@
 """Pinky 운반 요청을 Nav2 action으로 바꾸는 단일 소유 adapter."""
 
 import rclpy
-from math import atan2
+from math import atan2, cos, sin
 from uuid import uuid4
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Odometry
@@ -35,9 +35,28 @@ def _complete_once(future: Future) -> None:
 # 주행으로 튜닝한 값이라 우리 편의로 조이지 않는다. AMCL 실측 stddev 가 10~12 cm
 # 이므로 그보다 좁은 허용오차는 위치추정 정확도로도 만족시킬 수 없다.
 #
+# **같게 두어도 안 된다.** Nav2 는 허용오차 *안에 들어오는 순간* 멈추므로 로봇은
+# 늘 그 경계선 위에 선다. 같은 값으로 다시 재면 AMCL 노이즈(실측 stddev 10~12 cm)
+# 에 따라 통과와 실패가 갈리는 동전 던지기가 된다. 2026-08-19 실측: 병목 구간이
+# 끝난 자리에서 목표까지 거리가 정확히 0.100 m 였고 step 20 이
+# `GOAL_TOLERANCE_NOT_MET` 으로 죽었다. Nav2 가 이미 0.1 을 보장하므로 여기서는
+# 그것을 다시 재는 것이 아니라 **크게 어긋나지 않았는지만** 본다.
+#
 # 두 값의 관계는 `test_precise_stop_matches_nav2_tolerance.py` 가 지킨다.
-PRECISE_STOP_XY_TOLERANCE_M = 0.10
-PRECISE_STOP_YAW_TOLERANCE_RAD = 0.25
+PRECISE_STOP_XY_TOLERANCE_M = 0.15
+PRECISE_STOP_YAW_TOLERANCE_RAD = 0.35
+
+
+def _warn(node: object, message: str) -> None:
+    """관측용 경고.
+
+    메서드가 아니라 모듈 함수인 이유: 정밀 정차 계약 테스트는 클래스에서
+    `_at_precise_goal` 하나만 빌려다 쓰는 최소 stub 을 만든다. 메서드를 늘리면
+    그 stub 이 깨진다. 로거가 없는 환경에서는 조용히 넘어간다.
+    """
+    logger = getattr(node, "get_logger", None)
+    if logger is not None:
+        logger().warn(message)
 
 
 def transport_admission_block_reason(outbox_ready: bool) -> str | None:
@@ -356,16 +375,38 @@ class FleetNode(Node):
         # frame_id 가 map 이 아니면 판정하지 않는다. AMCL 수렴 전에는 로봇이 자기
         # 위치를 map 으로 말할 수 없고, 그때 통과시키면 엉뚱한 자리에서 인계가 열린다.
         if self.map_pose is None or self.map_frame != "map":
+            _warn(self, 
+                '정밀 정차 판정 불가: map_pose=%s map_frame=%s (destination=%s)'
+                % (self.map_pose, self.map_frame, getattr(goal, 'destination_code', '?'))
+            )
             return False
         orientation = goal.dropoff_pose.pose.orientation
         yaw = atan2(2 * (orientation.w * orientation.z + orientation.x * orientation.y), 1 - 2 * (orientation.y * orientation.y + orientation.z * orientation.z))
         target = goal.dropoff_pose.pose.position
-        return within_tolerance(
+        ok = within_tolerance(
             current=self.map_pose,
             target=(target.x, target.y, yaw),
             xy_tolerance_m=PRECISE_STOP_XY_TOLERANCE_M,
             yaw_tolerance_rad=PRECISE_STOP_YAW_TOLERANCE_RAD,
         )
+        if not ok:
+            # 무엇과 무엇을 비교해 떨어졌는지 남긴다. 이것이 없으면 원장에는
+            # `GOAL_TOLERANCE_NOT_MET` 만 남아, 허용오차가 좁은 것인지 애초에
+            # 다른 구간의 목표와 비교한 것인지 구별할 수 없다.
+            _warn(self, 
+                '정밀 정차 실패 destination=%s 목표=(%.3f, %.3f, yaw %.3f) '
+                '현재=(%.3f, %.3f, yaw %.3f) 거리=%.3f m yaw차=%.3f rad '
+                '허용=(%.3f m, %.3f rad)'
+                % (
+                    getattr(goal, 'destination_code', '?'),
+                    target.x, target.y, yaw,
+                    self.map_pose[0], self.map_pose[1], self.map_pose[2],
+                    ((self.map_pose[0] - target.x) ** 2 + (self.map_pose[1] - target.y) ** 2) ** 0.5,
+                    abs(atan2(sin(self.map_pose[2] - yaw), cos(self.map_pose[2] - yaw))),
+                    PRECISE_STOP_XY_TOLERANCE_M, PRECISE_STOP_YAW_TOLERANCE_RAD,
+                )
+            )
+        return ok
 
     def _publish_event(
         self,

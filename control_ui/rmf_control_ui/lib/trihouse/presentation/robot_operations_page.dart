@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../rmf_runtime_models.dart';
@@ -17,12 +19,75 @@ class RobotOperationsPage extends StatefulWidget {
 }
 
 class _RobotOperationsPageState extends State<RobotOperationsPage> {
-  late final Stream<OperationsEventDto> _events;
+  /// 운영 이벤트가 몰려 올 때 장비 명부를 한 번만 다시 받도록 합친다.
+  static const Duration _coalesceWindow = Duration(milliseconds: 400);
+
+  /// 장비 텔레메트리는 `operation_events` 를 만들지 않는다. 이벤트만 기다리면
+  /// 배터리와 상태가 job 이 움직일 때까지 낡은 채로 남으므로 주기 조회를 함께 돈다.
+  static const Duration _pollInterval = Duration(seconds: 5);
+
+  List<DeviceDto>? _devices;
+  Object? _loadFailure;
+  bool _loading = false;
+  StreamSubscription<OperationsEventDto>? _events;
+  Timer? _coalesce;
+  Timer? _poll;
+  OperationsEventDto? _latest;
+  Object? _streamFailure;
 
   @override
   void initState() {
     super.initState();
-    _events = widget.api.operationsEvents();
+    unawaited(_reloadDevices());
+    _poll = Timer.periodic(_pollInterval, (_) => unawaited(_reloadDevices()));
+    // 구독은 하나만 연다. `operationsEvents()` 는 호출할 때마다 WebSocket 을 새로
+    // 열기 때문에, 표시용과 갱신용으로 두 번 부르면 화면 하나가 연결 두 개를 쥔다.
+    _events = widget.api.operationsEvents().listen(
+      (event) {
+        if (!mounted) return;
+        setState(() {
+          _latest = event;
+          _streamFailure = null;
+        });
+        _coalesce?.cancel();
+        _coalesce = Timer(
+          _coalesceWindow,
+          () => unawaited(_reloadDevices()),
+        );
+      },
+      onError: (Object error) {
+        if (mounted) setState(() => _streamFailure = error);
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _coalesce?.cancel();
+    _poll?.cancel();
+    final subscription = _events;
+    _events = null;
+    if (subscription != null) unawaited(subscription.cancel());
+    super.dispose();
+  }
+
+  /// 조회 중에도 직전 명부를 그대로 둔다. 5초마다 목록이 사라지면 못 읽는다.
+  Future<void> _reloadDevices() async {
+    if (_loading || !mounted) return;
+    _loading = true;
+    try {
+      final next = await widget.api.listDevices();
+      if (mounted) {
+        setState(() {
+          _devices = next;
+          _loadFailure = null;
+        });
+      }
+    } catch (error) {
+      if (mounted) setState(() => _loadFailure = error);
+    } finally {
+      _loading = false;
+    }
   }
 
   @override
@@ -31,19 +96,19 @@ class _RobotOperationsPageState extends State<RobotOperationsPage> {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const PageHeading(
+        PageHeading(
           title: '로봇 운영',
           description: 'Pinky와 설치 로봇의 위치, 연결 상태와 센서 진단을 확인합니다.',
+          actions: [LiveBadge(connected: _streamFailure == null)],
         ),
         const SizedBox(height: 18),
         Expanded(
-          child: StreamBuilder<OperationsEventDto>(
-            stream: _events,
-            builder: (context, snapshot) {
-              if (snapshot.hasError) {
-                return GatewayFailurePanel(error: snapshot.error!);
+          child: Builder(
+            builder: (context) {
+              if (_streamFailure != null) {
+                return GatewayFailurePanel(error: _streamFailure!);
               }
-              final event = snapshot.data;
+              final event = _latest;
               final device = event?.deviceId;
               final pose = _poseFrom(event);
               return Row(
@@ -67,21 +132,11 @@ class _RobotOperationsPageState extends State<RobotOperationsPage> {
                           child: DashboardPanel(
                             title: '로봇 등록 · 상태',
                             icon: Icons.smart_toy_outlined,
-                            child: ListView(
-                              padding: const EdgeInsets.all(14),
-                              children: [
-                                ListTile(
-                                  leading: const CircleAvatar(
-                                    child: Icon(Icons.smart_toy_outlined),
-                                  ),
-                                  title: Text(device ?? '등록된 로봇 없음'),
-                                  subtitle: Text(
-                                    event == null
-                                        ? 'Gateway 운영 스트림 대기'
-                                        : '${event.eventType} · ${event.severity}',
-                                  ),
-                                ),
-                              ],
+                            child: _DeviceRoster(
+                              devices: _devices,
+                              failure: _loadFailure,
+                              highlighted: device,
+                              onRetry: () => unawaited(_reloadDevices()),
                             ),
                           ),
                         ),
@@ -109,6 +164,72 @@ class _RobotOperationsPageState extends State<RobotOperationsPage> {
       y: y.toDouble(),
       heading: (payload?['yaw'] as num?)?.toDouble() ?? 0,
       at: event.occurredAt,
+    );
+  }
+}
+
+/// 등록된 장비 전체를 원장에서 받아 보여 준다. 이전에는 마지막 운영 이벤트에
+/// 실린 장비 **하나만** 보여서, 두 대가 도는지 한 대가 도는지 알 수 없었다.
+class _DeviceRoster extends StatelessWidget {
+  const _DeviceRoster({
+    required this.devices,
+    required this.failure,
+    required this.highlighted,
+    required this.onRetry,
+  });
+
+  final List<DeviceDto>? devices;
+  final Object? failure;
+  final String? highlighted;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final data = devices;
+    if (data == null) {
+      if (failure != null) {
+        return Padding(
+          padding: const EdgeInsets.all(14),
+          child: GatewayFailurePanel(error: failure!, onRetry: onRetry),
+        );
+      }
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (data.isEmpty) {
+      return const Center(child: Text('등록된 로봇 없음'));
+    }
+    return ListView(
+        padding: const EdgeInsets.all(14),
+        children: [
+          for (final robot in data)
+            ListTile(
+              key: Key('device-${robot.deviceId}'),
+              selected: robot.deviceId == highlighted,
+              leading: CircleAvatar(
+                backgroundColor: robot.isOperational
+                    ? const Color(0xFFDCFCE7)
+                    : const Color(0xFFFEE2E2),
+                child: Icon(
+                  robot.isMobile
+                      ? Icons.smart_toy_outlined
+                      : Icons.precision_manufacturing_outlined,
+                  color: robot.isOperational
+                      ? const Color(0xFF16A34A)
+                      : const Color(0xFFDC2626),
+                ),
+              ),
+              title: Text('${robot.deviceId} · ${robot.name}'),
+              subtitle: Text(
+                '${robot.state ?? '상태 미상'} · ${robot.health ?? '건강 미상'}'
+                ' · ${robot.controlMode}',
+              ),
+              trailing: Text(
+                robot.batteryPct == null
+                    ? '—'
+                    : '${robot.batteryPct!.toStringAsFixed(0)}%',
+              ),
+            ),
+        ],
     );
   }
 }

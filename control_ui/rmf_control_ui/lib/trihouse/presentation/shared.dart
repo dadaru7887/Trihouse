@@ -76,6 +76,36 @@ class GatewayFailurePanel extends StatelessWidget {
   }
 }
 
+/// 운영 WebSocket 이 붙어 있는지 한눈에 보이게 한다. 화면이 멈춘 것인지 원장이
+/// 조용한 것인지 구분하지 못하면 시연 중에 판단할 수 없다.
+class LiveBadge extends StatelessWidget {
+  const LiveBadge({super.key, required this.connected, this.stale = false});
+
+  final bool connected;
+  final bool stale;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = connected ? const Color(0xFF16A34A) : const Color(0xFFDC2626);
+    return Row(
+      key: const Key('live-badge'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          connected ? Icons.circle : Icons.circle_outlined,
+          size: 10,
+          color: color,
+        ),
+        const SizedBox(width: 6),
+        Text(
+          connected ? (stale ? '갱신 중' : '실시간') : '연결 끊김',
+          style: TextStyle(color: color, fontWeight: FontWeight.w700),
+        ),
+      ],
+    );
+  }
+}
+
 class DashboardPanel extends StatelessWidget {
   const DashboardPanel({
     super.key,
