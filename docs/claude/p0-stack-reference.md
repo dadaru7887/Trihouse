@@ -643,12 +643,12 @@ def _navigate(self, destination, execution):
 
 | **D16** | **(고침) 취소한 job 을 `job_runner` 가 되살려 로봇이 영원히 묶인다.** `assign_job_resources` 가 job 의 **상태를 검사하지 않는다**. `cancel_job` 이 step·예약을 닫고 `jobs.state='cancelled'` 로 쓴 직후, 다음 주기의 러너가 같은 job 을 다시 집어 `assigned` 로 되돌린다. 그러면 **step 은 cancelled 인데 job 은 assigned** 인 상태가 남고, 러너는 매 주기 `job runner blocked: step ... is cancelled` 를 찍으며 자기가 되살린 job 에 스스로 막힌다 | job 15·16 이 그 상태로 남아 뒤의 주문이 `no free robot` 으로 줄줄이 밀렸다. 재취소하면 `state=='cancelled'` 조기 반환 경로를 타서 닫히는데, 그건 타이밍이 우연히 맞은 것이지 설계된 동작이 아니다 |
 
-| **D17** | **(고침) `sim_teardown.sh` 가 `camera_streamer` 를 안 죽여 세대가 겹친다.** 패턴 목록에 `trihouse_pinky_vision`·`camera_streamer` 가 없어 세대마다 살아남는다. 실측 **3개** 동시 실행 | `verify_robot_status.py` 가 `publishers: status 2, scan 2` 를 보고 "이전 세대가 남았다 — 아래 값을 믿지 마라" 로 판정. **측정 도구가 오염된 채로 판단한 구간이 있었다** |
+| **D17** | **(고침) `sim_teardown.sh` 의 제외 판정이 명령줄 전체를 부분 문자열로 봐서 엉뚱한 프로세스를 살렸다.** 처음에는 패턴 목록에 `camera_streamer` 가 없는 것이 원인인 줄 알고 패턴만 더했다. 진짜 원인은 따로 있었다 — `EXCLUDE_PATTERNS` 의 `pytest` 를 명령줄 어디에서든 찾았기 때문에, `config_file:=/tmp/pytest-of-syw/...` 를 **인자로** 받은 launch 가 pytest 실행으로 오인되어 **모든 teardown 에서 살아남았다** | 실측 `camera_streamer` **3개** 동시 실행. 그 잔재가 RTSP 발행자를 계속 재시작해 **RTF 를 0.09 까지** 떨어뜨렸고 Nav2 controller 가 20 Hz 를 놓쳐 주행이 실패했다. `verify_robot_status.py` 는 `publishers: status 2, scan 2` 를 보고 "아래 값을 믿지 마라" 로 판정했다 — **측정 도구가 오염된 채로 판단한 구간이 있었다** |
 | **D18** | **bringup 셸을 닫으면 시뮬 전체가 SIGHUP 으로 죽는다 (미수정, 운용)** | 로그가 오류 없이 뚝 끊기고 `gz sim` 만 살아남는다. OOM 아님(가용 5.4G). 오늘 여러 회차를 이렇게 잃었다 |
 
 | **D11-b** | **(고침) executor 가 어댑터 소유 행을 집어 주행 성공한 step 을 `failed` 로 닫는다.** MySQL 의 `claim_executor_dispatches` 가 **채널로만** 고른다. `pinky` 채널에는 executor 가 실행할 `execute_fms_action` 과, `claim_command` 가 남기는 로봇 명령 기록 `execution_command` 가 **함께 흐른다**. executor 가 후자를 집어 FMS 액션으로 실행하려다 409 를 맞는다 | job 18 step 20 은 Nav2 가 `Goal succeeded` 를 냈고 어댑터가 `도착·정지 확인 후 RMF 이동을 완료했습니다` 까지 찍었는데 step 은 `failed` 로 닫혔다. `executor error: step 115: HTTP Error 409` 가 60초마다 반복 |
 | **D19** | **(설정으로 회피) job 없는 RMF 이동이 어댑터를 무한 루프에 빠뜨린다.** 로봇 프로토콜은 job 없는 이동을 원천 거부한다(`protocol.py:83`). 그런데 `finishing_request: "park"` 와 `responsive_wait: true` 가 RMF 로 하여금 주차·비켜서기 이동을 스스로 만들게 한다. 그 task 는 원장에 없으므로 claim 이 404 → `_fail_without_finish` → `replan()` → 같은 작업 재계획 | **초당 13건** (누적 2104건). 설정을 끈 뒤 같은 측정에서 **0건** |
-| **D20** | **다른 세션이 같은 PC 에서 시뮬을 만지면 서로 죽인다 (운용).** `sim_teardown.sh` 는 `p0_simulation_bringup` 을 kill 패턴에 넣고 `pytest` 를 예외로 둔다. 다른 창이 teardown 을 돌리면 이 창의 bringup 만 죽고 그 창의 테스트는 산다 | bringup 기동 7초 뒤 `trap cleanup INT TERM EXIT` 가 발동. 살아남은 것은 `ros2 launch trihouse_pinky_vision ... config_file:=/tmp/pytest-of-syw/...` 하나뿐이었다 |
+| **D20** | **다른 세션이 같은 PC 에서 시뮬을 만지면 서로 죽인다 (운용).** `sim_teardown.sh` 는 `p0_simulation_bringup` 을 kill 패턴에 넣으므로, 다른 창이 teardown 을 돌리면 이 창의 bringup 이 함께 죽는다 | bringup 기동 7초 뒤 `trap cleanup INT TERM EXIT` 가 발동했다. **처음에는 "살아남은 것이 pytest 관련뿐" 이라는 점을 근거로 삼았는데 그것은 D17 의 결과였다** — 아래 정정 참고 |
 
 ### 2026-08-19 — 로봇이 처음으로 주행했다
 
@@ -735,13 +735,19 @@ trap cleanup INT TERM EXIT          ← TERM 을 받고 정리했다
 살아남은 것: ros2 launch trihouse_pinky_vision ... /tmp/pytest-of-syw/pytest-122/...
 ```
 
-`sim_teardown.sh` 의 `EXCLUDE_PATTERNS` 에 `pytest` 가 있고 `PATTERNS` 에
-`p0_simulation_bringup` 이 있다. 살아남은 것과 죽은 것이 이 규칙과 정확히
-일치한다 — 다른 창이 teardown 을 돌린 것이다.
+**정정.** 당시 "살아남은 것이 pytest 관련 하나뿐" 이라는 점을 "다른 창이
+teardown 을 돌렸다" 의 근거로 삼았다. 그것은 틀렸다 — 그 프로세스가 살아남은
+이유는 **D17 의 부분 문자열 오인**이었고, 어느 teardown 을 돌려도 살아남았다.
+그러니 "무엇이 살아남았는가" 는 누가 teardown 을 돌렸는지에 대한 근거가 되지
+못한다.
+
+남는 사실은 이것뿐이다. **bringup 이 TERM 을 받고 죽었다.** `p0_simulation_bringup`
+은 kill 패턴에 있으므로, 어느 창에서든 teardown 이 돌면 이 창의 시뮬이 함께
+죽는다.
 
 **규칙: 시뮬을 만지는 창은 하나로 유지한다.** 두 세션이 같은 `ROS_DOMAIN_ID=0`
-에서 같은 프로세스 이름을 상대로 일하면 서로의 작업을 지운다. "세대 겹침" 으로
-진단했던 구간 중 일부는 실제로 이것이었을 수 있다.
+에서 같은 프로세스 이름을 상대로 일하면 서로의 작업을 지운다. 다만 오늘의
+"세대 겹침" 을 전부 이것으로 돌리지는 않는다 — **상당 부분은 D17 이었다.**
 
 ### 진단 요령 — 코드는 있는데 배선이 없다
 
@@ -758,6 +764,52 @@ D13(`may_report_arrival`), D14(`safety_supervisor`). 모두 실기 launch 에는
 |---|---|
 | 저장소 동작이 테스트와 다르다 | InMemory 와 MySQL 두 구현이 같은가. 한쪽만 고쳐진 적이 있다 |
 | 시뮬이 이유 없이 죽는다 | 다른 창이 열려 있는가. `ps -eo args \| grep claude` |
+
+### D17 — 패턴을 더하는 것으로는 부족했다
+
+처음 고칠 때 `PATTERNS` 에 `trihouse_pinky_vision`·`camera_streamer` 를 더했다.
+그런데도 잔재가 계속 살아남았다. 제외 판정이 이렇게 돼 있었기 때문이다.
+
+```bash
+cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+[[ "$cmdline" == *"$pattern"* ]] && return 0     # 명령줄 어디에서든 찾는다
+```
+
+`EXCLUDE_PATTERNS` 에는 `pytest` 가 있다. 그래서 다음 프로세스가 **pytest 실행으로
+오인**된다.
+
+```text
+python3 .../ros2 launch trihouse_pinky_vision ... config_file:=/tmp/pytest-of-syw/...
+                                                              ^^^^^^ 인자일 뿐인데 제외 조건에 걸린다
+```
+
+**제외는 실행 파일 기준이어야 한다.** `argv[0]` 만 보고, 파이썬 인터프리터면
+`-m` 다음 토큰까지 본다(`python -m pytest` 와 `python /path/to/colcon` 을 함께
+덮기 위해서다).
+
+```bash
+programs=("${argv[0]##*/}")
+if [[ "${programs[0]}" == python* ]]; then
+  if [[ "${argv[1]:-}" == "-m" ]]; then programs+=("${argv[2]:-}")
+  else programs+=("${argv[1]##*/}"); fi
+fi
+[[ "$program" == "$pattern" ]] && return 0        # 부분 문자열이 아니라 일치
+```
+
+**대역이 실제와 다르면 계약을 검증할 수 없다.** 예전 테스트는
+`python -c "... # pytest ..."` 처럼 주석에 이름을 넣어 대역을 만들었고, 그것은
+잘못된 규칙(명령줄 어딘가에 있으면 제외)을 그대로 통과시켰다. 지금은
+`exec -a` 로 `argv[0]` 자체를 바꿔 실제와 같은 모양으로 만든다.
+
+`tests/test_sim_teardown.py` 8 passed.
+
+### 파급 — RTF 붕괴의 상당 부분이 이것이었다
+
+잔재 `camera_streamer` 가 RTSP 발행자를 계속 재시작하면서 CPU 를 먹었고 RTF 가
+**0.09** 까지 떨어졌다. 그러면 Nav2 controller 가 20 Hz 를 놓치고, 센서 발행이
+실시간 대비 느려져 안전 gate 의 신선도 판정(D15a)이 깜빡인다.
+
+**"세대 겹침" 으로 진단했던 구간의 상당 부분이 이 한 버그였다.**
 
 ### D18 — 터미널과 분리해서 띄운다
 

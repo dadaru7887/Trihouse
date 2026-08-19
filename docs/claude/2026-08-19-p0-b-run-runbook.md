@@ -87,9 +87,12 @@ ps -eo pid,etimes,args | grep -E 'trihouse|gz sim' | grep -v grep
 
 두 번째 명령이 **아무것도 출력하지 않아야** 다음으로 간다.
 
-남는 것이 있으면 나이를 본다. `sim_teardown.sh` 는 `pytest` 를 일부러 살려
-두므로 테스트가 띄운 것은 남는다. 오래된 것만 골라 정리한다 — 일괄로 죽이지
-않는다.
+남는 것이 있으면 나이를 본다. `sim_teardown.sh` 는 **실행 파일이** `pytest` 나
+`colcon` 인 프로세스를 일부러 살려 둔다 — 돌고 있는 테스트나 빌드를 중간에
+죽이지 않기 위해서다. 판정은 `argv[0]` 기준이므로, 테스트가 **띄워 놓고 간**
+launch(인자에 `/tmp/pytest-.../` 가 들어 있을 뿐인 것)는 이제 정리 대상이다.
+
+그래도 남는 것이 있으면 오래된 것만 골라 정리한다 — 일괄로 죽이지 않는다.
 
 ```bash
 ps -eo pid,etimes,args | grep -E 'trihouse|gz sim' | grep -v grep \
