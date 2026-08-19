@@ -20,7 +20,7 @@ docs/**/*.html
 
 # Agent-generated planning artifacts
 .claude/
-docs/claude/
+# docs/claude/
 docs/codex/
 docs/agent_plans/
 
