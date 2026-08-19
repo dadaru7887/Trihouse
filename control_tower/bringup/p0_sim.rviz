@@ -77,6 +77,36 @@ Visualization Manager:
       Color Scheme: costmap
       Draw Behind: false
 
+    # 지역 costmap. 로봇 주변의 장애물과 팽창(inflation)이 여기 보인다.
+    # 로봇이 문을 어느 쪽으로 지나는지, 통로가 팽창 반경에 막혀 있는지를
+    # 판단하려면 전역이 아니라 이쪽을 본다. 기본은 꺼 둔다 — 전역 지도 위에
+    # 겹쳐 그려서 켜 두면 지도가 안 보인다.
+    - Class: rviz_default_plugins/Map
+      Name: Local Costmap
+      Enabled: false
+      Topic:
+        Value: /pinky_01/local_costmap/costmap
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Alpha: 0.65
+      Color Scheme: costmap
+      Draw Behind: false
+
+    # 로봇의 실제 발자국. 통로 폭과 견줘 보는 데 쓴다.
+    - Class: rviz_default_plugins/Polygon
+      Name: Footprint
+      Enabled: false
+      Topic:
+        Value: /pinky_01/local_costmap/published_footprint
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Color: 25; 200; 120
+      Alpha: 1
+
     # 로봇 위치를 가장 확실히 보여주는 것. map -> odom -> base_link 축이 보인다.
     - Class: rviz_default_plugins/TF
       Name: TF

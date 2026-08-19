@@ -33,6 +33,12 @@ class DeviceView(BaseModel):
     health: str | None = None
     battery_pct: float | None = None
     observed_at: datetime | None = None
+    # 적재 확인에 필요한 관측. 실행기는 이 값을 근거로만 적재 증거를 제출한다 —
+    # 자기가 지어내지 않는다.
+    cargo_state: int | None = None
+    cargo_sensor_confirmed: bool | None = None
+    navigation_state: int | None = None
+    current_job_step_id: int | None = None
 
 
 class InventoryLotView(BaseModel):
@@ -295,6 +301,29 @@ class AnomalyAcknowledgeRequest(BaseModel):
     note: str = Field(default="", max_length=512)
 
 
+class EmergencyDecisionRequest(BaseModel):
+    """운영자가 비상 상황을 보고 내린 판단.
+
+    `reason` 은 화면이 보여 준 사건 종류를 그대로 싣는다 — 나중에 왜 그렇게
+    판단했는지 되짚을 때 필요한 것은 결정 자체가 아니라 그때 본 것이다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    worker_id: str = Field(min_length=1, max_length=64)
+    decision: Literal["RAISE_ALARM", "CONTINUE_WORK"]
+    reason: str = Field(default="", max_length=512)
+
+
+class EmergencyDecisionRecorded(BaseModel):
+    incident_id: int
+    incident_code: str
+    state: str
+    decision: str
+    decided_by: str
+    reason: str
+
+
 class AnomalyAcknowledged(BaseModel):
     correlation_uuid: str
     job_id: int | None = None
@@ -443,6 +472,9 @@ class TaskContext(BaseModel):
 
 class CommandClaimed(BaseModel):
     task_context: TaskContext
+    # 이 이동 뒤에 같은 장소에서 인계 단계가 이어지는가. 로봇이 도착을
+    # 알릴지 여부가 여기서 갈린다.
+    handover_expected: bool = False
 
 
 class RmfDispatchClaim(BaseModel):

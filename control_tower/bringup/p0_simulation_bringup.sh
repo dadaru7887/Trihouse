@@ -290,11 +290,20 @@ start "two pinky order demo" \
 declare -A OMX_ROBOTS=([OMX_01]=PK_01 [OMX_02]=PK_02)
 for omx in OMX_01 OMX_02; do
   node_name="$(echo "$omx" | tr '[:upper:]' '[:lower:]')"
+  pinky="${OMX_ROBOTS[$omx]}"
+  # 짝지어진 Pinky 의 namespace 로 cargo 를 보낸다. 어댑터는 이 토픽을 상대
+  # 경로로 발행하는데 namespace 없이 뜨므로 `/trihouse/cargo/state` 가 되고,
+  # Pinky 는 `/pinky_01/trihouse/cargo/state` 를 구독한다 — remap 이 없으면
+  # 둘이 영원히 만나지 못한다(2026-08-19 실측: Publisher count 0).
+  pinky_ns="$(echo "$pinky" | tr '[:upper:]' '[:lower:]' | tr -d '_')"
+  pinky_ns="${pinky_ns/pk/pinky_}"
   start "omx adapter $omx" \
     ros2 run trihouse_omx_adapter gazebo_omx_adapter --ros-args \
       -r __node:="$node_name" \
+      -r trihouse/cargo/state:="/$pinky_ns/trihouse/cargo/state" \
       -p omx_id:="$omx" \
-      -p robot_id:="${OMX_ROBOTS[$omx]}" \
+      -p robot_id:="$pinky" \
+      -p auto_load_on_handover_ready:=true \
       -p use_sim_time:=true
 done
 

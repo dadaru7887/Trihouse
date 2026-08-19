@@ -101,6 +101,11 @@ class DeviceSummary:
     control_mode: str
     state: str | None = None
     health: str | None = None
+    # 적재 확인의 근거가 되는 관측. 실행기는 이 값으로만 증거를 만든다.
+    cargo_state: int | None = None
+    cargo_sensor_confirmed: bool | None = None
+    navigation_state: int | None = None
+    current_job_step_id: int | None = None
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "DeviceSummary":
@@ -163,6 +168,9 @@ class JobDetailResponse:
     state: str
     context: JsonObject = field(default_factory=dict)
     steps: tuple[JobStepDetail, ...] = ()
+    # 적재 증거는 품목마다 하나씩 낸다. 그 목록이 없으면 실행기가 무엇에 대해
+    # 증거를 내야 하는지 알 수 없다.
+    items: tuple[JsonObject, ...] = ()
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "JobDetailResponse":
@@ -174,6 +182,7 @@ class JobDetailResponse:
             steps=tuple(
                 JobStepDetail.from_dict(step) for step in value.get("steps") or ()
             ),
+            items=tuple(dict(item) for item in value.get("items") or ()),
         )
 
 
@@ -262,6 +271,43 @@ class StepOutcomeRequest:
     failure_domain: str = "none"
     detail: str | None = None
     metrics: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LoadAttemptRequest:
+    """One item's fixture-observed load evidence; never an arm motion request.
+
+    `observations` 는 지어낸 값이 아니라 로봇이 실제로 보고한 화물 상태여야
+    한다. 그래야 원장에 남는 "실렸다" 가 관측에 근거한 기록이 된다.
+    """
+
+    attempt_id: str
+    job_id: int
+    item_id: int
+    handover_group_id: str
+    assignment_revision: int
+    pinky_id: str
+    omx_id: str
+    result: str
+    criteria: JsonObject
+    observations: JsonObject
+    # 아래 여섯은 Gateway 가 **모두 필수**로 요구한다. 하나라도 빠지면 422 다.
+    # `evidence_refs` 는 최소 한 개여야 한다(빈 목록도 거절).
+    metrics: JsonObject
+    evidence_refs: tuple[str, ...]
+    policy_name: str
+    policy_version: str
+    model_name: str
+    model_version: str
+
+
+@dataclass(frozen=True)
+class LoadAttemptResponse:
+    departure_allowed: bool
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "LoadAttemptResponse":
+        return cls(departure_allowed=bool(value.get("departure_allowed", False)))
 
 
 @dataclass(frozen=True)
@@ -380,6 +426,14 @@ class ExecutorGatewayClient(Protocol):
         idempotency_key: str,
     ) -> StepOutcomeResponse: ...
 
+    def record_load_attempt(
+        self,
+        job_step_id: int,
+        request: LoadAttemptRequest,
+        *,
+        idempotency_key: str,
+    ) -> LoadAttemptResponse: ...
+
 
 class RmfDispatchGatewayClient(Protocol):
     """FMS outbox boundary required by the standalone RMF worker."""
@@ -484,6 +538,20 @@ class FMSGatewayHttpClient:
             headers={"Idempotency-Key": idempotency_key},
         )
         return StepOutcomeResponse.from_dict(response)
+
+    def record_load_attempt(
+        self,
+        job_step_id: int,
+        request: LoadAttemptRequest,
+        *,
+        idempotency_key: str,
+    ) -> LoadAttemptResponse:
+        response = self._post(
+            f"/internal/v1/job-steps/{job_step_id}/load-attempts",
+            _omit_none(asdict(request)),
+            headers={"Idempotency-Key": idempotency_key},
+        )
+        return LoadAttemptResponse.from_dict(response)
 
     def claim_rmf_dispatches(
         self,

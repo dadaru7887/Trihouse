@@ -24,6 +24,8 @@ class ClaimedTaskContext:
     command_id: str
     map_revision: str
     command_source: str
+    # 도착 뒤 인계가 이어지는지. 원장이 알려 준다.
+    handover_expected: bool = False
 
 
 def _parse_context(payload: dict[str, Any]) -> ClaimedTaskContext:
@@ -44,6 +46,9 @@ def _parse_context(payload: dict[str, Any]) -> ClaimedTaskContext:
             command_id=str(raw["command_id"]),
             map_revision=str(raw["map_revision"]),
             command_source=str(raw["command_source"]),
+            # task_context 바깥에 있다 — 문맥이 아니라 이 명령에 대한 지시다.
+            # 옛 Gateway 는 이 필드를 주지 않으므로 없으면 거짓으로 둔다.
+            handover_expected=bool(payload.get("handover_expected", False)),
         )
     except (TypeError, ValueError) as error:
         raise CommandClaimError("FMS TaskContext 타입이 올바르지 않습니다.") from error

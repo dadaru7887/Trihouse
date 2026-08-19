@@ -54,6 +54,8 @@ from .models import (
     JobCancelled,
     AnomalyAcknowledgeRequest,
     AnomalyAcknowledged,
+    EmergencyDecisionRecorded,
+    EmergencyDecisionRequest,
     ReservationAnomaly,
     ReservationsExpired,
     LoadAttemptRequest,
@@ -106,6 +108,8 @@ from .repositories import (
     JobStepNotFound,
     AnomalyAcknowledgementConflict,
     AnomalyNotFound,
+    EmergencyDecisionConflict,
+    IncidentNotFound,
     JobCancellationConflict,
     JobNotFound,
     ManualAcknowledgementRequired,
@@ -980,6 +984,37 @@ def create_app(
         except AnomalyNotFound as error:
             raise HTTPException(status_code=404, detail="anomaly not found") from error
         except AnomalyAcknowledgementConflict as error:
+            raise HTTPException(
+                status_code=409, detail={"code": error.code}
+            ) from error
+
+    @app.post(
+        "/api/v1/incidents/{incident_id}/decision",
+        response_model=EmergencyDecisionRecorded,
+    )
+    def decide_incident_emergency(
+        incident_id: int,
+        decision: EmergencyDecisionRequest,
+        idempotency_key: str = Header(min_length=1, max_length=160),
+    ):
+        """운영자의 비상 판단을 원장에 적는다.
+
+        이 라우트가 없던 동안 관제 화면의 비상 버튼은 404 로 조용히 사라졌다.
+        안전 판단은 눌렸다는 사실 자체가 감사 대상이므로 실패가 조용하면 안 된다.
+        """
+        try:
+            return repo.decide_incident_emergency(
+                incident_id, decision.model_dump(), idempotency_key
+            )
+        except IncidentNotFound as error:
+            raise HTTPException(
+                status_code=404, detail="incident not found"
+            ) from error
+        except IdempotencyConflict as error:
+            raise HTTPException(
+                status_code=409, detail={"code": "IDEMPOTENCY_KEY_REUSED"}
+            ) from error
+        except EmergencyDecisionConflict as error:
             raise HTTPException(
                 status_code=409, detail={"code": error.code}
             ) from error

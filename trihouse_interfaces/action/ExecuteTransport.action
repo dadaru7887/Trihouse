@@ -6,6 +6,10 @@ geometry_msgs/PoseStamped pickup_pose
 geometry_msgs/PoseStamped dropoff_pose
 uint8 priority
 bool requires_precise_stop
+# 이 목적지에 도착한 뒤 인계(적재/하차)가 이어지는가.
+# 로봇이 추측하지 않는다 — job 계획을 아는 원장이 명령에 실어 보낸다.
+# 참이면 도착 시 HandoverState.STATE_READY 를 내고 인계 대기로 남는다.
+bool handover_expected
 uint8 MODE_TRANSPORT=0
 uint8 MODE_RETURN_TO_WAIT=1
 uint8 MODE_RETURN_TO_CHARGE=2

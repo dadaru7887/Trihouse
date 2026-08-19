@@ -651,3 +651,116 @@ def test_arrival_is_judged_on_the_snapshot_the_robot_reported_at_arrival():
     repository.ingest_task_event(arrived)
 
     assert repository.get_job(job["job_id"])["steps"][0]["state"] == "succeeded"
+
+
+def _navigate_job(repository, *, target_location_id):
+    job = repository.create_job(
+        {
+            "job_code": f"TCP-JOB-NAV-{target_location_id}",
+            "operation_type": "outbound",
+            "priority": "normal",
+            "context": {},
+            "steps": [
+                {
+                    "step_no": 1,
+                    "action_type": "navigate",
+                    "executor_type": "mobile",
+                    "target_location_id": target_location_id,
+                    "input": {},
+                }
+            ],
+        }
+    )
+    step_id = job["steps"][0]["job_step_id"]
+    rmf_task_id = f"rmf-nav-{target_location_id}"
+    repository.record_rmf_acceptance(step_id, rmf_task_id, "PK_01")
+    context = repository.claim_command(
+        rmf_task_id,
+        {
+            "robot_id": "PK_01",
+            "execution_id": f"execution-{target_location_id}",
+            "map_revision": "warehouse:abc123",
+        },
+    )["task_context"]
+    base = {
+        "type": "task_event",
+        "schema_version": 3,
+        "robot_id": "PK_01",
+        "session_id": SESSION_ID,
+        "method_code": "NAV2_DEFAULT",
+        "task_context": context,
+    }
+    repository.ingest_task_event({
+        **base, "event_id": str(uuid.uuid4()), "event_type": "started",
+        "reason_code": "COMMAND_ACCEPTED", "detail": "started",
+    })
+    return job, context, base
+
+
+def _arrive_at(repository, base, context, *, x, y, sequence):
+    repository.ingest_robot_status(
+        status(
+            sequence=sequence,
+            task_context=context,
+            navigation_state=2,
+            pose={"x": x, "y": y, "yaw": 0.0},
+            twist={"linear_x_mps": 0.0, "angular_z_rps": 0.0},
+        )
+    )
+    return repository.ingest_task_event({
+        **base, "event_id": str(uuid.uuid4()), "event_type": "arrived",
+        "reason_code": "WAYPOINT_REACHED", "detail": "arrived",
+    })
+
+
+# 포장대 도크 하나만 있는 최소 지도. 좌표는 승인된 JSONL 의 실측값이다.
+PACKING_DOCK = {
+    "location_id": 28,
+    "location_code": "PACKING-01-DOCK-01",
+    "pose_x": 0.351,
+    "pose_y": -0.490,
+}
+# 병목 01. 포장대까지 0.61 m 떨어져 있다.
+BOTTLENECK_X, BOTTLENECK_Y = 0.841, -0.111
+
+
+def test_a_waypoint_on_the_way_does_not_close_the_step() -> None:
+    """RMF 는 한 이동을 구간마다 나눠 주고 로봇은 구간마다 `arrived` 를 낸다.
+
+    2026-08-19 실측: 그 첫 신호로 단계가 닫혀, 병목에서 낸 도착이 포장대 도착으로
+    기록됐다. 로봇은 물건을 실은 채 통로 한가운데 섰는데 원장에는 "인계 완료" 가
+    남았다. 중간 지점의 도착은 **실패도 성공도 아니고 아직 끝나지 않은 것**이다.
+    """
+    repository = InMemoryFmsRepository(seed_locations=[PACKING_DOCK])
+    job, context, base = _navigate_job(repository, target_location_id=28)
+
+    result = _arrive_at(
+        repository, base, context, x=BOTTLENECK_X, y=BOTTLENECK_Y, sequence=10
+    )
+
+    assert result["event_type"] == "navigation.waypoint.passed"
+    assert repository.get_job(job["job_id"])["steps"][0]["state"] == "running"
+
+
+def test_arriving_at_the_target_closes_the_step() -> None:
+    repository = InMemoryFmsRepository(seed_locations=[PACKING_DOCK])
+    job, context, base = _navigate_job(repository, target_location_id=28)
+
+    result = _arrive_at(
+        repository, base, context,
+        x=PACKING_DOCK["pose_x"], y=PACKING_DOCK["pose_y"], sequence=10,
+    )
+
+    assert result["event_type"] == "navigation.waypoint.arrived"
+    assert repository.get_job(job["job_id"])["steps"][0]["state"] == "succeeded"
+
+
+def test_a_step_without_a_target_location_still_arrives() -> None:
+    """복귀처럼 목표 좌표가 없는 단계는 비교할 것이 없다. 막으면 안 된다."""
+    repository = InMemoryFmsRepository(seed_locations=[PACKING_DOCK])
+    job, context, base = _navigate_job(repository, target_location_id=None)
+
+    result = _arrive_at(repository, base, context, x=9.0, y=9.0, sequence=10)
+
+    assert result["event_type"] == "navigation.waypoint.arrived"
+    assert repository.get_job(job["job_id"])["steps"][0]["state"] == "succeeded"

@@ -240,6 +240,9 @@ class PinkyRobotAdapter:
         goal.dropoff_pose.pose.orientation.w = math.cos(float(position[2]) / 2.0)
         goal.priority = 0
         goal.requires_precise_stop = bool(getattr(destination, "dock", None))
+        # 이 도착 뒤에 인계가 이어지는지는 job 계획의 사실이라 원장이 알려 준다.
+        # 로봇은 이 값으로만 인계 대기를 결정한다 — 목적지 이름으로 추측하지 않는다.
+        goal.handover_expected = bool(getattr(context, "handover_expected", False))
         goal.mode = ExecuteTransport.Goal.MODE_RMF_NAVIGATION
 
         self._node.get_logger().info(

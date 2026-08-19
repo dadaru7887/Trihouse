@@ -72,6 +72,10 @@ class FmsRepository(Protocol):
         self, correlation_uuid: str, request: dict[str, Any]
     ) -> dict[str, Any]: ...
 
+    def decide_incident_emergency(
+        self, incident_id: int, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]: ...
+
     def record_load_attempt(
         self, job_step_id: int, request: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]: ...
@@ -225,6 +229,23 @@ class AnomalyAcknowledgementConflict(Exception):
         self.code = code
 
 
+class IncidentNotFound(Exception):
+    pass
+
+
+class EmergencyDecisionConflict(Exception):
+    """운영자 판단을 더 받을 수 없는 incident 다.
+
+    이미 닫힌 사건에 새 판단을 적으면 원장이 거짓이 된다 — 누가 언제 무엇을 보고
+    결정했는지가 안전 감사의 전부이므로, 늦게 도착한 결정은 조용히 덮어쓰지 않고
+    거절한다.
+    """
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
 class JobCancellationConflict(Exception):
     """이미 끝난 job 은 취소할 수 없다 — 끝난 일을 취소했다고 적으면 원장이 거짓이 된다."""
 
@@ -303,6 +324,64 @@ class MapProjectValidationError(Exception):
 
 class PublishedMapProjectDeleteConflict(Exception):
     pass
+
+
+# 이동 뒤에 인계가 이어지는지 판단하는 규칙. `fms` 실행기의 적재/하차 단계가
+# **같은 장소**에 있을 때만 인계로 본다. 장소가 다르면 그것은 이 도착과 무관한
+# 다음 일이다.
+HANDOVER_ACTION_TYPES = frozenset({"load", "handover"})
+
+
+def _handover_follows(steps: list[dict[str, Any]], step_no: int, location_id: object) -> bool:
+    """이 단계 바로 다음의 `fms` 단계가 같은 장소의 인계인가.
+
+    로봇이 도착만으로는 알 수 없는 사실이다 — job 계획을 아는 원장이 판단해
+    명령에 실어 보낸다. 참이면 로봇이 도착 시 `HandoverState.STATE_READY` 를
+    발행하고 인계 대기로 남아, 로봇팔이 그 신호를 보고 적재를 시작한다.
+    """
+    following = [row for row in steps if int(row["step_no"]) > int(step_no)]
+    if not following:
+        return False
+    nxt = min(following, key=lambda row: int(row["step_no"]))
+    return (
+        nxt["executor_type"] == "fms"
+        and nxt["action_type"] in HANDOVER_ACTION_TYPES
+        and location_id is not None
+        and nxt["target_location_id"] is not None
+        and int(nxt["target_location_id"]) == int(location_id)
+    )
+
+
+# 단계의 목표 지점에 실제로 닿았다고 볼 거리. Nav2 의 `xy_goal_tolerance` 0.1 m
+# 보다 넉넉해야 한다 — 정밀 정차 허용오차와 같은 이유로, 같은 값으로 다시 재면
+# 경계선에서 갈린다. 반대로 너무 넓으면 중간 지점을 목적지로 오인한다.
+#
+# 2026-08-19 실측: RMF 는 `go_to_place` 를 구간마다 나눠 주고 로봇은 구간마다
+# `arrived` 를 낸다. 원장이 그 첫 신호로 단계를 닫아, 병목(0.84, -0.11)에서 낸
+# 도착이 포장대(0.351, -0.490) 도착으로 기록됐다. 둘 사이는 0.61 m 다.
+ARRIVAL_POSITION_TOLERANCE_M = 0.30
+
+
+def _arrived_at_target(
+    evidence: dict[str, Any], target: dict[str, Any] | None
+) -> bool:
+    """이 도착 신호가 **그 단계의 목표 지점**에서 난 것인가.
+
+    목표 좌표가 없는 단계(복귀 등)는 판정하지 않고 통과시킨다 — 비교할 것이 없다.
+    좌표를 모르는 채로 거절하면 정상 도착까지 막힌다.
+    """
+    if not target:
+        return True
+    target_x, target_y = target.get("pose_x"), target.get("pose_y")
+    if target_x is None or target_y is None:
+        return True
+    pose = evidence.get("pose") or {}
+    x, y = pose.get("x"), pose.get("y")
+    if x is None or y is None:
+        # 좌표를 보고하지 않는 로봇이면 예전처럼 나머지 조건으로만 판정한다.
+        return True
+    distance = math.hypot(float(x) - float(target_x), float(y) - float(target_y))
+    return distance <= ARRIVAL_POSITION_TOLERANCE_M
 
 
 # 종료 navigation_state — 2 도착, 3 취소, 4 실패. 이 상태의 스냅샷만 증거가 된다.
@@ -1196,16 +1275,31 @@ class MySqlFmsRepository:
                 cursor.close()
 
     def list_devices(self) -> list[dict[str, object]]:
-        return self._all(
+        rows = self._all(
             """
             SELECT d.device_id, d.device_type, d.name, d.control_mode,
-                   ds.state, ds.health, ds.battery_pct, ds.observed_at
+                   ds.state, ds.health, ds.battery_pct, ds.observed_at,
+                   ds.current_job_step_id, ds.details
             FROM devices d
             LEFT JOIN device_states ds ON ds.device_id = d.device_id
             WHERE d.active = 1
             ORDER BY d.device_type, d.device_id
             """
         )
+        # 적재 확인은 로봇이 실제로 보고한 화물 상태를 근거로 해야 한다. 그 값이
+        # 원장 안에만 있으면 실행기가 증거를 만들 수 없어, 결국 아무도 확인하지
+        # 못하는 단계가 된다(2026-08-19 실측: step 30 이 영원히 pending).
+        for row in rows:
+            details = _json(row.pop("details", None)) or {}
+            cargo = details.get("cargo_state")
+            row["cargo_state"] = cargo if isinstance(cargo, int) else None
+            confirmed = details.get("cargo_sensor_confirmed")
+            row["cargo_sensor_confirmed"] = (
+                confirmed if isinstance(confirmed, bool) else None
+            )
+            navigation = details.get("navigation_state")
+            row["navigation_state"] = navigation if isinstance(navigation, int) else None
+        return rows
 
     def list_registered_robot_ids(self) -> set[str]:
         return {
@@ -2369,6 +2463,10 @@ class MySqlFmsRepository:
             "sent_at_ns": status["sent_at_ns"],
             "map_revision": status["map_revision"],
             "frame_id": status["frame_id"],
+            # 도착 판정이 **어디에서** 났는지 보려면 좌표가 증거에 함께 있어야 한다.
+            # 컬럼(pose_x/pose_y)에만 두면 `after_observation` 스냅샷에 남지 않아,
+            # 판정 시점에는 이미 다음 구간으로 움직인 뒤의 값을 보게 된다.
+            "pose": status["pose"],
             "twist": status["twist"],
             "navigation_state": status["navigation_state"],
             "task_progress": status["task_progress"],
@@ -2376,6 +2474,8 @@ class MySqlFmsRepository:
             "battery_policy": status["battery_policy"],
             "safety_state": status["safety_state"],
             "cargo_state": status["cargo_state"],
+            # 옛 로봇 펌웨어는 이 키를 보내지 않는다. 없으면 확인 안 된 것으로 본다.
+            "cargo_sensor_confirmed": bool(status.get("cargo_sensor_confirmed", False)),
             "telemetry_valid": status["telemetry_valid"],
             "execution_ready": status["execution_ready"],
             "dispatchable": status["dispatchable"],
@@ -2476,10 +2576,14 @@ class MySqlFmsRepository:
                     """
                     SELECT js.job_id, js.job_step_id, js.assignment_revision,
                            js.assigned_device_id, js.rmf_task_id, js.state,
+                           js.target_location_id,
+                           target.pose_x, target.pose_y,
                            attempt.attempt_uuid, attempt.state AS attempt_state,
                            attempt.parameters AS attempt_parameters,
                            attempt.after_observation AS attempt_after_observation
                     FROM job_steps js
+                    LEFT JOIN locations target
+                      ON target.location_id = js.target_location_id
                     LEFT JOIN job_step_attempts attempt
                       ON attempt.job_step_id = js.job_step_id
                      AND attempt.assignment_revision = js.assignment_revision
@@ -2549,19 +2653,28 @@ class MySqlFmsRepository:
                             or status_details.get("task_context") != context
                         ):
                             raise RuntimeContextConflict
+                # RMF 는 한 이동을 구간마다 나눠 주고 로봇은 구간마다 `arrived` 를
+                # 낸다. 목표 지점에서 난 것이 아니면 **아직 끝나지 않은 것**이다.
+                # 실패로 적으면 안 된다 — 다음 구간이 이어서 오고, 그 마지막
+                # 신호가 단계를 닫아야 한다.
+                passing_waypoint = event["event_type"] == "arrived" and not _arrived_at_target(
+                    status_details, step
+                )
                 transition = {
                     "started": ("running", "navigation.segment.started"),
                     "arrived": ("succeeded", "navigation.waypoint.arrived"),
                     "canceled": ("cancelled", "navigation.segment.cancelled"),
                     "failed": ("failed", "navigation.segment.failed"),
                 }[event["event_type"]]
-                terminal = event["event_type"] != "started"
+                if passing_waypoint:
+                    transition = ("running", "navigation.waypoint.passed")
+                terminal = event["event_type"] != "started" and not passing_waypoint
                 facts = {
                     "data_complete": True,
                     "success_reason": event["reason_code"] if event["event_type"] == "arrived" else None,
                     "navigation_reason": event["reason_code"] if event["event_type"] in {"failed", "canceled"} else None,
                 }
-                if event["event_type"] == "arrived":
+                if event["event_type"] == "arrived" and not passing_waypoint:
                     twist = status_details.get("twist", {})
                     if status_details.get("telemetry_valid") is not True:
                         facts["telemetry_reason"] = "SENSOR_TELEMETRY_STALE"
@@ -2579,7 +2692,7 @@ class MySqlFmsRepository:
                     event["event_type"] == "arrived"
                     and classified.failure_domain == "none"
                 )
-                if event["event_type"] == "started":
+                if event["event_type"] == "started" or passing_waypoint:
                     cursor.execute(
                         """
                         UPDATE job_step_attempts
@@ -2630,10 +2743,18 @@ class MySqlFmsRepository:
                     WHERE job_step_id = %s
                     """,
                     (
-                        "failed" if event["event_type"] == "arrived" and not arrived_succeeded else transition[0],
+                        "failed"
+                        if event["event_type"] == "arrived"
+                        and not passing_waypoint
+                        and not arrived_succeeded
+                        else transition[0],
                         terminal, classified.primary_reason, terminal,
                         event["method_code"],
-                        "failed" if event["event_type"] == "arrived" and not arrived_succeeded else transition[0],
+                        "failed"
+                        if event["event_type"] == "arrived"
+                        and not passing_waypoint
+                        and not arrived_succeeded
+                        else transition[0],
                         terminal, step["job_step_id"],
                     ),
                 )
@@ -4192,6 +4313,141 @@ class MySqlFmsRepository:
             except Exception:
                 connection.rollback()
                 raise
+            finally:
+                cursor.close()
+
+    # 운영자 판단이 incident 를 어느 상태로 옮기는지. 스키마가 이미 이 어휘를
+    # 가지고 있다 — `operation_events.safety_decision` 과 `incidents.state`.
+    EMERGENCY_DECISIONS = {
+        # 사람이 "진짜 비상이다" 라고 확인한 것. 사건은 열린 채로 대응이 이어지고,
+        # 원장에는 작업을 세웠다는 사실이 남는다.
+        "RAISE_ALARM": {
+            "state": "acknowledged",
+            "safety_decision": "stopped",
+            "severity": "critical",
+            "actor_column": "acknowledged_by_worker_id",
+            "at_column": "acknowledged_at",
+            "message": "operator confirmed the emergency and stopped work",
+        },
+        # 사람이 "계속해도 안전하다" 라고 판단한 것. 사건을 닫는다.
+        "CONTINUE_WORK": {
+            "state": "resolved",
+            "safety_decision": "approved",
+            "severity": "warning",
+            "actor_column": "resolved_by_worker_id",
+            "at_column": "resolved_at",
+            "message": "operator judged it safe to continue and closed the incident",
+        },
+    }
+
+    # 판단을 받을 수 있는 상태. 한 번 닫힌 사건은 다시 열지 않는다.
+    EMERGENCY_DECIDABLE_STATES = {
+        "RAISE_ALARM": {"active"},
+        "CONTINUE_WORK": {"active", "acknowledged"},
+    }
+
+    def decide_incident_emergency(
+        self, incident_id: int, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """운영자의 비상 판단을 운영 원장에 적는다.
+
+        이 경로가 없던 동안 UI 의 비상 버튼은 존재하지 않는 라우트를 불러 404 로
+        조용히 사라졌다 — 운영자가 눌렀다는 사실이 어디에도 남지 않았다.
+
+        `incidents` 의 상태 전이와 `operation_events` 한 줄을 같은 트랜잭션에서
+        쓴다. 이벤트를 함께 쓰는 것은 감사 때문만이 아니라, 운영 WebSocket 이
+        그 줄을 보고 모든 화면에 즉시 밀어 주기 때문이다.
+        """
+        decision = str(request["decision"])
+        rule = self.EMERGENCY_DECISIONS.get(decision)
+        if rule is None:
+            raise EmergencyDecisionConflict("UNKNOWN_DECISION")
+        worker_id = str(request["worker_id"])
+        reason = str(request.get("reason") or "")
+        canonical_request = {
+            "incident_id": incident_id,
+            "worker_id": worker_id,
+            "decision": decision,
+            "reason": reason,
+        }
+        event_uuid = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"trihouse:incident-decision:{idempotency_key}",
+            )
+        )
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            try:
+                cursor.execute(
+                    """
+                    SELECT incident_id, incident_code, state
+                    FROM incidents WHERE incident_id = %s FOR UPDATE
+                    """,
+                    (incident_id,),
+                )
+                incident = cursor.fetchone()
+                if incident is None:
+                    raise IncidentNotFound
+                cursor.execute(
+                    "SELECT payload FROM operation_events WHERE event_uuid = %s",
+                    (event_uuid,),
+                )
+                replay = cursor.fetchone()
+                if replay is not None:
+                    replay_payload = _json(replay["payload"]) or {}
+                    if replay_payload.get("request") != canonical_request:
+                        raise IdempotencyConflict
+                    return replay_payload["response"]
+                if incident["state"] not in self.EMERGENCY_DECIDABLE_STATES[decision]:
+                    raise EmergencyDecisionConflict("INCIDENT_NOT_DECIDABLE")
+                cursor.execute(
+                    "SELECT active FROM workers WHERE worker_id = %s", (worker_id,)
+                )
+                worker = cursor.fetchone()
+                if worker is None or not worker["active"]:
+                    raise EmergencyDecisionConflict("ACTIVE_WORKER_REQUIRED")
+                cursor.execute(
+                    f"""
+                    UPDATE incidents
+                       SET state = %s,
+                           {rule["actor_column"]} = %s,
+                           {rule["at_column"]} = NOW(6)
+                     WHERE incident_id = %s
+                    """,
+                    (rule["state"], worker_id, incident_id),
+                )
+                response = {
+                    "incident_id": incident_id,
+                    "incident_code": incident["incident_code"],
+                    "state": rule["state"],
+                    "decision": decision,
+                    "decided_by": worker_id,
+                    "reason": reason,
+                }
+                cursor.execute(
+                    """
+                    INSERT INTO operation_events
+                      (event_uuid, occurred_at, actor_worker_id, incident_id,
+                       severity, category, event_type, safety_decision,
+                       message, payload)
+                    VALUES (%s, NOW(6), %s, %s, %s, 'safety',
+                            'incident.decision.recorded', %s, %s, %s)
+                    """,
+                    (
+                        event_uuid,
+                        worker_id,
+                        incident_id,
+                        rule["severity"],
+                        rule["safety_decision"],
+                        rule["message"],
+                        json.dumps(
+                            {"request": canonical_request, "response": response}
+                        ),
+                    ),
+                )
+                connection.commit()
+                return response
             finally:
                 cursor.close()
 
@@ -5908,8 +6164,8 @@ class MySqlFmsRepository:
             try:
                 cursor.execute(
                     """
-                    SELECT job_step_id, job_id, assignment_revision,
-                           assigned_device_id, state
+                    SELECT job_step_id, job_id, step_no, assignment_revision,
+                           assigned_device_id, target_location_id, state
                     FROM job_steps WHERE rmf_task_id = %s FOR UPDATE
                     """,
                     (rmf_task_id,),
@@ -5943,7 +6199,11 @@ class MySqlFmsRepository:
                         or identity["map_revision"] != request["map_revision"]
                     ):
                         raise CommandClaimConflict
-                    return {"task_context": payload["task_context"]}
+                    # 옛 payload 에는 이 키가 없다. 없으면 인계 없음으로 본다.
+                    return {
+                        "task_context": payload["task_context"],
+                        "handover_expected": bool(payload.get("handover_expected", False)),
+                    }
                 if step["assigned_device_id"] != request["robot_id"]:
                     raise CommandClaimConflict
                 command_id = str(uuid.uuid4())
@@ -5990,7 +6250,23 @@ class MySqlFmsRepository:
                     "map_revision": request["map_revision"],
                     "command_source": "rmf",
                 }
-                payload = {"claim_identity": request, "task_context": context}
+                # 이 도착 뒤에 인계가 이어지는지 계획에서 읽는다. 로봇은 이것을
+                # 알 수 없으므로 명령에 실어 보낸다.
+                cursor.execute(
+                    """
+                    SELECT step_no, executor_type, action_type, target_location_id
+                    FROM job_steps WHERE job_id = %s ORDER BY step_no
+                    """,
+                    (step["job_id"],),
+                )
+                handover_expected = _handover_follows(
+                    cursor.fetchall(), step["step_no"], step["target_location_id"]
+                )
+                payload = {
+                    "claim_identity": request,
+                    "task_context": context,
+                    "handover_expected": handover_expected,
+                }
                 cursor.execute(
                     """
                     INSERT INTO integration_messages
@@ -6009,7 +6285,10 @@ class MySqlFmsRepository:
                     ),
                 )
                 connection.commit()
-                return {"task_context": context}
+                return {
+                    "task_context": context,
+                    "handover_expected": handover_expected,
+                }
             finally:
                 cursor.close()
 
@@ -6037,6 +6316,9 @@ class InMemoryFmsRepository:
         self._cancellations: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
         self._anomalies: dict[str, dict[str, Any]] = {}
         self._anomaly_acknowledgements: dict[str, dict[str, Any]] = {}
+        # 테스트가 비상 판단 경로를 돌릴 수 있게 최소한의 incident 대장을 둔다.
+        self._incidents: dict[int, dict[str, Any]] = {}
+        self._incident_decisions: dict[str, dict[str, Any]] = {}
         self._assignment_lock = threading.RLock()
         self._assignment_locations: dict[str, dict[str, Any]] = {
             "PACKING-01-DOCK-01": {
@@ -6538,6 +6820,7 @@ class InMemoryFmsRepository:
                 "session_id": status["session_id"],
                 "sequence": status["sequence"],
                 "map_revision": status["map_revision"],
+                "pose": deepcopy(status["pose"]),
                 "twist": deepcopy(status["twist"]),
                 "navigation_state": status["navigation_state"],
                 "safety_state": status["safety_state"],
@@ -6603,13 +6886,30 @@ class InMemoryFmsRepository:
                     or (datetime.now(SEOUL) - received_at).total_seconds() > 2.0
                 ):
                     raise RuntimeContextConflict
+        # MySQL 구현과 같은 규칙 — 목표 지점이 아닌 곳에서 난 도착은 구간 통과다.
+        target = None
+        location_id = step.get("target_location_id")
+        if location_id is not None:
+            target = next(
+                (
+                    row
+                    for row in self._locations.values()
+                    if row.get("location_id") == location_id
+                ),
+                None,
+            )
+        passing_waypoint = event["event_type"] == "arrived" and not _arrived_at_target(
+            details, target
+        )
         state, event_type = {
             "started": ("running", "navigation.segment.started"),
             "arrived": ("succeeded", "navigation.waypoint.arrived"),
             "canceled": ("cancelled", "navigation.segment.cancelled"),
             "failed": ("failed", "navigation.segment.failed"),
         }[event["event_type"]]
-        if event["event_type"] == "arrived":
+        if passing_waypoint:
+            state, event_type = "running", "navigation.waypoint.passed"
+        elif event["event_type"] == "arrived":
             twist = details["twist"]
             if details["telemetry_valid"] is not True:
                 state = "failed"
@@ -6911,6 +7211,63 @@ class InMemoryFmsRepository:
         }
         self._anomaly_acknowledgements[correlation_uuid] = acknowledgement
         return deepcopy(acknowledgement)
+
+    def open_incident(
+        self,
+        incident_id: int,
+        *,
+        incident_code: str = "INC-TEST-0001",
+        state: str = "active",
+    ) -> None:
+        """테스트가 판단 대상 사건을 세울 수 있게 한다. 운영 경로에는 없다."""
+        self._incidents[incident_id] = {
+            "incident_id": incident_id,
+            "incident_code": incident_code,
+            "state": state,
+        }
+
+    def decide_incident_emergency(
+        self, incident_id: int, request: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        decision = str(request["decision"])
+        rule = MySqlFmsRepository.EMERGENCY_DECISIONS.get(decision)
+        if rule is None:
+            raise EmergencyDecisionConflict("UNKNOWN_DECISION")
+        incident = self._incidents.get(incident_id)
+        if incident is None:
+            raise IncidentNotFound
+        worker_id = str(request["worker_id"])
+        reason = str(request.get("reason") or "")
+        canonical_request = {
+            "incident_id": incident_id,
+            "worker_id": worker_id,
+            "decision": decision,
+            "reason": reason,
+        }
+        replay = self._incident_decisions.get(idempotency_key)
+        if replay is not None:
+            if replay["request"] != canonical_request:
+                raise IdempotencyConflict
+            return deepcopy(replay["response"])
+        decidable = MySqlFmsRepository.EMERGENCY_DECIDABLE_STATES[decision]
+        if incident["state"] not in decidable:
+            raise EmergencyDecisionConflict("INCIDENT_NOT_DECIDABLE")
+        if worker_id not in {"W-OP-01", "W-SAFE-01"}:
+            raise EmergencyDecisionConflict("ACTIVE_WORKER_REQUIRED")
+        incident["state"] = rule["state"]
+        response = {
+            "incident_id": incident_id,
+            "incident_code": incident["incident_code"],
+            "state": rule["state"],
+            "decision": decision,
+            "decided_by": worker_id,
+            "reason": reason,
+        }
+        self._incident_decisions[idempotency_key] = {
+            "request": canonical_request,
+            "response": deepcopy(response),
+        }
+        return deepcopy(response)
 
     def _close_open_outbox_for_job(self, job_id: int) -> list[str]:
         """이미 배달된 것은 손대지 않는다 — 일어난 일을 되쓰면 원장이 거짓이 된다."""
@@ -7407,7 +7764,20 @@ class InMemoryFmsRepository:
                 "command_id": str(uuid.uuid4()),
                 "map_revision": request["map_revision"],
                 "command_source": "rmf",
-            }
+            },
+            # MySQL 구현과 같은 규칙으로 계획에서 읽는다.
+            "handover_expected": _handover_follows(
+                sorted(
+                    (
+                        row
+                        for row in self._steps.values()
+                        if row["job_id"] == step["job_id"]
+                    ),
+                    key=lambda row: int(row["step_no"]),
+                ),
+                step["step_no"],
+                step.get("target_location_id"),
+            ),
         }
         self._claims[claim_key] = (deepcopy(request), response)
         # 실제 저장소는 이 시점에 `pinky` 채널의 `execution_command` 를

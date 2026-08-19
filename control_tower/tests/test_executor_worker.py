@@ -226,3 +226,169 @@ def test_expected_items_come_from_the_step_input() -> None:
 def test_a_non_positive_limit_is_rejected() -> None:
     with pytest.raises(ValueError):
         _worker(FakeGateway([])).run_once(limit=0)
+
+
+# --- 적재 확정 경로 -----------------------------------------------------------
+#
+# 2026-08-19: 이 경로에 테스트가 없어서 오타 수준의 실수 세 개가 실제 주행에서만
+# 드러났고, 그때마다 outbox 5회를 소진해 회차를 통째로 잃었다.
+#   - `list_devices()` 를 중복 정의해 기존 `DeviceSummary` 반환이 이겼다
+#   - `get_job()` 도 같은 실수. `JobDetailResponse` 에 dict 처럼 접근했다
+#   - `record_load_attempt` 구현이 Protocol 클래스 안에 들어가 실제 클라이언트에 없었다
+#
+# 앞의 둘은 **진짜 반환 타입을 쓰는 fake** 로 잡고, 셋째는 **Protocol 이행 검사**로
+# 잡는다. 손으로 만든 fake 는 셋째를 절대 못 잡는다.
+
+from dataclasses import replace
+
+from control_tower.gateway.fms_client import (
+    DeviceSummary,
+    ExecutorGatewayClient,
+    FMSGatewayHttpClient,
+    JobDetailResponse,
+    LoadAttemptResponse,
+)
+
+CARGO_LOCKED = 2
+CARGO_UNLOCKED = 1
+
+
+def _load_dispatch(**overrides):
+    base = _dispatch(
+        4,
+        action_type="load",
+        executor_type="fms",
+        channel="pinky",
+        device="PK_01",
+        payload={
+            "input": {
+                "handover_group_id": "group-1",
+                "temperature_zone": "chilled",
+                "dock_location_id": 26,
+            }
+        },
+    )
+    return replace(base, **overrides)
+
+
+class LoadGateway(FakeGateway):
+    """적재 경로를 위한 fake. **진짜 반환 타입**을 쓴다 — dict 로 흉내 내면
+    운영에서만 터지는 속성 접근 오류를 테스트가 놓친다."""
+
+    def __init__(self, dispatches, *, cargo_state=CARGO_LOCKED, sensor_confirmed=True, items=None):
+        super().__init__(dispatches)
+        self._cargo_state = cargo_state
+        self._sensor_confirmed = sensor_confirmed
+        self._items = items if items is not None else [{"job_item_id": 11}, {"job_item_id": 12}]
+        self.load_attempts = []
+
+    def list_devices(self):
+        return (
+            DeviceSummary(
+                device_id="PK_01",
+                device_type="mobile",
+                control_mode="auto",
+                state="idle",
+                cargo_state=self._cargo_state,
+                cargo_sensor_confirmed=self._sensor_confirmed,
+                navigation_state=2,
+            ),
+        )
+
+    def get_job(self, job_id):
+        return JobDetailResponse(
+            job_id=job_id,
+            job_code="JOB-1",
+            state="assigned",
+            items=tuple(self._items),
+        )
+
+    def record_load_attempt(self, job_step_id, request, *, idempotency_key):
+        self.load_attempts.append((job_step_id, request, idempotency_key))
+        return LoadAttemptResponse(departure_allowed=request.result == "LOAD_CONFIRMED")
+
+
+def test_a_confirmed_cargo_closes_the_load_step_with_one_attempt_per_item() -> None:
+    gateway = LoadGateway([_load_dispatch()])
+
+    report = _worker(gateway).run_once()
+
+    assert report.succeeded == (4,)
+    assert [attempt[0] for attempt in gateway.load_attempts] == [4, 4]
+    submitted = [attempt[1] for attempt in gateway.load_attempts]
+    assert [request.item_id for request in submitted] == [11, 12]
+    assert {request.result for request in submitted} == {"LOAD_CONFIRMED"}
+    # 증거는 지어낸 값이 아니라 로봇이 보고한 관측이어야 한다.
+    assert submitted[0].observations["cargo_state"] == CARGO_LOCKED
+    assert submitted[0].observations["cargo_sensor_confirmed"] is True
+    assert submitted[0].pinky_id == "PK_01"
+    assert submitted[0].omx_id == "OMX_01"
+    assert submitted[0].handover_group_id == "group-1"
+
+
+def test_an_unloaded_robot_defers_instead_of_failing_the_step() -> None:
+    """아직 안 실린 것은 실패가 아니라 대기다. 실패로 적으면 운영자가 없는 문제를 쫓고,
+    outbox 재시도 예산만 태운다."""
+    gateway = LoadGateway(
+        [_load_dispatch()], cargo_state=CARGO_UNLOCKED, sensor_confirmed=False
+    )
+
+    report = _worker(gateway).run_once()
+
+    assert report.succeeded == ()
+    assert report.failed == ()
+    assert report.errors == ()
+    assert any("적재 대기" in deferred for deferred in report.deferred)
+    assert gateway.load_attempts == []
+    assert gateway.outcomes == []
+
+
+def test_a_load_step_without_handover_identity_is_an_error() -> None:
+    gateway = LoadGateway([_load_dispatch(payload={"input": {}})])
+
+    report = _worker(gateway).run_once()
+
+    assert report.succeeded == ()
+    assert any("handover identity" in error for error in report.errors)
+    assert gateway.load_attempts == []
+
+
+def test_the_http_client_implements_every_executor_method() -> None:
+    """Protocol 에 선언한 것이 실제 클라이언트에 있는지 본다.
+
+    손으로 만든 fake 는 이것을 못 잡는다 — fake 가 메서드를 갖고 있으면 통과하고,
+    운영에서 진짜 클라이언트만 터진다. 2026-08-19 에 `record_load_attempt` 구현이
+    Protocol 클래스 안으로 들어가 실제 클라이언트에 없던 사고가 그것이다.
+    """
+    declared = {
+        name
+        for name, value in vars(ExecutorGatewayClient).items()
+        if callable(value) and not name.startswith("_")
+    }
+    assert declared, "Protocol 에서 메서드를 하나도 읽지 못했다"
+    missing = [name for name in sorted(declared) if not hasattr(FMSGatewayHttpClient, name)]
+    assert missing == [], f"실제 클라이언트에 없는 메서드: {missing}"
+
+
+def test_the_load_request_satisfies_the_gateway_schema() -> None:
+    """실행기가 만든 요청을 **Gateway 의 진짜 pydantic 모델**로 검증한다.
+
+    가짜 게이트웨이는 무엇을 받든 통과시키므로, 서버가 요구하는 필드가 빠진 것을
+    못 잡는다. 2026-08-19 에 `metrics`·`evidence_refs`·`policy_name`·
+    `policy_version`·`model_name`·`model_version` 여섯 개를 빠뜨려 실제 주행에서만
+    `HTTP 422` 로 드러났고, 그 회차를 통째로 잃었다.
+    """
+    from dataclasses import asdict
+
+    from control_tower.gateway.fms_client import _omit_none
+
+    pydantic_model = pytest.importorskip("fms_gateway.app.models")
+
+    gateway = LoadGateway([_load_dispatch()], items=[{"job_item_id": 11}])
+    _worker(gateway).run_once()
+    assert gateway.load_attempts, "적재 증거가 제출되지 않았다"
+
+    _, request, _ = gateway.load_attempts[0]
+    body = _omit_none(asdict(request))
+    # 검증이 통과하지 못하면 어떤 필드가 문제인지 그대로 드러낸다.
+    pydantic_model.LoadAttemptRequest.model_validate(body)

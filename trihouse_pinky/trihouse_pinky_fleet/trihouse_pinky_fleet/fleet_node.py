@@ -178,7 +178,11 @@ class FleetNode(Node):
             else 'TRANSPORT'
         )
         if self.workflow.phase is JobPhase.WAITING_HANDOVER and not return_mode:
-            accepted = self.workflow.reassign(context.command_id, context.map_revision)
+            accepted = self.workflow.reassign(
+                context.command_id,
+                context.map_revision,
+                handover_expected=bool(goal.handover_expected),
+            )
         else:
             accepted = self.workflow.accept(
                 JobCommand(
@@ -187,6 +191,7 @@ class FleetNode(Node):
                     context.map_revision,
                     destination_kind,
                     requires_cargo=not (return_mode or rmf_navigation),
+                    handover_expected=bool(goal.handover_expected),
                 ),
                 ready=self.ready and not self.emergency,
                 cargo_confirmed=self.cargo_confirmed,

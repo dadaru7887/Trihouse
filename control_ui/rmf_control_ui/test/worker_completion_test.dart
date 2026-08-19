@@ -71,6 +71,11 @@ class _CompletionApi implements FmsApi {
     return _job(completedQty: 1);
   }
 
+  // 작업 상세가 원장 변화를 실시간으로 따라가려고 구독한다.
+  @override
+  Stream<OperationsEventDto> operationsEvents() =>
+      const Stream<OperationsEventDto>.empty();
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

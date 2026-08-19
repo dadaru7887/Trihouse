@@ -22,6 +22,8 @@ class JobCommand:
     map_revision: str
     destination_kind: str
     requires_cargo: bool = True
+    # 도착 뒤 인계가 이어지는가. 원장이 계획을 보고 정해 명령에 실어 보낸다.
+    handover_expected: bool = False
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,7 @@ class TransportWorkflow:
         self.job_id = ""
         self.destination_kind = ""
         self.recovery_return = False
+        self.handover_expected = False
 
     def accept(self, command: JobCommand, *, ready: bool, cargo_confirmed: bool) -> WorkflowResult:
         if command.command_id == self.command_id:
@@ -61,6 +64,7 @@ class TransportWorkflow:
             return WorkflowResult(False, False, JobPhase.REJECTED, "map revision mismatch")
         self.command_id, self.job_id, self.phase = command.command_id, command.job_id, JobPhase.NAVIGATING
         self.destination_kind = command.destination_kind
+        self.handover_expected = command.handover_expected
         return WorkflowResult(True, False, self.phase, "navigation accepted")
 
     def nav_result(self, *, succeeded: bool, stationary: bool) -> WorkflowResult:
@@ -86,10 +90,17 @@ class TransportWorkflow:
         if not stationary:
             return WorkflowResult(True, False, self.phase, "waiting for stop")
         if self.destination_kind == 'RMF_NAVIGATION':
-            self.command_id = ""
-            self.job_id = ""
-            self.phase = JobPhase.IDLE
-            return WorkflowResult(True, False, self.phase, "RMF navigation destination reached")
+            # P0 의 모든 주행은 RMF 를 거친다. 그래서 이 분기를 무조건 IDLE 로
+            # 끝내면 적재 도크에 도착해도 인계 대기 신호가 한 번도 나가지 않고,
+            # 로봇팔은 주행 로봇이 왔는지 알 방법이 없다(2026-08-19 실측: step 30
+            # 이 영원히 pending). 인계가 이어지는 도착만 대기 상태로 남긴다.
+            if not self.handover_expected:
+                self.command_id = ""
+                self.job_id = ""
+                self.phase = JobPhase.IDLE
+                return WorkflowResult(True, False, self.phase, "RMF navigation destination reached")
+            self.phase = JobPhase.WAITING_HANDOVER
+            return WorkflowResult(True, False, self.phase, "arrived and waiting for handover")
         if self.destination_kind.startswith('RETURN_'):
             self.command_id = ""
             self.job_id = ""
@@ -111,13 +122,21 @@ class TransportWorkflow:
         self.phase = JobPhase.IDLE
         return WorkflowResult(True, False, self.phase, "navigation canceled")
 
-    def reassign(self, command_id: str, map_revision: str) -> WorkflowResult:
-        """FMS can redirect a waiting delivery without replacing its cargo/job."""
+    def reassign(
+        self, command_id: str, map_revision: str, *, handover_expected: bool = False
+    ) -> WorkflowResult:
+        """FMS can redirect a waiting delivery without replacing its cargo/job.
+
+        `handover_expected` 는 새 명령의 것으로 갈아 끼운다. 적재를 마치고 인계
+        지점으로 갈 때와, 인계를 마치고 그냥 돌아갈 때가 서로 다르기 때문이다.
+        이전 명령의 값을 물려받으면 인계가 없는 도착에서도 대기 상태로 남는다.
+        """
         if self.phase is not JobPhase.WAITING_HANDOVER:
             return WorkflowResult(False, False, self.phase, "robot is not waiting for handover")
         if map_revision != self.expected_map_revision:
             return WorkflowResult(False, False, self.phase, "map revision mismatch")
         self.command_id = command_id
+        self.handover_expected = handover_expected
         self.phase = JobPhase.NAVIGATING
         return WorkflowResult(True, False, self.phase, "reassigned by FMS")
 
@@ -127,6 +146,7 @@ class TransportWorkflow:
             return WorkflowResult(False, False, self.phase, "robot is not waiting for handover")
         self.command_id = ""
         self.job_id = ""
+        self.handover_expected = False
         self.phase = JobPhase.IDLE
         return WorkflowResult(True, False, self.phase, "handover confirmed")
 
