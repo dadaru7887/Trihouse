@@ -184,7 +184,7 @@ else
   exit 1
 fi
 
-PINKY_WORLD="$(ros2 pkg prefix pinky_gz_sim)/share/pinky_gz_sim/worlds/empty.world"
+: "${PINKY_WORLD:=$ROOT/control_tower/bringup/p0_world.sdf}"
 : "${TRIHOUSE_FLEET_CONFIG:=$(ros2 pkg prefix trihouse_rmf_bridge)/share/trihouse_rmf_bridge/config/pinky_fleet.yaml}"
 
 echo "[bringup] 발행된 지도 revision 을 펼칩니다: $TRIHOUSE_MAP_REVISION"

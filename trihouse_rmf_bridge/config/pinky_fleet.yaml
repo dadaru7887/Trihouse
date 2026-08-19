@@ -25,22 +25,21 @@ rmf_fleet:
   tool_system:
     power: 0.000
   recharge_threshold: 0.100
-  recharge_soc: 1.000
+  recharge_soc: 0.300
   publish_fleet_state: 10.0
   account_for_battery_drain: true
   task_capabilities:
     loop: true
     delivery: true
   actions: []
-  finishing_request: "charge"
-  responsive_wait: true
+  finishing_request: "nothing"
+  responsive_wait: false
   reassign_task_interval: 120
   robots:
     PK_01:
-      # 현재 gwanghee navigation graph의 is_charger waypoint 이름과 동일하다.
-      charger: "충전1"
+      charger: "charging_station_01"
     PK_02:
-      charger: "충전2"
+      charger: "charging_station_02"
 
 fleet_manager:
   ip: "127.0.0.1"
