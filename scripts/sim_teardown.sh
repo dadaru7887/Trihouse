@@ -110,10 +110,34 @@ PATTERNS=(
 )
 
 excluded() {
-  local pid="$1" pattern cmdline
-  cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) || return 1
+  # 제외는 **실행 파일** 기준이다. 인자에 든 경로로 판정하면 안 된다.
+  #
+  # 예전에는 명령줄 전체를 부분 문자열로 봤다. 그래서 pytest 가 만든 임시 경로를
+  # 인자로 받은 프로세스가 pytest 실행으로 오인되어 살아남았다. 실제로
+  # `test_vision_launch.py` 가 남긴
+  #   python3 .../ros2 launch trihouse_pinky_vision ... config_file:=/tmp/pytest-of-syw/...
+  # 가 세대마다 쌓였고, 그 `camera_streamer` 3개가 RTSP 발행자를 계속 재시작해
+  # RTF 를 0.09 까지 떨어뜨렸다. Nav2 controller 가 20 Hz 를 놓쳐 주행이 실패했다.
+  local pid="$1" pattern program
+  local -a argv programs
+  mapfile -d '' -t argv < "/proc/$pid/cmdline" 2>/dev/null || return 1
+  (( ${#argv[@]} )) || return 1
+
+  # argv[0] 이 프로그램이다. 파이썬 인터프리터면 그다음 토큰까지 본다 —
+  # `python -m pytest` 와 `python /path/to/colcon` 을 함께 덮기 위해서다.
+  programs=("${argv[0]##*/}")
+  if [[ "${programs[0]}" == python* ]]; then
+    if [[ "${argv[1]:-}" == "-m" ]]; then
+      programs+=("${argv[2]:-}")
+    else
+      programs+=("${argv[1]##*/}")
+    fi
+  fi
+
   for pattern in "${EXCLUDE_PATTERNS[@]}"; do
-    [[ "$cmdline" == *"$pattern"* ]] && return 0
+    for program in "${programs[@]}"; do
+      [[ "$program" == "$pattern" ]] && return 0
+    done
   done
   return 1
 }

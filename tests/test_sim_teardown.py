@@ -46,27 +46,45 @@ def _selects(command: list[str], *, script: Path = SCRIPT) -> bool:
         victim.wait(timeout=5)
 
 
+def _as_program(name: str, *arguments: str) -> list[str]:
+    """`argv[0]` 가 `name` 인 프로세스를 만든다.
+
+    제외 판정이 **실행 파일** 을 보므로 대역도 그렇게 생겨야 한다. 예전 판본은
+    `python -c "...  # pytest ..."` 처럼 주석에 이름만 넣었는데, 그건 실제 pytest
+    명령줄과 다른 모양이라 "명령줄 어딘가에 pytest 가 있으면 제외" 라는 잘못된
+    규칙을 통과시켰다. 그 규칙 때문에 pytest 임시 경로를 인자로 받은 누수 launch
+    가 살아남았다 — 대역이 실제와 다르면 계약을 검증할 수 없다.
+    """
+    quoted = " ".join(f"'{argument}'" for argument in arguments)
+    return [
+        "bash",
+        "-c",
+        f"exec -a '{name}' {sys.executable} -c 'import time; time.sleep(30)' {quoted}",
+    ]
+
+
 def test_a_test_run_over_the_ros_packages_is_not_a_teardown_target() -> None:
     """teardown 은 시뮬 층만 내린다. 테스트 실행은 그 층이 아니다."""
     assert not _selects(
-        [
-            sys.executable,
-            "-c",
-            "import time; time.sleep(30)  # pytest -q trihouse_rmf_bridge/test "
-            "control_tower/tests trihouse_pinky/trihouse_pinky_bringup/test",
-        ]
+        _as_program(
+            f"{ROOT}/.venv/bin/pytest",
+            "-q",
+            "trihouse_rmf_bridge/test",
+            "control_tower/tests",
+        )
     )
 
 
 def test_a_colcon_build_of_a_listed_package_is_not_a_teardown_target() -> None:
     """빌드를 중간에 죽이면 install 이 반쯤 쓰인 채 남는다."""
     assert not _selects(
-        [
-            sys.executable,
-            "-c",
-            "import time; time.sleep(30)  # colcon build --packages-select "
-            "trihouse_pinky_bringup --symlink-install",
-        ]
+        _as_program(
+            "/usr/bin/colcon",
+            "build",
+            "--packages-select",
+            "trihouse_pinky_bringup",
+            "--symlink-install",
+        )
     )
 
 
