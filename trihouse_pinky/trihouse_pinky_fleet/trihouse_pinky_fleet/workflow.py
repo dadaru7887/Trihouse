@@ -67,6 +67,20 @@ class TransportWorkflow:
         if self.phase is not JobPhase.NAVIGATING:
             return WorkflowResult(False, False, self.phase, "no active navigation")
         if not succeeded:
+            # 실패도 종료다. 성공 경로와 같이 명령을 놓아 준다.
+            #
+            # `command_id` 를 남기면 `accept()` 가 같은 명령의 재시도를 중복으로
+            # 읽어(:48) phase 가 IDLE 에 머문다. 그러면 이어지는 `nav_result` 가
+            # "no active navigation" 을 돌려주고, RMF 가 재시도할 때마다 같은 자리를
+            # 돈다 — 재시도 자체가 불가능해지므로 부하나 타이밍으로 풀리지 않는다.
+            # 2026-08-19 09:46 실측에서 step 20 이 이 고리에 갇혔다.
+            #
+            # 진행 중인 명령의 중복 방어는 그대로다. 아직 NAVIGATING 이면 위의
+            # 중복 분기가 먼저 걸린다.
+            self.command_id = ""
+            self.job_id = ""
+            self.destination_kind = ""
+            self.recovery_return = False
             self.phase = JobPhase.IDLE
             return WorkflowResult(False, False, self.phase, "navigation failed")
         if not stationary:

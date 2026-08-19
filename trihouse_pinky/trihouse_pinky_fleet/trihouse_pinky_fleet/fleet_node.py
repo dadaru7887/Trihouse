@@ -11,7 +11,7 @@ from rclpy.node import Node
 from rclpy.task import Future
 from std_msgs.msg import Bool, String
 from trihouse_interfaces.action import ExecuteTransport
-from trihouse_interfaces.msg import CargoState, HandoverState, NavigationState, Readiness, RobotHealth, SafetyState, TaskEvent
+from trihouse_interfaces.msg import CargoState, HandoverState, NavigationState, Readiness, RobotHealth, RobotStatus, SafetyState, TaskEvent
 
 from .workflow import JobCommand, JobPhase, TransportWorkflow
 from .arrival import may_report_arrival, within_tolerance
@@ -21,6 +21,23 @@ def _complete_once(future: Future) -> None:
     """timer 가 두 번 발화해도 Future 를 한 번만 완료시킨다."""
     if not future.done():
         future.set_result(None)
+
+
+# 정밀 정차 허용오차. **Nav2 의 goal tolerance 보다 좁으면 안 된다.**
+#
+# Nav2 는 `xy_goal_tolerance` 안에 들어오면 그 자리에서 멈추고 SUCCEEDED 를 준다.
+# 그보다 좁은 기준으로 도착을 다시 판정하면 Nav2 가 정상 종료한 이동을 우리가
+# 거절하게 되고, 로봇은 더 갈 이유가 없으므로 재시도해도 같은 자리에 선다 —
+# 재시도로 풀리지 않는 실패다. 2026-08-19 실측에서 step 20 이
+# `GOAL_TOLERANCE_NOT_MET` 으로 죽은 것이 이것이다(우리 0.05 대 Nav2 0.1).
+#
+# 값의 정본은 `pinky_pro/pinky_navigation/params/nav2_params.yaml` 이다 — 실물
+# 주행으로 튜닝한 값이라 우리 편의로 조이지 않는다. AMCL 실측 stddev 가 10~12 cm
+# 이므로 그보다 좁은 허용오차는 위치추정 정확도로도 만족시킬 수 없다.
+#
+# 두 값의 관계는 `test_precise_stop_matches_nav2_tolerance.py` 가 지킨다.
+PRECISE_STOP_XY_TOLERANCE_M = 0.10
+PRECISE_STOP_YAW_TOLERANCE_RAD = 0.25
 
 
 def transport_admission_block_reason(outbox_ready: bool) -> str | None:
@@ -48,6 +65,9 @@ class FleetNode(Node):
         self.robot_id = self.get_parameter('robot_id').value
         self.workflow = TransportWorkflow(robot_id=self.robot_id, expected_map_revision=self.get_parameter('map_revision').value)
         self.ready = False; self.outbox_ready = False; self.cargo_confirmed = False; self.emergency = False; self.stationary = False; self.recovery_health_ok = False; self.current_pose: tuple[float, float, float] | None = None
+        # 정밀 정차 판정용 map 프레임 pose. odom 은 프레임이 달라 쓸 수 없다.
+        self.map_pose: tuple[float, float, float] | None = None
+        self.map_frame: str = ""
         self.navigation_pub = self.create_publisher(NavigationState, 'trihouse/navigation/state', 10)
         self.event_pub = self.create_publisher(TaskEvent, 'trihouse/task/events', 10)
         self.handover_pub = self.create_publisher(HandoverState, '/trihouse/handover/state', 10)
@@ -59,6 +79,7 @@ class FleetNode(Node):
         self.create_subscription(
             Bool, 'trihouse/fms/event_outbox_ready', self._on_outbox_ready, 10
         )
+        self.create_subscription(RobotStatus, 'trihouse/status', self._on_status, 10)
         self.create_subscription(Odometry, 'odom', self._on_odom, 10)
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.nav_goal_handles = {}
@@ -90,6 +111,22 @@ class FleetNode(Node):
 
     def _on_outbox_ready(self, message: Bool) -> None:
         self.outbox_ready = bool(message.data)
+
+    def _on_status(self, message: RobotStatus) -> None:
+        """map 프레임 pose 를 받아 둔다. 정밀 정차 판정이 이것만 쓴다.
+
+        `_on_odom` 의 pose 는 odom 프레임이라 map 목표와 비교할 수 없다. 로봇이
+        spawn 한 자리만큼 언제나 어긋나고 주행하며 드리프트한다. `status_node` 가
+        내는 이 메시지는 `frame_id` 를 함께 담으므로 map 인지 확인할 수 있다.
+        """
+        self.map_frame = str(message.frame_id)
+        position = message.pose.pose.position
+        orientation = message.pose.pose.orientation
+        yaw = atan2(
+            2 * (orientation.w * orientation.z + orientation.x * orientation.y),
+            1 - 2 * (orientation.y * orientation.y + orientation.z * orientation.z),
+        )
+        self.map_pose = (position.x, position.y, yaw)
 
     def _on_odom(self, message: Odometry) -> None:
         twist = message.twist.twist
@@ -311,12 +348,24 @@ class FleetNode(Node):
         return future
 
     def _at_precise_goal(self, goal: ExecuteTransport.Goal) -> bool:
-        if self.current_pose is None:
+        # 목표는 map 프레임이다(`protocol.py` 가 'map' 을 박는다). odom pose 와
+        # 비교하면 spawn 오프셋과 드리프트만큼 언제나 어긋나 dock 도착이 구조적으로
+        # 실패한다 — 2026-08-19 실측에서 y 가 0.61 m 벌어져 허용오차 0.05 m 를
+        # 넘겼고 step 이 GOAL_TOLERANCE_NOT_MET 으로 죽었다.
+        #
+        # frame_id 가 map 이 아니면 판정하지 않는다. AMCL 수렴 전에는 로봇이 자기
+        # 위치를 map 으로 말할 수 없고, 그때 통과시키면 엉뚱한 자리에서 인계가 열린다.
+        if self.map_pose is None or self.map_frame != "map":
             return False
         orientation = goal.dropoff_pose.pose.orientation
         yaw = atan2(2 * (orientation.w * orientation.z + orientation.x * orientation.y), 1 - 2 * (orientation.y * orientation.y + orientation.z * orientation.z))
         target = goal.dropoff_pose.pose.position
-        return within_tolerance(current=self.current_pose, target=(target.x, target.y, yaw), xy_tolerance_m=0.05, yaw_tolerance_rad=0.0873)
+        return within_tolerance(
+            current=self.map_pose,
+            target=(target.x, target.y, yaw),
+            xy_tolerance_m=PRECISE_STOP_XY_TOLERANCE_M,
+            yaw_tolerance_rad=PRECISE_STOP_YAW_TOLERANCE_RAD,
+        )
 
     def _publish_event(
         self,

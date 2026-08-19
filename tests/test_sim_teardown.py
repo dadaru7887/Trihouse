@@ -124,3 +124,48 @@ def test_the_camera_streamer_is_a_teardown_target() -> None:
             "trihouse_pinky_vision/camera_streamer",
         ]
     )
+
+
+def test_a_leaked_launch_is_still_a_target_even_with_a_pytest_path_in_its_arguments() -> None:
+    """제외는 **실행 파일** 기준이어야 한다. 인자에 든 경로가 아니다.
+
+    `test_vision_launch.py` 는 fixture 를 pytest 임시 디렉터리에 만들고 그 경로를
+    launch 인자로 넘긴다. 그 테스트가 실패하면 launch 프로세스가 남는데, 명령줄이
+    이렇게 생겼다.
+
+    ```
+    python3 /opt/ros/jazzy/bin/ros2 launch trihouse_pinky_vision vision.launch.py \\
+        config_file:=/tmp/pytest-of-syw/pytest-122/.../fixture.yaml
+    ```
+
+    `EXCLUDE_PATTERNS` 가 부분 문자열로 걸리므로 `/tmp/pytest-of-...` 때문에
+    **pytest 실행으로 오인되어 살아남는다.** 2026-08-19 실측에서 그렇게 남은
+    `camera_streamer` 3개가 각자 RTSP 발행자를 계속 재시작해 RTF 를 0.09 까지
+    떨어뜨렸고, Nav2 controller 가 20 Hz 를 놓쳐 주행이 실패했다.
+
+    누수 자체(그 테스트가 프로세스를 남기는 것)는 별개 문제다. 여기서는 teardown
+    이 그것을 치울 수 있어야 한다는 것만 고정한다.
+    """
+    assert _selects(
+        [
+            sys.executable,
+            "-c",
+            "import time; time.sleep(30)",
+            "trihouse_pinky_vision",
+            "config_file:=/tmp/pytest-of-someone/pytest-1/x/fixture.yaml",
+        ]
+    )
+
+
+def test_a_pytest_run_is_still_excluded_when_invoked_through_python() -> None:
+    """`python -m pytest` 도 보호해야 한다. 실행 파일 판정이 그것도 덮는지 본다."""
+    assert not _selects(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "trihouse_pinky_vision",
+        ]
+    )
