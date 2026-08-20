@@ -8,12 +8,13 @@ RTX 4060 영상 수신·저장과 RTX 5080 추론을 역할별로 분리한다. 
 | `stream_hub/` | MediaMTX RTSP 수신·metrics |
 | `recording_server/` | 서버측 녹화·보존·evidence URI |
 | `inference_common/` | 최신 frame bus, 공통 schema, health |
-| `yolo_inference_server/` | 모델 로딩·GPU 추론 orchestration |
-| `person_worker/` | 사람 검출·추적·자세 후보 |
+| `yolo_inference_server/` | 모델 로딩·GPU 추론 (`detector.py`) |
+| `person_worker/` | 사람 자세 측정(`posture.py`)·낙상 상태(`fall_monitor.py`)·정책(`policy.py`)·추론 루프(`worker.py`) |
 | `object_worker/` | 객체 검출·segmentation·추적 |
 | `marker_worker/` | QR·ArUco 판독·pose 추정 |
 | `model_registry/` | 모델 승인·배포·rollback |
-| `training/`, `evaluation/` | 학습과 재현 가능한 평가 |
+| `training/` | 학습 파이프라인 전체. 진입점은 `train.py` 하나 |
+| `evaluation/` | box instance·mask pixel 지표 |
 | `tests/` | recorded stream·장애 profile 통합 시험 |
 
 ## PC1 → PC2 표준 영상 입력
@@ -60,6 +61,8 @@ PY
 
 - `person_worker/policy.py`는 모델의 사람 box·track·자세·움직임 결과에 ROI와 연속 프레임
   조건을 적용한다. 사람 검출 자체로 로봇 속도 명령을 내리지 않으며, 확정 이벤트는 Control Tower에 전달한다.
+  낙상 판정은 `fall_monitor.FallMonitor` 하나만 쓴다(track 마다 하나). 전에는 `observe_fall()`
+  안에 별도 규칙이 있어 같은 판단을 두 곳에서 다르게 내렸다.
 - `marker_worker/policy.py`는 OMX 동작 전의 QR 주문·물품 일치와 ArUco 선반 ID·오차 범위를 검사한다.
 - `object_worker/basket_correction.py`는 YOLO OBB가 준 바구니 외곽 네 모서리 기반 보정을 적용한다.
   병진·회전이 구성한 잔여 정차 오차 한계를 넘거나 네 모서리가 불완전하면 OMX 동작 대신
@@ -87,5 +90,56 @@ python3 -m unittest -v \
   vision_system.tests.test_recorder
 ```
 
-위 명령은 SR_19/20/44의 ROI 사람 감지 테스트만 실행한다. SR_52 쓰러짐 감지의 기존 테스트와
-`observe_fall()`은 기술 조사·승인 전까지 실행·수정하지 않는다.
+위 명령은 SR_19/20/44의 ROI 사람 감지 테스트만 실행한다.
+
+SR_52 쓰러짐 감지는 **기술 조사가 끝났다**(2026-08-18~19 aspect ratio sweep, confidence
+cutoff 분석, `re_1`~`re_6` 실낙상 확인). 그 결과가 `person_worker/fall_monitor.py` 와
+`configs/realtime.yaml` 의 `monitor` 절이고, `observe_fall()` 이 그것을 쓴다. 남은 한계는
+`training/README.md` 의 "알려진 한계" 절에 있다 — 요약하면 **이 판정은 최종 결론이 아니라
+사람에게 볼 곳을 알려 주는 장치**다.
+
+
+## 사람 + 낙상 — 모델 하나와 규칙 하나
+
+학습되는 모델은 **하나**다. `data.yaml` 이 `nc=2, names=['obstacle','person']` 이고
+**`fallen` 클래스는 없다.** 낙상은 학습된 것이 아니라 사람 mask 를 후처리하는
+규칙이다.
+
+```text
+frame ─▶ yolo_inference_server/detector.py    1단계. 검출        ← 학습되는 모델
+          └─▶ person_worker/posture.py         2단계. 자세 측정   ← 규칙 (갈아 끼울 자리)
+                └─▶ person_worker/fall_monitor.py   시간축 상태 전이
+```
+
+한 번의 추론에서 두 갈래가 나온다. **사람 위치·신뢰도**는 로봇 안전 gate 로,
+**낙상 상태**는 관제로 간다. 지연 요구가 정반대라 단계를 나눈다 — 검출은 매
+프레임 돌아야 하고(로봇이 이 결과로 감속한다), 낙상은 어차피 debounce 로 1 초를
+기다린다. 합치면 느린 쪽 비용이 빠른 쪽에 얹힌다.
+
+**왜 `fallen` 을 클래스로 넣지 않는가**
+
+- train 의 person 인스턴스가 129 개고 그중 69 개가 small object 다. 클래스를
+  쪼개면 양쪽 다 나빠진다.
+- 넘어진 사람도 사람이다. 클래스로 넣으면 **자세 오판이 검출 실패가 된다.**
+- 검출기는 환경이 바뀔 때, 낙상 임계값은 영상 sweep 으로 튜닝한다. 합치면
+  임계값 하나 만질 때마다 재학습이다.
+
+2 단계를 규칙에서 모델로 바꾸려면 `posture_manifest` CSV(아직 없음)와 실낙상
+데이터가 필요하다. 지금 확보된 실낙상 구간은 `re_3` 의 t=57~62 s, t=123~131 s
+둘뿐이다.
+
+## 학습·추론 명령
+
+```bash
+cd /home/syw/Trihouse
+# 학습 (GPU 필요)
+venv/yolo_segmentation/bin/python -m vision_system.training.train train \
+  --config vision_system/training/configs/config.yaml
+# 추론
+venv/yolo_segmentation/bin/python -m vision_system.person_worker.worker \
+  --weights <selected_model.json> --source rtsp://<host>:8554/pinky/CAM-PK-01 --headless
+```
+
+**경로는 전부 인자다.** 코드에 절대 경로를 넣지 않는다 — config 의 상대 경로는
+저장소 루트 기준이고(`training/config_loader.py` 의 `REPOSITORY_ROOT`), 증강
+recipe 위치는 `--augmentation-source` 로 바꾼다.

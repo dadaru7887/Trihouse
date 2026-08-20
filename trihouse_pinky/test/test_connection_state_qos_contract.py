@@ -17,6 +17,9 @@ from trihouse_pinky_fleet.gateway_node import (
 from trihouse_pinky_fleet.status_node import (
     CONNECTION_STATE_QOS as SUBSCRIBER_QOS,
 )
+from trihouse_pinky_safety.safety_supervisor_node import (
+    CONNECTION_STATE_QOS as SAFETY_QOS,
+)
 
 
 def test_connection_state_publisher_latches_the_last_value():
@@ -28,3 +31,20 @@ def test_connection_state_subscriber_uses_the_same_profile_as_the_publisher():
     assert SUBSCRIBER_QOS.durability == PUBLISHER_QOS.durability
     assert SUBSCRIBER_QOS.reliability == PUBLISHER_QOS.reliability
     assert SUBSCRIBER_QOS.depth == PUBLISHER_QOS.depth
+
+
+def test_the_safety_gate_uses_the_same_profile_as_the_publisher():
+    """`status_node` 만 고치고 `safety_supervisor` 를 빠뜨렸던 자리다.
+
+    2026-08-20 실측: supervisor 를 다시 띄우자 TRANSIENT_LOCAL 구독은 1 개를
+    받는데 VOLATILE 구독은 0 개였다. supervisor 는 `control_link_online` 을
+    False 로 굳혀 `control_link_lost` STOP 을 걸었고, 그 STOP 이 `safety_blocked`
+    -> `dispatchable=False` 로 이어져 로봇이 RMF 에서 빠졌다. TCP 는 내내
+    ESTAB 이었고 Gateway 는 `STATE_ONLINE` 을 이미 발행한 뒤였다.
+
+    이 gate 는 모터 `/cmd_vel` 의 유일한 발행자다. 여기서 놓치면 나머지 층이
+    아무리 옳아도 로봇은 움직이지 않는다.
+    """
+    assert SAFETY_QOS.durability == PUBLISHER_QOS.durability
+    assert SAFETY_QOS.reliability == PUBLISHER_QOS.reliability
+    assert SAFETY_QOS.depth == PUBLISHER_QOS.depth

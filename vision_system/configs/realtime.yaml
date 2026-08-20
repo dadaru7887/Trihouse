@@ -1,0 +1,11 @@
+inference:
+  confidence: 0.25
+  image_size: 640
+  device: auto
+  person_class_id: 1
+monitor:
+  fall_aspect_ratio: 0.9
+  fall_confirm_seconds: 1.0
+  immobile_seconds: 5.0
+  motion_threshold: 0.015
+  recovery_confirm_seconds: 1.0

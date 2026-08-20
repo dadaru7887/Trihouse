@@ -11,8 +11,11 @@ Gateway 는 발행된 지도를 **내용**으로만 준다(`/internal/v1/maps/<n
 2. RMF navigation graph 를 만든다. 발행된 nav graph 는 정점만 있고
    `lanes: []` 라 RMF 가 경로를 못 만든다. 승인된 JSONL 의 병목 두 곳을
    정점으로 추가하고, 실측 배치가 말하는 통로대로 lane 을 잇는다.
-3. Gazebo world 를 고른다. 발행된 world 는 이름만 있는 빈 SDF 라 바닥면조차
-   없다. `pinky_gz_sim` 의 `empty.world` 를 **읽기만 해서** 복사한다.
+3. Gazebo world 를 만든다. 발행된 world 는 이름만 있는 빈 SDF 라 바닥면조차
+   없다. 바닥면 원본(`--world-source`)을 **읽기만 해서** 옮기고, 그 위에
+   `--map-yaml` 의 점유 셀로 벽을 세운다. 벽을 손으로 만들지 않는 이유는
+   `build_world_with_walls` 에 적었다 — Nav2 가 도는 지도와 물리가 갈라지면
+   로봇이 "도착했다" 고 말하는 자리와 실제로 선 자리가 어긋난다.
 4. 로봇마다 Nav2 파라미터를 파생한다. `pinky_pro` 원본은 프레임이
    `base_footprint`/`odom` 이고 costmap 이 `/scan` 을 절대 경로로 본다.
    두 대를 한 Gazebo 에 띄우면 서로 덮어쓰므로 namespace 를 입힌 사본을 만든다.
@@ -25,10 +28,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
 import sys
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -349,6 +352,172 @@ def derive_nav2_params(
     )
 
 
+# 벽 높이. 라이다 평면이 base_footprint 기준 0.125 m 다 — `pinky.urdf.xacro` 의
+# base_link 0.028 + rplidar_mount 0.067 + rplidar_link 0.030. 벽이 그보다 낮으면
+# 스캔이 그냥 지나가 벽이 없는 것과 같아진다.
+WALL_HEIGHT_M = 0.30
+
+
+@dataclass(frozen=True)
+class MapGrid:
+    """SLAM 지도를 격자로 읽은 것. `occupied` 는 (행, 열) 이고 행 0 이 위쪽이다."""
+
+    width: int
+    height: int
+    resolution: float
+    origin: tuple[float, float]
+    occupied: frozenset[tuple[int, int]]
+
+
+def _decode_image(data: bytes) -> tuple[int, int, list[int]]:
+    """지도 이미지를 회색조 값으로 편다. **확장자가 아니라 magic bytes 로 고른다.**
+
+    `new_map_2.pgm` 은 확장자만 `.pgm` 이고 내용은 PNG 다. 확장자로 파서를 고르면
+    조용히 깨진 격자가 나오고, 그 격자로 세운 벽은 지도와 어긋난다.
+    """
+    if data.startswith(b"\x89PNG\r\n"):
+        try:
+            from PIL import Image  # 이 한 경우에만 필요하다
+        except ImportError as error:  # pragma: no cover - 환경 문제
+            raise SystemExit(
+                "PNG 형식의 지도를 읽으려면 Pillow 가 필요합니다: pip install Pillow"
+            ) from error
+        import io
+
+        image = Image.open(io.BytesIO(data)).convert("L")
+        return image.width, image.height, list(image.getdata())
+
+    if not data.startswith(b"P5"):
+        raise SystemExit("지도 이미지가 P5 PGM 도 PNG 도 아닙니다")
+
+    fields: list[int] = []
+    offset = 2
+    while len(fields) < 3:
+        while offset < len(data) and data[offset : offset + 1].isspace():
+            offset += 1
+        if data[offset : offset + 1] == b"#":
+            while offset < len(data) and data[offset : offset + 1] not in b"\r\n":
+                offset += 1
+            continue
+        start = offset
+        while offset < len(data) and not data[offset : offset + 1].isspace():
+            offset += 1
+        fields.append(int(data[start:offset]))
+    offset += 1  # 헤더 마지막 공백 하나만 건너뛴다 (PGM 규약)
+    width, height, _maximum = fields
+    return width, height, list(data[offset : offset + width * height])
+
+
+def read_map_grid(map_yaml: Path) -> MapGrid:
+    """지도 yaml 과 이미지를 읽어 점유 셀을 고른다.
+
+    판정은 ROS `map_server` 와 같다 — `negate` 를 반영한 뒤 점유 확률이
+    `occupied_thresh` 를 넘는 셀만 점유다. **미확인 셀은 점유가 아니다.**
+    대부분 방 밖이라 벽으로 세우면 없는 벽이 생긴다.
+    """
+    document = yaml.safe_load(map_yaml.read_text(encoding="utf-8"))
+    image_path = (map_yaml.parent / document["image"]).resolve()
+    width, height, pixels = _decode_image(image_path.read_bytes())
+
+    negate = int(document.get("negate", 0))
+    threshold = float(document.get("occupied_thresh", 0.65))
+    origin = document["origin"]
+
+    occupied = {
+        (index // width, index % width)
+        for index, value in enumerate(pixels)
+        if (value / 255.0 if negate else (255 - value) / 255.0) > threshold
+    }
+    return MapGrid(
+        width=width,
+        height=height,
+        resolution=float(document["resolution"]),
+        origin=(float(origin[0]), float(origin[1])),
+        occupied=frozenset(occupied),
+    )
+
+
+def _merge_rectangles(grid: MapGrid) -> list[tuple[int, int, int, int]]:
+    """점유 셀을 겹치지 않는 직사각형으로 뭉친다. (행0, 열0, 행1, 열1) 을 돌려준다.
+
+    셀 하나당 상자 하나로 두면 44 x 54 지도에서도 상자가 241 개다. Gazebo 의 접촉
+    계산이 그만큼 늘고 RTF 가 떨어진다 — 12 코어 PC 에서는 그것만으로 충분히 아프다.
+    가로로 최대한 늘린 뒤 같은 폭이 이어지는 동안 세로로 늘리는 탐욕 병합이면
+    직교 벽으로 이루어진 이 지도에서 상자 수가 한 자릿수 배로 줄어든다.
+    """
+    remaining = set(grid.occupied)
+    rectangles: list[tuple[int, int, int, int]] = []
+    for row in range(grid.height):
+        for column in range(grid.width):
+            if (row, column) not in remaining:
+                continue
+            last_column = column
+            while (row, last_column + 1) in remaining:
+                last_column += 1
+            last_row = row
+            while all(
+                (last_row + 1, spanned) in remaining
+                for spanned in range(column, last_column + 1)
+            ):
+                last_row += 1
+            for covered_row in range(row, last_row + 1):
+                for covered_column in range(column, last_column + 1):
+                    remaining.discard((covered_row, covered_column))
+            rectangles.append((row, column, last_row, last_column))
+    return rectangles
+
+
+def build_world_with_walls(map_yaml: Path, world_source: Path, destination: Path) -> None:
+    """원본 world 에 지도의 벽을 얹어 `destination` 에 쓴다. 원본은 읽기만 한다.
+
+    벽을 손으로 만들지 않고 **Nav2 가 도는 것과 같은 yaml** 에서 만드는 이유는,
+    손으로 만드는 순간 세 번째 진실이 생기기 때문이다 — 원장이 발행한 지도,
+    Nav2 의 static layer, Gazebo 의 물리. 셋이 갈라지면 로봇이 "도착했다" 고 말하는
+    자리와 실제로 선 자리가 어긋난다.
+    """
+    grid = read_map_grid(map_yaml)
+    origin_x, origin_y = grid.origin
+    resolution = grid.resolution
+
+    links: list[str] = []
+    for index, (row, column, last_row, last_column) in enumerate(_merge_rectangles(grid)):
+        min_x = origin_x + column * resolution
+        max_x = origin_x + (last_column + 1) * resolution
+        min_y = origin_y + (grid.height - 1 - last_row) * resolution
+        max_y = origin_y + (grid.height - row) * resolution
+        links.append(
+            f"""      <link name="wall_{index:04d}">
+        <pose>{(min_x + max_x) / 2:.6f} {(min_y + max_y) / 2:.6f} """
+            f"""{WALL_HEIGHT_M / 2:.6f} 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>{max_x - min_x:.6f} {max_y - min_y:.6f} """
+            f"""{WALL_HEIGHT_M:.6f}</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>{max_x - min_x:.6f} {max_y - min_y:.6f} """
+            f"""{WALL_HEIGHT_M:.6f}</size></box></geometry>
+          <material>
+            <ambient>0.6 0.6 0.62 1</ambient>
+            <diffuse>0.7 0.7 0.72 1</diffuse>
+          </material>
+        </visual>
+      </link>"""
+        )
+
+    walls = (
+        f"    <!-- {map_yaml.name} 에서 생성한 벽 {len(links)} 개. 손으로 고치지 않는다 -->\n"
+        '    <model name="walls">\n'
+        "      <static>true</static>\n"
+        "      <pose>0 0 0 0 0 0</pose>\n" + "\n".join(links) + "\n    </model>\n"
+    )
+
+    source = world_source.read_text(encoding="utf-8")
+    closing = source.rfind("</world>")
+    if closing < 0:
+        raise SystemExit(f"world 원본에 </world> 가 없습니다: {world_source}")
+    destination.write_text(source[:closing] + walls + source[closing:], encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fms-base-url", default="http://127.0.0.1:8080")
@@ -357,6 +526,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--features", type=Path, required=True)
     parser.add_argument("--nav2-source", type=Path, required=True)
     parser.add_argument("--world-source", type=Path, required=True)
+    parser.add_argument(
+        "--map-yaml",
+        type=Path,
+        default=None,
+        help=(
+            "Gazebo 에 벽을 세울 근거 지도. Nav2 가 도는 것과 같은 yaml 을 준다. "
+            "SLAM 모드처럼 지도가 없으면 생략하고, 그러면 바닥면만 있는 world 가 된다"
+        ),
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--robot",
@@ -390,7 +568,16 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     world_path = output / "world.sdf"
-    shutil.copyfile(args.world_source, world_path)
+    if args.map_yaml is None:
+        # SLAM 모드에는 세울 근거가 없다. 바닥면만 있는 world 로 둔다.
+        world_path.write_text(args.world_source.read_text(encoding="utf-8"), encoding="utf-8")
+        print("[assets] 지도가 없어 벽을 세우지 않습니다 (바닥면만)")
+    else:
+        build_world_with_walls(args.map_yaml, args.world_source, world_path)
+        grid = read_map_grid(args.map_yaml)
+        print(
+            f"[assets] {args.map_yaml.name} 의 점유 셀 {len(grid.occupied)} 개로 벽을 세웠습니다"
+        )
 
     nav2_dir = output / "nav2"
     nav2_dir.mkdir(exist_ok=True)

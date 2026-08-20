@@ -6,14 +6,45 @@ from math import hypot
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
+from rclpy.qos import (
+    QoSDurabilityPolicy,
+    QoSHistoryPolicy,
+    QoSProfile,
+    QoSReliabilityPolicy,
+)
 from sensor_msgs.msg import LaserScan, Range
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
 from trihouse_interfaces.msg import ConnectionState, IndicatorState, KeepOutZone, PersonDetection, SafetyState
 from trihouse_interfaces.srv import ClearEmergency
 
-from .geometry import point_in_polygon
+from .geometry import (
+    PROTECTIVE_HALF_WIDTH_M,
+    SCAN_FORWARD_OFFSET_RAD,
+    SCAN_ORIGIN_OFFSET_X_M,
+    SWEPT_RADIUS_M,
+    forward_path_distance,
+    nearest_range,
+    point_in_polygon,
+    rotating_in_place,
+)
 from .policy import MotionCommand, SafetyConfig, SafetyInputs, apply_safety_gate
+
+
+# `trihouse/fms/state` 는 흘러가는 사건이 아니라 **최신 값이 계속 유효한 사실**이다.
+# `gateway_node` 는 연결 상태가 바뀔 때만 발행하므로, 늦게 뜬 구독자가 그 한 번을
+# 놓치면 영원히 모른다. 이 gate 는 모터 `/cmd_vel` 의 유일한 발행자라, 놓치면
+# `control_link_lost` STOP 이 걸린 채 로봇이 RMF 에서 빠진다.
+#
+# `gateway_node`·`status_node` 의 같은 이름 상수와 값이 같아야 한다 —
+# `test_connection_state_qos_contract.py` 가 셋을 묶는다. 여기서 따로 두는 이유는
+# `trihouse_pinky_safety` 가 `trihouse_pinky_fleet` 에 의존하지 않기 때문이다.
+CONNECTION_STATE_QOS = QoSProfile(
+    depth=1,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+)
 
 
 class SafetySupervisor(Node):
@@ -27,6 +58,17 @@ class SafetySupervisor(Node):
         self.declare_parameter('slow_linear_speed_mps', 0.08)
         self.declare_parameter('require_ultrasonic', True)
         self.declare_parameter('person_protective_distance_m', 1.0)
+        # 안전 필드의 모양. 기본값의 근거는 `geometry.py` 에 적었고
+        # `test_safety_fields_match_the_robot.py` 가 벤더 URDF·Nav2 발자국과 묶는다.
+        self.declare_parameter('scan_forward_offset_rad', SCAN_FORWARD_OFFSET_RAD)
+        self.declare_parameter('scan_origin_offset_x_m', SCAN_ORIGIN_OFFSET_X_M)
+        self.declare_parameter('protective_half_width_m', PROTECTIVE_HALF_WIDTH_M)
+        # 회전이 쓸고 가는 원. 발자국 외접반경에 여유를 더한 값이다.
+        self.declare_parameter('swept_clearance_m', SWEPT_RADIUS_M + 0.02)
+        self.scan_forward_offset_rad = float(self.get_parameter('scan_forward_offset_rad').value)
+        self.scan_origin_offset_x_m = float(self.get_parameter('scan_origin_offset_x_m').value)
+        self.protective_half_width_m = float(self.get_parameter('protective_half_width_m').value)
+        self.swept_clearance_m = float(self.get_parameter('swept_clearance_m').value)
         self.robot_id = self.get_parameter('robot_id').value
         self.sensor_timeout_s = float(self.get_parameter('sensor_timeout_s').value)
         self.config = SafetyConfig(float(self.get_parameter('stop_distance_m').value), float(self.get_parameter('slow_distance_m').value), float(self.get_parameter('slow_linear_speed_mps').value), float(self.get_parameter('person_protective_distance_m').value))
@@ -35,6 +77,7 @@ class SafetySupervisor(Node):
         self.dock: MotionCommand | None = None
         self.front_range: float | None = None
         self.scan_range: float | None = None
+        self.nearby_range: float | None = None
         self.person_detected = False
         self.person_distance = None
         self.person_until = 0.0
@@ -52,7 +95,7 @@ class SafetySupervisor(Node):
         self.create_subscription(PersonDetection, 'trihouse/vision/person_detection/base', self._on_person, 10)
         self.create_subscription(KeepOutZone, 'trihouse/safety/keep_out_zones', self._on_keep_out, 10)
         self.create_subscription(Odometry, 'odom', self._on_odom, 10)
-        self.create_subscription(ConnectionState, 'trihouse/fms/state', self._on_connection, 10)
+        self.create_subscription(ConnectionState, 'trihouse/fms/state', self._on_connection, CONNECTION_STATE_QOS)
         # Vision detects; the Control Tower/Safety authority explicitly requests emergency.
         self.create_subscription(Bool, 'trihouse/safety/emergency_request', self._on_emergency_request, 10)
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', 10)
@@ -71,8 +114,21 @@ class SafetySupervisor(Node):
         self.front_range = message.range; self.last_range_at = monotonic(); self.last_sensor_at = self.last_range_at
 
     def _on_scan(self, message: LaserScan) -> None:
-        finite = [value for value in message.ranges if message.range_min <= value <= message.range_max]
-        self.scan_range = min(finite) if finite else None
+        # 한 스캔에서 필드 두 개를 뽑는다. 360 도 최솟값 하나를 STOP 판정에 쓰면
+        # 2.20 x 2.70 m 방에서는 늘 stop_distance_m 안이라 로봇이 영구히 STOP 에
+        # 걸린다 (2026-08-20 실측). 그리고 늘 울리는 경보는 정보가 0 이다.
+        shape = dict(
+            angle_min=message.angle_min,
+            angle_increment=message.angle_increment,
+            range_min=message.range_min,
+            range_max=message.range_max,
+            forward_offset_rad=self.scan_forward_offset_rad,
+            origin_offset_x_m=self.scan_origin_offset_x_m,
+        )
+        self.scan_range = forward_path_distance(
+            message.ranges, half_width_m=self.protective_half_width_m, **shape
+        )
+        self.nearby_range = nearest_range(message.ranges, **shape)
         self.last_scan_at = monotonic(); self.last_sensor_at = self.last_scan_at
 
     def _on_person(self, message: PersonDetection) -> None:
@@ -111,8 +167,18 @@ class SafetySupervisor(Node):
         now = monotonic()
         scan_fresh = now - self.last_scan_at <= self.sensor_timeout_s
         range_fresh = now - self.last_range_at <= self.sensor_timeout_s
+        # 보호 필드의 모양은 **지금 내리려는 명령**을 따른다. 제자리 회전은
+        # 외접원을 쓸고 지나가므로 경로(직사각형) 판정으로는 잡히지 않는다.
+        nearby = self.nearby_range if scan_fresh else None
+        swept_blocked = (
+            rotating_in_place(desired.linear_x, desired.angular_z)
+            and nearby is not None
+            and nearby <= self.swept_clearance_m
+        )
         inputs = SafetyInputs(sensor_fresh=scan_fresh and (range_fresh or not self.require_ultrasonic),
-                              front_distance_m=self._front_distance(), person_detected=False,
+                              front_distance_m=self._front_distance(),
+                              swept_blocked=swept_blocked,
+                              person_detected=person_detected,
                               person_distance_m=self.person_distance if person_detected else None,
                               keep_out=self._in_keep_out_zone(), emergency_latched=self.emergency_latched,
                               control_link_fresh=self.control_link_online)

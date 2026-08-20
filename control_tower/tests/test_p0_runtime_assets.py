@@ -8,6 +8,7 @@
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,9 @@ def _module():
     spec = importlib.util.spec_from_file_location("p0_runtime_assets", ASSETS)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    # exec 전에 등록한다. `@dataclass` 는 클래스를 만들 때 `sys.modules[__module__]`
+    # 에서 globals 를 꺼내므로, 등록하지 않으면 None 을 받아 AttributeError 로 죽는다.
+    sys.modules["p0_runtime_assets"] = module
     spec.loader.exec_module(module)
     return module
 

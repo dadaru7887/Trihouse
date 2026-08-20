@@ -43,6 +43,20 @@ CONNECTION_STATE_QOS = QoSProfile(
     durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
 )
 
+def safety_allows_work(safety_state: int) -> bool:
+    """SLOW 에서도 작업을 받는가. 받는다.
+
+    SLOW 는 **속도 제한**이지 차단이 아니다. `apply_safety_gate` 도 SLOW 에서
+    `goal_may_continue=True` 로 진행을 허용한다 — 진행 중 주행은 되는데 새 배정만
+    막으면 두 판정이 어긋난다.
+
+    이것을 `STATE_CLEAR` 하나로 두면 사람이 근처에 있는 동안 로봇이 새 일을 아예
+    받지 못한다. 사람이 지나갈 때마다 작업이 멈추는 것은 안전이 아니라 가용성
+    손실이고, 실제 보호는 속도 제한과 STOP 이 한다.
+    """
+    return safety_state in (SafetyState.STATE_CLEAR, SafetyState.STATE_SLOW)
+
+
 class StatusNode(Node):
     """센서와 하위 상태를 모아 `/trihouse/status`로 발행하는 ROS 2 노드."""
 
@@ -233,7 +247,7 @@ class StatusNode(Node):
                 map_pose_fresh=map_transform is not None,
                 nav_available=self.nav_available,
                 control_link_online=self.control_link_online,
-                safety_clear=self.safety.state == SafetyState.STATE_CLEAR,
+                safety_clear=safety_allows_work(self.safety.state),
                 battery_dispatchable=self.battery_policy.ready,
             )
         )

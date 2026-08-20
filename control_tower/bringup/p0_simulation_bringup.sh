@@ -196,6 +196,7 @@ python3 "$ROOT/control_tower/bringup/p0_runtime_assets.py" \
   --nav2-source "$PINKY_NAV2_PARAMS" \
   --world-source "$PINKY_WORLD" \
   --output-dir "$TRIHOUSE_RUNTIME_DIR" \
+  $([[ "$TRIHOUSE_NAV2_SLAM" == true ]] || echo --map-yaml "$TRIHOUSE_NAV2_MAP") \
   --robot PK_01:pinky_01 \
   --robot PK_02:pinky_02 >/dev/null
 
