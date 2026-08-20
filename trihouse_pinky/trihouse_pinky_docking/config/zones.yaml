@@ -1,0 +1,47 @@
+# 좁은 도크의 진입 구역과 후진 시퀀스. 2026-08-15 실물 실측값이다.
+#
+# `dev_driving` 브랜치의 `narrow3_rule_based_docking.py` 에서 옮겨 왔다. 값을
+# 손으로 지어내지 않는다 — 여기 숫자는 전부 로봇을 그 자리에 세우고 잰 것이고,
+# 좌표는 `trihouse_map_01` 위의 값이다. 지도를 바꾸면 다시 재야 한다.
+#
+# geometry: 진입을 판정할 **방향 있는 직사각형**. 원이 아닌 이유는 통로가 좁고
+#   길기 때문이다 — 원으로 잡으면 통로 옆에서도 걸려 엉뚱한 곳에서 후진한다.
+# entry / exit: 들어가는 순서와 나오는 순서. straight 의 부호가 방향이고
+#   음수가 후진이다.
+zones:
+  ambient:
+    geometry: {cx: 1.010244, cy: 0.916734, yaw: -0.086755, length: 0.05, width: 0.20}
+    entry:
+      - {kind: rotate, value: -2.805721}
+      - {kind: straight, value: -0.30}
+    exit:
+      - {kind: straight, value: 0.30}
+      - {kind: rotate, value: -3.130293}
+      - {kind: exit_zone, value: 0.0}
+
+  chilled:
+    # 주의: 2026-08-15 에 ambient 값을 그대로 재사용했고 **검증되지 않았다.**
+    # 지도 계산으로도 이 지점의 벽까지 여유가 0.05 m 라 회전이 안 될 가능성이
+    # 높다. 실물에서 확인하기 전까지 이 구역은 쓰지 않는다.
+    verified: false
+    geometry: {cx: 1.101332, cy: -0.100451, yaw: 3.102934, length: 0.05, width: 0.20}
+    entry:
+      - {kind: rotate, value: 2.418911}
+      - {kind: straight, value: -0.30}
+    exit:
+      - {kind: straight, value: 0.30}
+      - {kind: rotate, value: -3.130293}
+      - {kind: exit_zone, value: 0.0}
+
+  frozen:
+    # 세 단계인 이유: 진입 지점에서 바로 돌면 좁아서 안 된다. 10 cm 앞으로 나가
+    # 회전할 자리를 확보한 뒤 돈다.
+    geometry: {cx: 0.919804, cy: -1.189253, yaw: -0.032430, length: 0.10, width: 0.20}
+    entry:
+      - {kind: straight, value: 0.10}
+      - {kind: rotate, value: -1.525323}
+      - {kind: straight, value: -0.315}
+    exit:
+      - {kind: straight, value: 0.315}
+      - {kind: rotate, value: -2.999133}
+      - {kind: exit_zone, value: 0.0}
