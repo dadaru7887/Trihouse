@@ -6,7 +6,7 @@ import inspect
 import json
 import logging
 import math
-from typing import Any, Collection, Mapping
+from typing import Any, Collection, Iterable, Mapping
 from uuid import UUID
 
 
@@ -44,6 +44,80 @@ def _uuid(value: object) -> str:
         return str(UUID(value))
     except (ValueError, AttributeError, TypeError):
         _reject("SCHEMA_INVALID")
+
+
+class PersonDetectionRoutingError(ValueError):
+    """관측을 어느 로봇에 줘야 할지 정할 수 없다."""
+
+
+def route_person_detection(camera_id: str, cameras: Iterable[Any]) -> str:
+    """카메라 명부로 수신 로봇을 정한다. 요청이 `robot_id` 를 싣지 않는 이유다.
+
+    `config/cameras.yaml` 의 `attached_to` 가 이미 답이고, 요청에 로봇을 함께
+    실으면 둘이 어긋날 수 있다. 그 어긋남은 "엉뚱한 로봇이 감속한다" 로 나타나
+    원인에서 아주 멀다.
+
+    고정 카메라는 아직 라우팅할 수 없다 — 사람과 로봇의 위치를 둘 다 알아야
+    하는데 캘리브레이션이 없다. 아무 로봇에나 보내는 대신 거절한다.
+    """
+    for camera in cameras:
+        if camera.camera_id != camera_id:
+            continue
+        if not camera.attached_to:
+            raise PersonDetectionRoutingError(
+                f"{camera_id} is not attached to a robot; fixed cameras need calibration"
+            )
+        return camera.attached_to
+    raise PersonDetectionRoutingError(f"unknown camera: {camera_id}")
+
+
+class RobotLinkRegistry:
+    """robot_id 로 살아 있는 연결을 찾아 서버가 먼저 말을 걸 수 있게 한다.
+
+    기존 TCP 서버는 로봇이 보낸 줄에 **응답만** 했다. 사람 관측처럼 관제가 먼저
+    내려보내야 하는 것에는 쓸 경로가 없었다.
+
+    `push` 는 실패를 예외로 올리지 않고 사실로 돌려준다. 관측은 사람이 보이는
+    동안 계속 흐르므로, 한 번 못 보낸 것이 보내는 쪽 루프를 멈추면 안 된다.
+    """
+
+    def __init__(self) -> None:
+        self._links: dict[str, Any] = {}
+
+    def attach(self, robot_id: str, writer: Any) -> None:
+        """연결을 등록한다. 같은 로봇이 다시 붙으면 옛 연결을 대체한다.
+
+        옛 소켓을 남겨 두면 관측이 아무도 듣지 않는 곳으로 사라지고, 로봇은
+        사람이 보이는데도 감속하지 않는다.
+        """
+        self._links[robot_id] = writer
+
+    def detach(self, robot_id: str, writer: Any) -> None:
+        """그 연결이 아직 현재 연결일 때만 뗀다.
+
+        끊긴 옛 연결이 뒤늦게 정리될 때 이미 붙은 새 연결까지 떼면, 재접속한
+        로봇이 조용히 관측을 못 받는다.
+        """
+        if self._links.get(robot_id) is writer:
+            del self._links[robot_id]
+
+    def is_connected(self, robot_id: str) -> bool:
+        return robot_id in self._links
+
+    async def push(self, robot_id: str, payload: Mapping[str, Any]) -> bool:
+        """한 줄을 밀어 넣는다. 보냈으면 True, 연결이 없거나 끊겼으면 False."""
+        writer = self._links.get(robot_id)
+        if writer is None:
+            return False
+        line = (json.dumps(dict(payload), separators=(",", ":")) + "\n").encode("utf-8")
+        try:
+            writer.write(line)
+            await writer.drain()
+        except (OSError, ConnectionError):
+            # 끊긴 연결에 계속 쓰려 하면 관측마다 같은 예외가 난다. 여기서 뗀다.
+            self.detach(robot_id, writer)
+            return False
+        return True
 
 
 class ProtocolSession:
@@ -221,6 +295,9 @@ class TcpIngestionServer:
         self._on_message = on_message
         self._max_line_bytes = max_line_bytes
         self._server: asyncio.AbstractServer | None = None
+        # 관제가 로봇에게 먼저 말을 걸어야 하는 것(사람 관측)을 위한 연결 장부.
+        # 기존 서버는 로봇이 보낸 줄에 응답만 했다.
+        self.links = RobotLinkRegistry()
 
     @property
     def port(self) -> int:
@@ -256,6 +333,7 @@ class TcpIngestionServer:
             registered = await registered
         session = ProtocolSession(registered)
         peer = writer.get_extra_info("peername")
+        attached: str | None = None
         try:
             # StreamReader limit과 명시적 길이 검사로 메모리 사용을 제한한다.
             while True:
@@ -285,11 +363,19 @@ class TcpIngestionServer:
                     elif processed.action == "task_event":
                         response["event_id"] = processed.payload["event_id"]
                     await self._write(writer, response)
+                    # hello 를 통과한 뒤에야 robot_id 를 안다. 그때 장부에 올려야
+                    # 관제가 이 연결로 관측을 밀어 넣을 수 있다.
+                    if attached is None and session.robot_id:
+                        attached = session.robot_id
+                        self.links.attach(attached, writer)
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     await self._reject_line(writer, "SCHEMA_INVALID", None, session, peer)
                 except ProtocolRejected as error:
                     await self._reject_line(writer, str(error), message, session, peer)
         finally:
+            if attached is not None:
+                # 떼지 않으면 끊긴 소켓으로 계속 밀어 관측이 조용히 사라진다.
+                self.links.detach(attached, writer)
             writer.close()
             await writer.wait_closed()
 
