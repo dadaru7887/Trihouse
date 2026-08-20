@@ -74,13 +74,19 @@ class PlannedOutboundStep:
 
 
 def planned_outbound_steps(plan: OutboundPlan) -> tuple[PlannedOutboundStep, ...]:
-    """Build parallel OMX/Pinky branches and their explicit convergence gates."""
+    """계획된 온도 구역 방문을 DB에 저장할 step_no 10, 20, 30...으로 바꾼다.
+
+    구역마다 ``arm/pick → mobile/navigate → fms/load`` 세 단계가 생긴다.
+    모든 구역 적재가 끝나면 포장 도크 이동 → 인계 → 작업자 확인 → 충전 복귀
+    네 단계가 붙는다. 단일 구역 주문은 결과적으로 10~70의 7단계다.
+    """
 
     if not plan.accepted:
         raise ValueError("a rejected order has no outbound steps")
     steps: list[PlannedOutboundStep] = []
     step_no = 10
     previous_gate: int | None = None
+    # 온도 구역별 반복 구간: 물건 준비와 로봇 도착이 끝나야 load gate를 통과한다.
     for bundle in plan.bundles:
         inherited_dependencies = [] if previous_gate is None else [previous_gate]
         product_codes = list(dict.fromkeys(item.product_code for item in bundle.items))
@@ -90,6 +96,8 @@ def planned_outbound_steps(plan: OutboundPlan) -> tuple[PlannedOutboundStep, ...
             "dock_location_id": bundle.dock_location_id,
             "product_codes": product_codes,
         }
+        # Step 10 계열: OMX가 해당 구역 상품을 준비한다. P0 실물에서는 사람이
+        # 물건을 올리는 절차가 이 구간을 보완한다.
         pick_no = step_no
         steps.append(
             PlannedOutboundStep(
@@ -115,6 +123,7 @@ def planned_outbound_steps(plan: OutboundPlan) -> tuple[PlannedOutboundStep, ...
             )
         )
         step_no += 10
+        # Step 20 계열: 배정된 Pinky가 해당 온도 구역 적재 도크로 이동한다.
         navigate_no = step_no
         steps.append(
             PlannedOutboundStep(
@@ -130,6 +139,7 @@ def planned_outbound_steps(plan: OutboundPlan) -> tuple[PlannedOutboundStep, ...
             )
         )
         step_no += 10
+        # Step 30 계열: 물건 준비와 로봇 도착 두 결과를 확인하는 적재 gate다.
         previous_gate = step_no
         steps.append(
             PlannedOutboundStep(
@@ -148,6 +158,8 @@ def planned_outbound_steps(plan: OutboundPlan) -> tuple[PlannedOutboundStep, ...
         step_no += 10
 
     assert previous_gate is not None
+    # 모든 구역 처리 뒤의 공통 마무리 4단계:
+    # 포장 도크 이동 → 인계 장부 처리 → 작업자 완료 확인 → 로봇 충전소 복귀.
     packing_dock = plan.packing_dock_location_id
     steps.extend(
         (

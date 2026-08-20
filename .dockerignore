@@ -27,3 +27,9 @@
 !control_ui/rmf_control_ui/**
 control_ui/rmf_control_ui/build/
 control_ui/rmf_control_ui/.dart_tool/
+
+# FMS Gateway 카메라 명부 의존성
+!control_tower/gateway/
+!control_tower/gateway/**
+!config/
+!config/cameras.yaml

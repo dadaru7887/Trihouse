@@ -1,10 +1,9 @@
-"""RMF 밖에서 멈춘 job 을 한 트랜잭션으로 취소하는 Gateway 경로.
+"""RMF 밖에서 멈춘 job 과 그 재고·자원 예약을 한 트랜잭션으로 취소한다.
 
 예약 lifecycle 자체는 `rmf_task_repository` 가 이미 처리하지만 그 경로는 RMF task
 update 가 도착해야 돈다. RMF 에 제출되기 전에 멈춘 job 은 그 경로를 타지 못하고
-예약을 영원히 쥔다. 취소를 스크립트가 아니라 Gateway 에 두는 이유는 행 잠금과 상태
-전이 불변식이 이미 이 저장소 안에 있기 때문이다 — 두 곳에서 같은 전이를 하면
-어긋난다.
+장비·dock·lot 예약을 영원히 쥔다. 취소를 스크립트가 아니라 Gateway 에 두는 이유는
+행 잠금과 상태 전이 불변식이 이미 이 저장소 안에 있기 때문이다.
 """
 
 from contextlib import contextmanager
@@ -118,6 +117,41 @@ def test_cancelling_releases_every_resource_the_job_was_holding(seeded_schema) -
         "WHERE job_id=%s AND event_type='job.cancelled'",
         (job_id,),
     ) == 1
+
+
+def test_cancelling_releases_the_ordered_inventory_reservation(seeded_schema) -> None:
+    """취소된 출고 주문은 lot 수량은 보존하고 예약만 되돌린다."""
+    job_id = _assigned_job("inventory-release", product_code="SKU-DUMPLING")
+    before = rows(
+        "SELECT lot_id, available_qty, reserved_qty FROM inventory_lots "
+        "WHERE product_code=%s",
+        ("SKU-DUMPLING",),
+    )[0]
+    assert before["reserved_qty"] == 1
+
+    _repository().cancel_job(
+        job_id,
+        {"reason": "repeatable hardware test cleanup", "requested_by": "W-OP-01"},
+        "cancel-inventory-release",
+    )
+
+    after = rows(
+        "SELECT available_qty, reserved_qty FROM inventory_lots WHERE lot_id=%s",
+        (before["lot_id"],),
+    )[0]
+    assert after["available_qty"] == before["available_qty"]
+    assert after["reserved_qty"] == 0
+    move = rows(
+        "SELECT move_type, quantity_delta, reserved_delta, reserved_after "
+        "FROM inventory_moves WHERE job_id=%s AND move_type='reservation_release'",
+        (job_id,),
+    )[0]
+    assert move == {
+        "move_type": "reservation_release",
+        "quantity_delta": 0,
+        "reserved_delta": -1,
+        "reserved_after": 0,
+    }
 
 
 def test_a_finished_step_keeps_its_outcome_when_the_job_is_cancelled(

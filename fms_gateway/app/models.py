@@ -82,7 +82,7 @@ class OutboundOrderItemRequest(BaseModel):
 class OutboundOrderRequest(BaseModel):
     """Session-originated product-only outbound order."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid")   # 정의되지 않은 필드 거절
 
     external_reference: str | None = Field(default=None, min_length=1, max_length=128)
     requested_by: str = Field(min_length=1, max_length=64)

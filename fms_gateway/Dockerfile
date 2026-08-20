@@ -20,6 +20,8 @@ COPY fms_gateway /app/fms_gateway
 COPY control_tower/task_manager/__init__.py /app/control_tower/task_manager/__init__.py
 COPY control_tower/task_manager/outbound_planner.py /app/control_tower/task_manager/outbound_planner.py
 COPY control_tower/task_manager/outbound_sequence.py /app/control_tower/task_manager/outbound_sequence.py
+COPY control_tower/gateway /app/control_tower/gateway
+COPY config/cameras.yaml /app/config/cameras.yaml
 
 # 런타임 프로파일이 해시하는 고정 소스 두 개. UI 는 이 해시 없이는 지도
 # 초안을 저장할 수 없으므로 이미지 안에 반드시 있어야 한다.

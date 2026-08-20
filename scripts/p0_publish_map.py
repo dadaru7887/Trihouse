@@ -94,7 +94,16 @@ if upload_image_name != image_name:
         f"image: {image_name}".encode(), f"image: {upload_image_name}".encode()
     )
 
-features_path = ROOT / "control_ui" / "rmf_control_ui" / "data" / "import" / f"{MAP}_physical_features.jsonl"
+# 웨이포인트 좌표는 **지도 좌표계에 묶여 있다.** 지도를 다시 그리면 같은 물리적
+# 자리가 다른 숫자가 된다. 그래서 지도별 실측 파일을 먼저 찾고, 없을 때만 기본
+# 파일로 되돌아간다. 기본 파일은 trihouse_map_01 에서 잰 값이다.
+IMPORT_DIR = ROOT / "control_ui" / "rmf_control_ui" / "data" / "import"
+features_path = IMPORT_DIR / f"{MAP}_physical_features.{MAP_NAME}.jsonl"
+if not features_path.is_file():
+    features_path = IMPORT_DIR / f"{MAP}_physical_features.jsonl"
+    print(f"[주의] 지도 '{MAP_NAME}' 전용 실측 파일이 없어 기본 파일을 씁니다: {features_path.name}")
+else:
+    print(f"[0/4] 실측: {features_path.name}")
 SOURCES = [
     ("slam_yaml", f"{MAP_NAME}.yaml", "application/x-yaml", yaml_bytes),
     ("slam_image", upload_image_name, image_mime, image_bytes),

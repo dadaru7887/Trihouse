@@ -18,6 +18,9 @@ if [[ ! -f .env ]]; then
 fi
 MYSQL_PW="$(grep -E '^MYSQL_ROOT_PASSWORD=' .env | cut -d= -f2-)"
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/require_docker.sh"
+require_docker || exit 1
+
 REVISION="$(docker exec trihouse-mysql mysql -uroot -p"$MYSQL_PW" -N -B -e \
   "SELECT map_revision FROM trihouse_fms.map_revisions
    WHERE state='published' ORDER BY published_at DESC LIMIT 1;" 2>/dev/null || true)"

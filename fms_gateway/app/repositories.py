@@ -3064,7 +3064,23 @@ class MySqlFmsRepository:
     def create_outbound_order(
         self, request: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
-        """Lock FEFO lots and persist the entire accepted order in one transaction."""
+        """상품 주문 하나를 검증·계획하고 실행 가능한 DB 행으로 원자적으로 저장한다.
+
+        큰 흐름은 다음과 같다.
+
+        1. Idempotency-Key와 요청 본문을 ``operation_events``에 기록한다.
+        2. ``inventory_lots``에서 상품과 출고 가능한 lot을 찾고 행을 잠근다.
+        3. 발행된 지도에서 온도 구역 도크·포장 도크·충전 위치를 찾는다.
+        4. ``OutboundPlanner``가 FEFO 재고 배정과 온도 구역 묶음을 만든다.
+        5. ``jobs`` → ``job_items`` → ``job_steps``를 만들고 재고를 예약한다.
+        6. 전부 성공하면 commit하고, 하나라도 실패하면 전체를 rollback한다.
+
+        ``request``는 API가 검증한 주문 본문이고, ``response``는 commit 뒤 API가
+        돌려줄 job_id/수량 요약이다. 둘을 같은 이벤트 payload에 보관해 동일한
+        Idempotency-Key 재요청에는 새 주문을 만들지 않고 원래 응답을 재생한다.
+        """
+        # fingerprint는 서명/해시가 아니라 "이 키로 처음 받은 요청의 정규화 사본"이다.
+        # JSON key 순서를 고정해 같은 내용인지 안정적으로 비교한다.
         fingerprint = json.loads(
             json.dumps(request, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         )
@@ -3096,6 +3112,8 @@ class MySqlFmsRepository:
                 )
                 owns_idempotency_key = cursor.rowcount == 1
                 if not owns_idempotency_key:
+                    # 이미 처리한 키라면 payload.request를 비교한다. 요청도 같고
+                    # payload.response가 있으면 이전에 commit된 응답을 그대로 반환한다.
                     cursor.execute(
                         "SELECT payload FROM operation_events WHERE event_uuid = %s",
                         (event_uuid,),
@@ -3123,6 +3141,8 @@ class MySqlFmsRepository:
                 canonical_products: set[str] = set()
                 for line_no, line in enumerate(request["items"], start=1):
                     product_reference = str(line["product_code"]).strip()
+                    # 1순위: 주문의 product_code와 inventory_lots.product_code가
+                    # 정확히 같은지 확인한다. 없을 때만 item_name을 대소문자 없이 찾는다.
                     cursor.execute(
                         "SELECT DISTINCT product_code FROM inventory_lots WHERE product_code = %s",
                         (product_reference,),
@@ -3172,6 +3192,12 @@ class MySqlFmsRepository:
                 ]
                 lot_rows: list[dict[str, Any]] = []
                 for lot_id in candidate_lot_ids:
+                    # 실제 예약 후보에서 읽는 값:
+                    # - lot_id/lot_code/product_code: 재고 식별
+                    # - temperature_zone/location_id: 어느 구역·슬롯의 물건인지
+                    # - available_qty/reserved_qty: 지금 추가 예약할 수 있는 수량
+                    # - expiry_date/received_at: FEFO 정렬 기준
+                    # FOR UPDATE가 같은 lot의 동시 중복 예약을 막는다.
                     cursor.execute(
                         """
                     SELECT lot.lot_id, lot.lot_code, lot.product_code, lot.item_name,
@@ -3263,6 +3289,8 @@ class MySqlFmsRepository:
                     raise OutboundOrderInsufficientStock(shortages)
 
                 job_code = f"OUT-{job_identity}"
+                # jobs는 별도 orders 테이블 대신 주문 전체를 나타내는 헤더다.
+                # context.source로 공개 주문임을 표시해야 JobRunner가 자원을 배정한다.
                 context = {
                     "source": "public_product_order",
                     "allow_partial_fulfillment": outbound_order.allow_partial_fulfillment,
@@ -3310,6 +3338,9 @@ class MySqlFmsRepository:
                             for index, allocation in enumerate(line.allocations)
                         ]
                     for lot_id, requested_qty, reserved_qty, outstanding_qty in item_rows:
+                        # job_items는 주문 상품과 실제 배정 lot을 연결한다.
+                        # requested_qty는 이 행이 담당하는 수량이고, 예약/미충족 수량은
+                        # 유연한 부가 정보이므로 metadata JSON에 함께 둔다.
                         metadata = {
                             "line_no": line.line_no,
                             "reserved_quantity": reserved_qty,
@@ -3330,6 +3361,8 @@ class MySqlFmsRepository:
                             ),
                         )
 
+                # 온도 구역 하나면 10~70의 7단계가 만들어진다. 구역이 늘면
+                # pick/navigate/load 3단계씩 추가되고 마지막 4단계는 공통이다.
                 for step in planned_outbound_steps(plan):
                     cursor.execute(
                         """
@@ -3369,6 +3402,8 @@ class MySqlFmsRepository:
                         if cursor.rowcount != 1:
                             raise InventoryQuantityConflict
                         lot_row["reserved_qty"] = reserved_after
+                        # inventory_lots에는 현재 예약 합계를, inventory_moves에는
+                        # 누가 어느 job 때문에 얼마를 예약했는지 감사 이력을 남긴다.
                         cursor.execute(
                             """
                             INSERT INTO inventory_moves
@@ -3428,6 +3463,8 @@ class MySqlFmsRepository:
                         event_uuid,
                     ),
                 )
+                # 여기까지의 INSERT/UPDATE가 모두 성공할 때만 주문이 보인다.
+                # 예외 경로는 아래 rollback으로 jobs와 재고 예약을 함께 되돌린다.
                 connection.commit()
                 return response
             except Exception:
@@ -3851,7 +3888,7 @@ class MySqlFmsRepository:
         with self.database.connection() as connection:
             cursor = connection.cursor(dictionary=True)
             try:
-                # Global lock order: Job -> Steps -> Reservations.
+                # Global lock order: Job -> Steps -> Items -> lots -> Reservations.
                 cursor.execute(
                     "SELECT job_id, state FROM jobs WHERE job_id = %s FOR UPDATE",
                     (job_id,),
@@ -3956,6 +3993,47 @@ class MySqlFmsRepository:
                     (job_id,),
                 )
                 step_ids = [int(row["job_step_id"]) for row in cursor.fetchall()]
+
+                # 출고 주문은 생성 시 lot.reserved_qty를 늘린다. 취소가 장비 예약만
+                # 해제하고 이 수량을 남기면, 실물은 그대로인데 다음 주문이 재고 부족으로
+                # 거절된다. job_items.metadata의 reserved_quantity가 이 job이 실제로
+                # 선점한 수량의 정본이므로, lot별로 합쳐 같은 트랜잭션에서 되돌린다.
+                cursor.execute(
+                    """
+                    SELECT job_item_id, lot_id, metadata
+                    FROM job_items
+                    WHERE job_id = %s
+                    ORDER BY job_item_id
+                    FOR UPDATE
+                    """,
+                    (job_id,),
+                )
+                release_by_lot: dict[int, int] = {}
+                for item in cursor.fetchall():
+                    lot_id = item["lot_id"]
+                    metadata = _json(item.get("metadata")) or {}
+                    quantity = int(metadata.get("reserved_quantity", 0))
+                    if lot_id is not None and quantity > 0:
+                        release_by_lot[int(lot_id)] = (
+                            release_by_lot.get(int(lot_id), 0) + quantity
+                        )
+
+                locked_lots: dict[int, dict[str, Any]] = {}
+                for lot_id in sorted(release_by_lot):
+                    cursor.execute(
+                        """
+                        SELECT lot_id, available_qty, reserved_qty
+                        FROM inventory_lots
+                        WHERE lot_id = %s
+                        FOR UPDATE
+                        """,
+                        (lot_id,),
+                    )
+                    lot = cursor.fetchone()
+                    if lot is None or int(lot["reserved_qty"]) < release_by_lot[lot_id]:
+                        raise JobCancellationConflict("INVENTORY_RESERVATION_MISMATCH")
+                    locked_lots[lot_id] = dict(lot)
+
                 cursor.execute(
                     """
                     SELECT reservation_id, device_id FROM reservations
@@ -3978,6 +4056,38 @@ class MySqlFmsRepository:
                 message_ids = self._close_open_outbox_for_job(
                     cursor, job_id, canonical_request["reason"]
                 )
+
+                for lot_id, quantity in sorted(release_by_lot.items()):
+                    lot = locked_lots[lot_id]
+                    reserved_after = int(lot["reserved_qty"]) - quantity
+                    cursor.execute(
+                        """
+                        UPDATE inventory_lots
+                        SET reserved_qty = %s
+                        WHERE lot_id = %s AND reserved_qty = %s
+                        """,
+                        (reserved_after, lot_id, lot["reserved_qty"]),
+                    )
+                    if cursor.rowcount != 1:
+                        raise JobCancellationConflict("INVENTORY_RESERVATION_MISMATCH")
+                    cursor.execute(
+                        """
+                        INSERT INTO inventory_moves
+                          (lot_id, job_id, move_type, quantity_delta,
+                           quantity_after, reserved_delta, reserved_after,
+                           recorded_by, note)
+                        VALUES (%s, %s, 'reservation_release', 0, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            lot_id,
+                            job_id,
+                            lot["available_qty"],
+                            -quantity,
+                            reserved_after,
+                            canonical_request["requested_by"],
+                            f"job cancelled: {canonical_request['reason']}"[:512],
+                        ),
+                    )
 
                 if step_ids:
                     placeholders = ", ".join(["%s"] * len(step_ids))

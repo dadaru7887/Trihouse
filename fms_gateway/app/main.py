@@ -1,3 +1,8 @@
+# 이 모듈은 Trihouse FMS Gateway의 FastAPI 진입점으로 동작합니다. HTTP
+# 엔드포인트와 웹소켓을 통해 운영 UI·외부 시스템 요청을 받고, 선택적으로
+# 로봇 TCP 수집 서버를 함께 기동하여 로봇 관측을 수신합니다. 모든 비즈니스
+# 로직과 트랜잭션은 MySQL 기반 Repository에 위임하여 단일 쓰기 프로세스로
+# 일관된 상태 변화를 보장합니다.
 """FMS의 유일한 MySQL 쓰기 프로세스를 구성하는 FastAPI 진입점.
 
 이 계층은 HTTP 데이터/오류 계약을 담당하고, 실제 도메인 규칙과 트랜잭션은
@@ -314,6 +319,7 @@ def create_app(
     def jobs():
         return repo.list_jobs()
 
+    # /api/v1/orders 주소로 POST 요청 -> create_outbound_order 함수 실행
     @app.post(
         "/api/v1/orders", response_model=OutboundOrderCreated, status_code=201
     )
@@ -324,7 +330,7 @@ def create_app(
         """Create one product-only order in the caller's credentialed session."""
         try:
             return repo.create_outbound_order(order.model_dump(), idempotency_key)
-        except OutboundOrderInsufficientStock as error:
+        except OutboundOrderInsufficientStock as error:     # 재고 부족
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -332,17 +338,17 @@ def create_app(
                     "shortages": list(error.shortages),
                 },
             ) from error
-        except OutboundOrderProductNotFound as error:
+        except OutboundOrderProductNotFound as error:       # 상품 없음/중복/모호함
             raise HTTPException(
                 status_code=422,
                 detail={"code": error.code, "product": error.product_reference},
             ) from error
-        except OutboundOrderActiveMapUnavailable as error:
+        except OutboundOrderActiveMapUnavailable as error:  # 활성 지도나 도크 없음
             raise HTTPException(
                 status_code=409,
                 detail={"code": "ACTIVE_MAP_UNAVAILABLE", "message": str(error)},
             ) from error
-        except IdempotencyConflict as error:
+        except IdempotencyConflict as error:                # 동일한 멱등성 키로 다른 요청 데이터가 유입
             raise HTTPException(
                 status_code=409,
                 detail="idempotency key was already used for another request",

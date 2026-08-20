@@ -121,7 +121,15 @@ class PinkyRobotAdapter:
         if state is None:
             return
 
-        validation = state.validate(now_ns, self._status_timeout_ns)
+        # 수행 중인 로봇은 안전 gate 가 걸렸다는 이유로 fleet 에서 빼내지 않는다.
+        # `dispatchable` 은 새 작업을 받을 처지인가이지 하던 일을 계속해도 되는가가
+        # 아니다. 협로는 통로 폭 0.20 m 에 정지 임계 0.30 m 라 들어가는 순간 매번
+        # gate 가 걸리는데, 거기서 갱신을 끊으면 RMF 가 명령 핸들을 "응답 없음" 으로
+        # 보고 작업을 취소한다. 자세한 연쇄는 `state.validate` 의 주석에 있다.
+        executing = self._registry.current_activity() is not None
+        validation = state.validate(
+            now_ns, self._status_timeout_ns, executing=executing
+        )
         if not validation.accepted:
             if update_handle is not None and not self._decommissioned:
                 more = update_handle.more()

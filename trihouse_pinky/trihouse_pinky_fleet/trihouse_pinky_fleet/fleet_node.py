@@ -2,18 +2,32 @@
 
 import rclpy
 from math import atan2, cos, sin
+
+import yaml
+from pathlib import Path
 from uuid import uuid4
 from nav2_msgs.action import NavigateToPose
-from nav_msgs.msg import Odometry
+from geometry_msgs.msg import Twist
+from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.action import ActionClient, ActionServer
 from rclpy.action import CancelResponse
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.task import Future
 from std_msgs.msg import Bool, String
 from trihouse_interfaces.action import ExecuteTransport
 from trihouse_interfaces.msg import CargoState, HandoverState, NavigationState, Readiness, RobotHealth, RobotStatus, SafetyState, TaskEvent
 
 from .workflow import JobCommand, JobPhase, TransportWorkflow
+from .narrow_zone_pilot import (
+    NarrowZoneError,
+    NarrowZonePlan,
+    load_zones,
+    select_zone,
+    step_velocity,
+    verify_pose,
+    zone_containing,
+)
 from .arrival import may_report_arrival, within_tolerance
 
 
@@ -43,6 +57,16 @@ def _complete_once(future: Future) -> None:
 # 그것을 다시 재는 것이 아니라 **크게 어긋나지 않았는지만** 본다.
 #
 # 두 값의 관계는 `test_precise_stop_matches_nav2_tolerance.py` 가 지킨다.
+# 규칙 주행 속도. 통로 폭 0.20 m 에 로봇 폭 0.12 m 라 여유가 편측 4 cm 다.
+# 빠르면 오도메트리 오차가 그 여유를 넘는다. 원본 narrow3 이 쓰던 값이다.
+NARROW_MAX_LINEAR_MPS = 0.06
+NARROW_MAX_ANGULAR_RPS = 0.5
+NARROW_YAW_TOLERANCE_RAD = 0.05
+NARROW_POSITION_TOLERANCE_M = 0.02
+# 스텝 하나의 상한. 넘으면 바퀴가 헛돌거나 끼인 것이다. 되먹임이 없으므로 시간으로만
+# 알 수 있다.
+NARROW_STEP_TIMEOUT_S = 25.0
+
 PRECISE_STOP_XY_TOLERANCE_M = 0.15
 PRECISE_STOP_YAW_TOLERANCE_RAD = 0.35
 
@@ -91,6 +115,11 @@ class FleetNode(Node):
         self.event_pub = self.create_publisher(TaskEvent, 'trihouse/task/events', 10)
         self.handover_pub = self.create_publisher(HandoverState, '/trihouse/handover/state', 10)
         self.display_pub = self.create_publisher(String, 'trihouse/display/destination_code', 10)
+        # 규칙 주행 속도는 `cmd_vel` 이 아니라 **Nav2 사슬 앞단**으로 넣는다.
+        #   cmd_vel_nav → velocity_smoother → cmd_vel_smoothed → collision_monitor → cmd_vel
+        # 그래야 가속 제한과 LiDAR 충돌 감시를 그대로 지난다. 원본 narrow3 은 맨 끝
+        # `cmd_vel` 에 직접 쏘아 "사람이 지켜보다가 Ctrl+C" 를 전제했다.
+        self.narrow_cmd_pub = self.create_publisher(Twist, 'cmd_vel_nav', 10)
         self.create_subscription(Readiness, 'trihouse/readiness', self._on_readiness, 10)
         self.create_subscription(CargoState, 'trihouse/cargo/state', self._on_cargo, 10)
         self.create_subscription(SafetyState, 'trihouse/safety/state', self._on_safety, 10)
@@ -100,6 +129,22 @@ class FleetNode(Node):
         )
         self.create_subscription(RobotStatus, 'trihouse/status', self._on_status, 10)
         self.create_subscription(Odometry, 'odom', self._on_odom, 10)
+        # 지도 범위를 알아야 "로봇이 지도 밖"을 판별할 수 있다. map 은 한 번만
+        # latch 로 나가므로 transient_local 로 받아야 늦게 뜬 노드도 받는다.
+        self.map_bounds: tuple[float, float, float, float] | None = None
+        self.create_subscription(
+            OccupancyGrid, 'map', self._on_map,
+            QoSProfile(
+                depth=1,
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST,
+            ),
+        )
+        # 협로 존 표. 값이 지도 좌표계에 묶여 있어 지도 이름이 맞지 않으면 거절한다.
+        self.declare_parameter('narrow_zones_file', '')
+        self.declare_parameter('narrow_map_name', '')
+        self.narrow_zones = self._load_narrow_zones()
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.nav_goal_handles = {}
         self.server = ActionServer(
@@ -177,6 +222,25 @@ class FleetNode(Node):
             if rmf_navigation
             else 'TRANSPORT'
         )
+        # 존 안에서 다음 이동 명령을 받으면 **먼저 규칙 주행으로 빠져나온다.**
+        # 이 경로가 없어서 2026-08-19 에 로봇이 냉동창고에서 나오지 못했다 — Nav2 가
+        # 통로 안에서 경로를 못 만들어 복구 동작만 반복했다.
+        if self.map_pose is not None:
+            stuck_in = zone_containing(
+                self.narrow_zones, self.map_pose[0], self.map_pose[1]
+            )
+            if stuck_in is not None:
+                left, detail = await self._run_narrow_plan(
+                    NarrowZonePlan(stuck_in, leaving=True)
+                )
+                if not left:
+                    goal_handle.abort()
+                    result.success = False
+                    result.code = ExecuteTransport.Result.CODE_NAVIGATION_FAILED
+                    result.message = f'협로 탈출 실패: {detail}'
+                    result.completed_at = self.get_clock().now().to_msg()
+                    return result
+
         if self.workflow.phase is JobPhase.WAITING_HANDOVER and not return_mode:
             accepted = self.workflow.reassign(
                 context.command_id,
@@ -221,6 +285,17 @@ class FleetNode(Node):
         self.active_goal = goal
         self._publish_event(goal, TaskEvent.EVENT_STARTED, accepted.detail)
         self._publish_navigation(goal, accepted)
+        outside = self._outside_map()
+        if outside:
+            failed = self.workflow.nav_result(succeeded=False, stationary=True)
+            self._publish_navigation(goal, failed)
+            self._publish_event(
+                goal, TaskEvent.EVENT_FAILED, outside,
+                reason_code='MAP_POSE_INVALID',
+            )
+            self.get_logger().error(outside)
+            goal_handle.abort(); result.success = False; result.code = ExecuteTransport.Result.CODE_NAVIGATION_FAILED; result.message = outside
+            return result
         if not self.nav_client.wait_for_server(timeout_sec=2.0):
             failed = self.workflow.nav_result(succeeded=False, stationary=False)
             self._publish_navigation(goal, failed)
@@ -230,7 +305,20 @@ class FleetNode(Node):
             )
             goal_handle.abort(); result.success = False; result.code = ExecuteTransport.Result.CODE_NAVIGATION_FAILED; result.message = 'NavigateToPose is unavailable'
             return result
+        # 협로 도크면 Nav2 는 **존 진입점까지만** 데려간다. 통로 안은 규칙 주행이
+        # 맡는다 — 통과 여유 0.03 m 에 AMCL 오차 0.08~0.11 m 라 Nav2 로는 못 지난다.
+        narrow_zone = select_zone(self.narrow_zones, goal.destination_code)
         nav_goal = NavigateToPose.Goal(); nav_goal.pose = goal.dropoff_pose
+        if narrow_zone is not None:
+            nav_goal.pose.header.frame_id = 'map'
+            nav_goal.pose.pose.position.x = narrow_zone.geometry.x
+            nav_goal.pose.pose.position.y = narrow_zone.geometry.y
+            nav_goal.pose.pose.orientation.z = sin(narrow_zone.geometry.yaw / 2.0)
+            nav_goal.pose.pose.orientation.w = cos(narrow_zone.geometry.yaw / 2.0)
+            self.get_logger().info(
+                f'{goal.destination_code}: 협로 존 진입점으로 먼저 간다 '
+                f'({narrow_zone.geometry.x:.3f}, {narrow_zone.geometry.y:.3f})'
+            )
         nav_handle = await self.nav_client.send_goal_async(nav_goal)
         if not nav_handle.accepted:
             failed = self.workflow.nav_result(succeeded=False, stationary=False)
@@ -264,6 +352,45 @@ class FleetNode(Node):
             result.message = 'navigation canceled'
             result.completed_at = self.get_clock().now().to_msg()
             return result
+        # 진입점에 닿았으면 규칙 주행으로 통로를 지난다. Nav2 가 실패했으면 하지 않는다 —
+        # 엉뚱한 자리에서 후진하는 것이 가만히 있는 것보다 나쁘다.
+        narrow_detail = ''
+        if narrow_zone is not None and nav_result.status == 4:
+            ran, narrow_detail = await self._run_narrow_plan(
+                NarrowZonePlan(narrow_zone, leaving=False)
+            )
+            if not ran:
+                self._publish_event(
+                    goal, TaskEvent.EVENT_FAILED, narrow_detail,
+                    reason_code='NAV2_ABORTED',
+                )
+                goal_handle.abort()
+                result.success = False
+                result.code = ExecuteTransport.Result.CODE_NAVIGATION_FAILED
+                result.message = narrow_detail
+                result.completed_at = self.get_clock().now().to_msg()
+                return result
+            # **바구니가 로봇팔에 닿는 자리인가.** 규칙 주행에는 되먹임이 없어
+            # 시퀀스가 "다 했다" 고 해도 그 자리가 도크라는 보장이 없다. 도크의 실측
+            # 좌표·방향과 대조하는 것이 유일한 근거다. 방향이 틀리면 바구니가 반대쪽을
+            # 본다 — 자리가 맞아도 팔이 물건을 넣지 못한다.
+            docked, distance, yaw_error = self._verify_narrow_dock(goal)
+            self.get_logger().info(
+                f'{goal.destination_code}: 협로 진입 후 도크와 거리 {distance:.3f} m, '
+                f'yaw 차 {yaw_error:.3f} rad'
+            )
+            if not docked:
+                self._publish_event(
+                    goal, TaskEvent.EVENT_FAILED,
+                    f'협로 진입 후 도크가 아니다 (거리 {distance:.3f} m, yaw {yaw_error:.3f} rad)',
+                    reason_code='GOAL_TOLERANCE_NOT_MET',
+                )
+                goal_handle.abort()
+                result.success = False
+                result.code = ExecuteTransport.Result.CODE_NAVIGATION_FAILED
+                result.message = '협로 진입 후 도크 자세 불일치'
+                result.completed_at = self.get_clock().now().to_msg()
+                return result
         precise = not goal.requires_precise_stop or self._at_precise_goal(goal)
         # Nav2 는 goal tolerance 안에 들어오면 SUCCEEDED 를 주고 속도 0 을 요구하지
         # 않는다. 여기서 정차를 기다리지 않으면 workflow 가 "waiting for stop" 을
@@ -370,6 +497,133 @@ class FleetNode(Node):
         timer = self.create_timer(seconds, lambda: _complete_once(future))
         future.add_done_callback(lambda _: self.destroy_timer(timer))
         return future
+
+    def _verify_narrow_dock(self, goal: ExecuteTransport.Goal) -> tuple[bool, float, float]:
+        """규칙 주행이 끝난 자리가 도크인가. 바구니 방향까지 본다.
+
+        `dropoff_pose` 는 원장이 준 도크의 실측 좌표와 방향이다. 그 방향은 실측 기록에
+        **"map_yaw=pinky 방향(바구니 방향 판단용, 중요)"** 으로 적혀 있다 — 로봇이 그
+        방향을 향하고 있어야 뒤쪽 바구니가 선반을 향한다. 자리만 맞고 방향이 반대면
+        팔이 물건을 넣지 못한다.
+        """
+        if self.map_pose is None or self.map_frame != 'map':
+            return False, float('inf'), float('inf')
+        orientation = goal.dropoff_pose.pose.orientation
+        target_yaw = atan2(
+            2 * (orientation.w * orientation.z + orientation.x * orientation.y),
+            1 - 2 * (orientation.y * orientation.y + orientation.z * orientation.z),
+        )
+        position = goal.dropoff_pose.pose.position
+        return verify_pose(
+            self.map_pose,
+            (position.x, position.y, target_yaw),
+            xy_tolerance_m=PRECISE_STOP_XY_TOLERANCE_M,
+            yaw_tolerance_rad=PRECISE_STOP_YAW_TOLERANCE_RAD,
+        )
+
+    def _on_map(self, message: OccupancyGrid) -> None:
+        """정적 지도의 실제 범위를 기억한다."""
+        info = message.info
+        x0 = info.origin.position.x
+        y0 = info.origin.position.y
+        self.map_bounds = (
+            x0, y0,
+            x0 + info.width * info.resolution,
+            y0 + info.height * info.resolution,
+        )
+
+    def _outside_map(self) -> str:
+        """지도 밖이면 사람이 읽을 이유를, 안이면 빈 문자열을 준다.
+
+        지도 밖으로 나가면 NavFn 이 `Start Coordinates ... was outside bounds` 로
+        **모든** 계획을 거절한다. 그대로 두면 RMF 가 영원히 재시도해 로그만 쌓이고
+        로봇은 서 있다. 여기서 한 번에 끊고 무엇이 잘못됐는지 말한다.
+        """
+        if self.map_bounds is None or self.map_pose is None or self.map_frame != 'map':
+            return ''
+        x0, y0, x1, y1 = self.map_bounds
+        x, y, _ = self.map_pose
+        if x0 <= x <= x1 and y0 <= y <= y1:
+            return ''
+        return (
+            f'로봇이 지도 밖에 있습니다: 자세 ({x:.2f}, {y:.2f}), '
+            f'지도 x {x0:.2f}~{x1:.2f} y {y0:.2f}~{y1:.2f}. '
+            '수동으로 지도 안으로 옮기고 초기 위치를 다시 잡아야 합니다.'
+        )
+
+    def _load_narrow_zones(self) -> dict:
+        """협로 존 표를 읽는다. 없으면 빈 표 — 지금까지처럼 Nav2 가 끝까지 간다.
+
+        지도 이름이 맞지 않으면 **적재하지 않는다.** 값이 그 지도 좌표계에 묶여 있어,
+        다른 지도에서 쓰면 로봇이 엉뚱한 자리에서 후진한다.
+        """
+        path = str(self.get_parameter('narrow_zones_file').value or '').strip()
+        map_name_for_warning = str(self.get_parameter('narrow_map_name').value or '').strip()
+        if not path:
+            # 빈 값은 "이 지도에 표가 없다"는 뜻이다. 조용히 넘어가면 로봇이 협로에
+            # Nav2 로 들어가려다 갇히고, 로그에는 아무 단서도 남지 않는다.
+            self.get_logger().warning(
+                f"협로 존 표가 없어 규칙 주행을 끕니다 (지도 '{map_name_for_warning}'). "
+                f"config/narrow_zones.{map_name_for_warning}.yaml 을 만들면 켜집니다."
+            )
+            return {}
+        map_name = str(self.get_parameter('narrow_map_name').value or '').strip()
+        try:
+            document = yaml.safe_load(Path(path).read_text(encoding='utf-8'))
+            zones = load_zones(document, map_name=map_name)
+        except (OSError, yaml.YAMLError, NarrowZoneError) as error:
+            # 조용히 넘어가면 로봇이 협로에 Nav2 로 들어가려다 갇힌다. 크게 남긴다.
+            self.get_logger().error(f'협로 존 표를 쓸 수 없습니다: {error}')
+            return {}
+        self.get_logger().info(
+            f'협로 존 {len(zones)}개 적재: {", ".join(sorted(zones))}'
+        )
+        return zones
+
+    def _stop_narrow_drive(self) -> None:
+        self.narrow_cmd_pub.publish(Twist())
+
+    async def _run_narrow_plan(self, plan: NarrowZonePlan) -> tuple[bool, str]:
+        """시퀀스를 스텝 하나씩 실행한다. 되먹임이 없으므로 중단 조건이 안전의 전부다."""
+        label = 'exit' if plan.leaving else 'enter'
+        while not plan.done:
+            kind, value = plan.next_step()
+            started = self.map_pose
+            if started is None:
+                self._stop_narrow_drive()
+                return False, 'map pose 를 모른다'
+            deadline = self.get_clock().now().nanoseconds / 1e9 + NARROW_STEP_TIMEOUT_S
+            self.get_logger().info(
+                f'협로 {label} {plan.progress} — {kind} {value}'
+            )
+            while True:
+                if self.emergency:
+                    self._stop_narrow_drive()
+                    return False, '안전 정지'
+                if self.get_clock().now().nanoseconds / 1e9 > deadline:
+                    self._stop_narrow_drive()
+                    return False, f'{kind} 스텝이 {NARROW_STEP_TIMEOUT_S:.0f}초를 넘겼다'
+                current = self.map_pose
+                if current is None:
+                    self._stop_narrow_drive()
+                    return False, 'map pose 를 잃었다'
+                linear, angular, done = step_velocity(
+                    kind, value, current, started,
+                    max_linear=NARROW_MAX_LINEAR_MPS,
+                    max_angular=NARROW_MAX_ANGULAR_RPS,
+                    yaw_tolerance=NARROW_YAW_TOLERANCE_RAD,
+                    position_tolerance=NARROW_POSITION_TOLERANCE_M,
+                    zone=plan.zone.geometry,
+                )
+                if done:
+                    self._stop_narrow_drive()
+                    break
+                command = Twist()
+                command.linear.x = linear
+                command.angular.z = angular
+                self.narrow_cmd_pub.publish(command)
+                await self._sleep(0.05)
+        return True, f'협로 {label} 완료'
 
     def _at_precise_goal(self, goal: ExecuteTransport.Goal) -> bool:
         # 목표는 map 프레임이다(`protocol.py` 가 'map' 을 박는다). odom pose 와

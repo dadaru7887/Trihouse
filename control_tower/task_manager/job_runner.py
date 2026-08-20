@@ -110,6 +110,8 @@ def current_step(steps: tuple[JobStepDetail, ...]) -> JobStepDetail | None:
     Ordering is by `step_no` rather than list order so the runner does not
     depend on how the Gateway happened to serialise the steps.
     """
+    # input.dependencies도 DB에 기록되지만 현재 runner는 병렬 분기를 동시에
+    # dispatch하지 않는다. 가장 이른 미성공 step 하나를 순서대로 진행한다.
     for step in sorted(steps, key=lambda step: step.step_no):
         if step.state != "succeeded":
             return step
@@ -133,16 +135,24 @@ class JobRunner:
         self._packing_dock_codes = tuple(packing_dock_codes)
 
     def run_once(self, *, limit: int = 10) -> JobRunnerReport:
+        """한 polling 주기 동안 주문을 읽어 배정하고 현재 step 하나를 보낸다.
+
+        API가 주문을 만들기만 해서는 로봇이 움직이지 않는다. 이 메서드가 queued
+        job을 발견해 로봇·OMX·포장 도크를 배정하고, 현재 pending step을 Gateway의
+        dispatch API로 넘겨야 integration_messages(outbox)가 생성된다.
+        """
         if limit <= 0:
             raise ValueError("limit must be positive")
         cycle = _Cycle()
         self._sweep_expired_reservations(cycle)
 
+        # DB에 직접 접근하지 않고 Gateway API로 활성 job과 상세 step을 읽는다.
         summaries = self._gateway.list_jobs()
         details = self._load_details(summaries, cycle)
         if not details:
             return cycle.report()
 
+        # 현재 장비 상태와 다른 job이 이미 점유한 자원을 함께 보고 중복 배정을 피한다.
         devices = self._gateway.list_devices()
         # Derived from every occupying Job, not only the ones this cycle will
         # touch, so a Job beyond `limit` still holds its resources.
@@ -214,6 +224,8 @@ class JobRunner:
         reserved: "_Reserved",
         cycle: _Cycle,
     ) -> None:
+        # 첫 주기에는 assignment가 없다. 공개 주문만 여기서 자원을 고르고,
+        # 내부 생성 job은 생성 주체가 배정을 책임지므로 건드리지 않는다.
         assignment = detail.context.get("assignment")
         if not assignment:
             if detail.context.get("source") != PUBLIC_ORDER_SOURCE:
@@ -230,6 +242,7 @@ class JobRunner:
             cycle.assigned.append(detail.job_id)
             assignment = {"mobile_id": request.mobile_id}
 
+        # 10, 20, ... 순으로 아직 성공하지 않은 첫 step 하나만 선택한다.
         step = current_step(detail.steps)
         if step is None:
             # Every step succeeded; the Gateway closes the Job on the final
@@ -244,6 +257,8 @@ class JobRunner:
             )
             return
 
+        # 이 호출이 성공하면 Gateway가 executor_type에 따라 rmf/omx/pinky 채널의
+        # integration_messages 행을 만든다. 실제 RMF·설비 worker는 그 행을 claim한다.
         self._gateway.dispatch_step(
             step.job_step_id,
             StepDispatchRequest(

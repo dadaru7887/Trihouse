@@ -1,0 +1,28 @@
+# PK_02 의 주행 카메라 송신 설정.
+#
+# PK_01 과 같은 카메라 프로파일을 쓰되, 두 로봇이 같은 RTSP 경로를 차지하지
+# 않도록 PK_02 고유 camera_id 와 publish_uri 를 반드시 함께 사용한다.
+# 이 두 값은 `config/cameras.yaml`의 CAM-PK-02 / PK_02 등록과 대조된다.
+camera_streamer:
+  ros__parameters:
+    camera_id: CAM-PK-02
+    camera_index: 0
+    publish_uri: rtsp://192.168.0.9:8554/pinky/CAM-PK-02
+    width: 1280
+    height: 720
+    fps: 15.0
+    bitrate_kbps: 2000
+    keyframe_interval: 15
+    hflip: true
+    vflip: true
+    encoder: libx264
+    encoder_preset: veryfast
+    encoder_profile: baseline
+    transport: tcp
+    health_publish_hz: 1.0
+    degraded_after_sec: 1.0
+    disconnected_after_sec: 3.0
+    healthy_after_sec: 5.0
+    restart_backoff_sec: [1.0, 2.0, 4.0, 8.0, 16.0, 30.0]
+    rpicam_executable: /usr/local/bin/rpicam-vid
+    ffmpeg_executable: /usr/bin/ffmpeg

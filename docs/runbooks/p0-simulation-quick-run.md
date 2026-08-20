@@ -257,11 +257,126 @@ scripts/p0_up.sh
 
 ## 막혔을 때
 
-### 먼저 볼 것
+### 먼저 볼 것 — 세 줄
+
+**① 10~70 중 어디서 멈췄나.** 원장을 HTTP 로 읽으므로 docker 권한이 없어도 된다.
 
 ```bash
-grep -aE '\[(ERROR|WARN)\]' /tmp/sim.log | tail -30 | cut -c1-200
+export JOB=$(curl -s http://127.0.0.1:8080/api/v1/jobs | python3 -c 'import sys,json;print(max(j["job_id"] for j in json.load(sys.stdin)))') && echo "JOB=$JOB"
 ```
+```bash
+curl -s http://127.0.0.1:8080/api/v1/jobs/$JOB | python3 -c '
+import sys, json
+j = json.load(sys.stdin)
+print("job %s  state=%s" % (j["job_id"], j["state"]))
+for s in j["steps"]:
+    r = s.get("result") or {}
+    print("  %-4s %-7s %-13s %-11s %-22s %s" % (
+        s["step_no"], s["executor_type"], s["action_type"], s["state"],
+        r.get("reason_code") or "", s.get("rmf_task_id") or ""))'
+```
+
+```text
+job 2  state=assigned
+  10   arm     pick          succeeded   PICK_CONFIRMED
+  20   mobile  navigate      cancelled                          compose.dispatch-84cfafbbf5
+  30   fms     load          pending
+```
+
+끝난 step 은 `result.reason_code` 가, `mobile` step 은 마지막 칸에 RMF task id 가
+찍힌다. **실패한 step 의 `result` 는 대개 `null` 이다** — 이유는 원장이 아니라 로그에
+있다. 그래서 ②③ 이 필요하다.
+
+**`pending` 이 아닌 마지막 줄이 실패 지점이다.** 그 아래가 전부 `pending` 인데 job 이
+`assigned` 로 남아 있으면 러너가 그 자리에서 영원히 막혀 있는 것이다.
+
+**② 에러를 종류별로 접는다.** 그냥 `tail` 하면 초당 수백 줄인 `claim 실패` 가 화면을
+다 먹어 진짜 원인이 위로 밀려난다. 개수까지 함께 보인다.
+
+```bash
+grep -aE '\[(ERROR|WARN)\]' /tmp/sim.log | sed -E 's/\[[0-9]{9,}\.[0-9]+\]//' | sort | uniq -c | sort -rn | head -25 | cut -c1-190
+```
+
+**③ 되풀이되는 두 줄을 빼고 시간순으로 읽는다. 인과는 여기 다 보인다.** 로그 시각은
+epoch 이라 `awk` 로 시:분:초로 바꾼다.
+
+```bash
+grep -aE '\[(ERROR|WARN)\]' /tmp/sim.log | grep -av 'claim 실패\|job runner blocked' | awk '{ if (match($0, /[0-9]{10}\.[0-9]+/)) { sub(/[0-9]{10}\.[0-9]+/, strftime("%H:%M:%S", substr($0, RSTART, 10))) } print }' | tail -40 | cut -c1-200
+```
+
+```text
+12:10:43 [controller_server]  RegulatedPurePursuitController detected collision ahead!
+12:11:08 [controller_server]  Failed to make progress
+12:11:08 [pinky_easy_fleet_adapter] Requesting replan ... command handle seems to be unresponsive
+12:11:08 [pinky_easy_fleet_adapter] [PK_01] navigation canceled     ← step 20 이 여기서 죽었다
+```
+
+**④ 로그에 없는 것 — 안전 gate.** `safety_supervisor` 는 `cmd_vel_nav` 를 받아
+`cmd_vel` 로 내보내는 **마지막 관문**인데 아무것도 로그에 찍지 않는다. STOP 이 걸려도
+Nav2 의 목표를 취소하지 않으므로([policy.py](../../trihouse_pinky/trihouse_pinky_safety/trihouse_pinky_safety/policy.py))
+`Passing new path to controller` 만 1 초마다 반복되고 로봇은 가만히 있는다.
+**로봇이 안 움직이는데 로그가 조용하면 여기부터 본다.**
+
+```bash
+timeout 12 ros2 topic echo --once /pinky_01/trihouse/safety/state
+```
+
+| `state` | `detail` | 뜻 |
+|---|---|---|
+| 0 | `clear` | 통과 |
+| 1 | `person_slow` 등 | 감속 |
+| **2** | **`front_stop`** | 전방 통로에 0.30 m(`stop_distance_m`) 안쪽으로 무언가 있다. **속도가 0 으로 눌린다** |
+| 3 | — | 비상 latch. `ClearEmergency` 없이는 안 풀린다 |
+
+`front_stop` 이면 실제로 얼마나 남았는지 잰다. 2.20 × 2.70 m 방이라 벽을 마주 보면
+0.30 m 는 쉽게 깨진다.
+
+```bash
+timeout 20 python3 -c "
+import rclpy, time
+from rclpy.node import Node
+from sensor_msgs.msg import LaserScan
+from trihouse_pinky_safety.geometry import (
+    forward_path_distance, nearest_range,
+    SCAN_FORWARD_OFFSET_RAD, SCAN_ORIGIN_OFFSET_X_M, PROTECTIVE_HALF_WIDTH_M)
+rclpy.init(); n=Node('probe'); d={}
+n.create_subscription(LaserScan,'/pinky_01/scan',lambda m: d.__setitem__('s',m),10)
+e=time.monotonic()+10
+while rclpy.ok() and time.monotonic()<e and 's' not in d: rclpy.spin_once(n,timeout_sec=0.2)
+m=d['s']
+sh=dict(angle_min=m.angle_min, angle_increment=m.angle_increment,
+        range_min=m.range_min, range_max=m.range_max,
+        forward_offset_rad=SCAN_FORWARD_OFFSET_RAD, origin_offset_x_m=SCAN_ORIGIN_OFFSET_X_M)
+print('전방 통로 %.3f m (stop_distance_m 0.30)' % forward_path_distance(m.ranges, half_width_m=PROTECTIVE_HALF_WIDTH_M, **sh))
+print('최근접   %.3f m' % nearest_range(m.ranges, **sh))
+n.destroy_node(); rclpy.shutdown()"
+```
+
+### 더 파고들 때
+
+```bash
+grep -an '<문구>' /tmp/sim.log | head -3 | cut -c1-200
+```
+그 종류가 **처음** 난 줄번호. 반복하는 에러는 마지막이 아니라 첫 줄이 원인 근처다.
+
+```bash
+sed -n '640,680p' /tmp/sim.log | cut -c1-200
+```
+그 줄번호 앞뒤를 `INFO` 까지 포함해 읽는다. 무엇이 죽기 직전에 무엇을 했는지가 여기 있다.
+
+```bash
+tail -f /tmp/sim.log | grep -a --line-buffered -E '\[(ERROR|WARN)\]' | grep -av --line-buffered 'claim 실패\|job runner blocked'
+```
+실시간으로 같은 필터를 건다. Ctrl+C 해도 시뮬은 산다.
+
+```bash
+grep -ac 'FMS command claim 실패' /tmp/sim.log; ls -la /tmp/sim.log
+```
+`claim 실패` 가 만 단위이거나 로그가 수십 MB 면 이미 [409 루프](#절대-규칙)에 빠진 것이다.
+
+**로그의 `step 3` 은 `step_no` 가 아니라 `job_step_id` 다**
+([job_runner.py:242](../../control_tower/task_manager/job_runner.py#L242)).
+10/20/…70 과 다른 번호이니 ① 의 표와 대조해서 읽는다.
 
 ### 증상별
 
@@ -277,6 +392,8 @@ grep -aE '\[(ERROR|WARN)\]' /tmp/sim.log | tail -30 | cut -c1-200
 | `job runner blocked: no free robot` | 앞선 job 이 로봇을 쥐고 있다. `scripts/p0_reset.sh` |
 | `FMS command claim 실패: 409` 반복 | 두 job 이 한 로봇을 두고 경합한다. `scripts/p0_reset.sh` |
 | `FMS command claim 실패: 404` 반복 | 원장에 없는 task 를 claim 하고 있다. `pinky_fleet.yaml` 의 `finishing_request` 가 `"nothing"`, `responsive_wait` 가 `false` 인지 확인 |
+| `Passing new path to controller` 만 1 초마다 반복되고 로봇이 안 움직인다 | 안전 gate 가 `front_stop` 으로 속도를 0 으로 누르고 있다. STOP 은 Nav2 목표를 취소하지 않아 겉으로는 주행 중처럼 보인다. **④** 로 확인한다. 10 초 뒤 Nav2 의 `SimpleProgressChecker`(0.5 m / 10 s)가 `Failed to make progress` 로 끝낸다 |
+| step 20 이 `cancelled`, `job runner blocked: job N: step M is cancelled` 반복 | Nav2 가 주행을 포기했다. ③ 으로 거슬러 오르면 `collision ahead` → `Controller patience exceeded` → `Failed to make progress` → `navigation canceled` 가 차례로 보인다. 좁은 통로에 걸렸거나 RTF 가 낮은 것이다. **취소된 step 을 되살리는 경로는 없다** — `scripts/p0_reset.sh` |
 | `GOAL_TOLERANCE_NOT_MET` | 로봇의 실제 정지 좌표와 목표 좌표를 함께 뽑아 오차의 방향·크기를 본다. 허용오차는 `fleet_node.py` 의 `PRECISE_STOP_XY_TOLERANCE_M` |
 | `Unable to replan assignments` | 순간 안전정지가 로봇을 fleet 에서 빼냈다(D15, 미수정). RTF 가 낮으면 잦다 |
 | 시뮬이 이유 없이 죽음 | **다른 창이 teardown 을 돌렸다.** `ps -eo args \| grep claude` |

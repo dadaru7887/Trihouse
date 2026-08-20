@@ -229,6 +229,28 @@ def _robot_group(
             nav2_params = derived
     x, y, yaw = spawn_pose
 
+    # 협로 존 표는 지도마다 다르다. Nav2 지도 파일 이름에서 표 이름을 만들고, 없으면
+    # 빈 문자열을 넘겨 규칙 주행을 끈다(지금까지처럼 Nav2 가 끝까지 간다).
+    nav2_map = Path(LaunchConfiguration("nav2_map").perform(context)).expanduser()
+    narrow_map_name = nav2_map.stem if nav2_map.name else ""
+    zones_path = (
+        Path(get_package_share_directory("trihouse_rmf_bridge")).parents[2]
+        / "config" / f"narrow_zones.{narrow_map_name}.yaml"
+    )
+    repository_zones = Path(__file__).resolve().parents[2] / "config" / f"narrow_zones.{narrow_map_name}.yaml"
+    narrow_zones_file = str(
+        zones_path if zones_path.is_file() else repository_zones
+        if repository_zones.is_file() else ""
+    )
+    # 표가 없으면 규칙 주행이 통째로 꺼진다. 조용히 꺼지면 운영자는 로봇이 협로에서
+    # 헤매는 것을 Nav2 탓으로 오해한다. 어느 파일을 찾았는지까지 밝힌다.
+    if not narrow_zones_file:
+        print(
+            f"[협로] 지도 '{narrow_map_name}' 의 존 표가 없어 규칙 주행을 끕니다. "
+            f"찾은 자리: {repository_zones}",
+            flush=True,
+        )
+
     actions = [
         PushRosNamespace(namespace),
         # Gazebo 는 `robot_description` 토픽을 읽어 모델을 만든다. 이걸 내보내는
@@ -440,6 +462,11 @@ def _robot_group(
                 "robot_id": robot_id,
                 "map_revision": map_revision,
                 "use_sim_time": use_sim_time,
+                # 협로 존 표. 통로 폭 0.20 m 에 로봇 필요 폭 0.14 m 라 Nav2 로는
+                # 지날 수 없어(AMCL 오차 0.08~0.11 m) 규칙 주행으로 넘긴다.
+                # 값이 지도 좌표계에 묶여 있어 이름이 맞지 않으면 노드가 거절한다.
+                "narrow_zones_file": narrow_zones_file,
+                "narrow_map_name": narrow_map_name,
             }],
         ),
         # `trihouse/fms/state` 를 낸다. FMS Gateway 의 TCP 포트에 붙으면 ONLINE 이

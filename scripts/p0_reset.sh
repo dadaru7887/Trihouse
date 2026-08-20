@@ -3,8 +3,9 @@
 #
 # 회차를 거듭하면 상태가 쌓여 다음 회차가 앞 회차와 달라진다. 특히:
 #
-#   - job 을 취소해도 **재고 예약이 돌아오지 않는다**(D2, 미수정). 두 번 취소하면
-#     SKU-PORKBELLY 재고 2 개가 모두 잠겨 새 주문이 배정될 로봇도 물건도 없다.
+#   - 구버전 Gateway에서는 job 취소 뒤 재고 예약이 남았다. 현재 취소 경로는
+#     `reservation_release` 원장과 함께 되돌리지만, 이미 남아 있는 과거 예약은
+#     자동으로 복구하지 못한다.
 #   - 실패한 step 을 가진 job 이 `assigned` 로 남아 로봇을 쥔다.
 #   - RMF dispatcher 에 살아 있는 task 는 FMS job 을 취소해도 남아, fleet adapter 가
 #     `FMS command claim 실패: 409` 를 초당 수백 번 반복한다.
@@ -50,6 +51,17 @@ fi
 MAP_NAME="$(basename "$MAP_YAML" .yaml)"
 echo "[reset] 지도: $MAP_NAME  ($MAP_YAML)"
 
+source "$ROOT/scripts/lib/require_docker.sh"
+require_docker || exit 1
+
+# 협로 존 표는 지도 좌표계에 묶여 있어 지도마다 따로 재야 한다. 없으면 규칙 주행이
+# 통째로 꺼지고, 로봇은 Nav2 로 협로에 들어가려다 갇힌다. 여기서 미리 말해 준다.
+if [[ ! -f "$ROOT/config/narrow_zones.$MAP_NAME.yaml" ]]; then
+  echo "[reset] 주의: 이 지도의 협로 존 표가 없습니다 -> config/narrow_zones.$MAP_NAME.yaml" >&2
+  echo "[reset]       규칙 주행이 꺼진 채로 돕니다. 실측이 끝난 지도로 도시거나," >&2
+  echo "[reset]       notebooks/narrow_zone_measurement.ipynb 로 이 지도를 다시 재세요." >&2
+fi
+
 echo "[reset] 1/5 시뮬레이션을 내립니다"
 scripts/sim_teardown.sh >/dev/null 2>&1 || true
 
@@ -67,6 +79,7 @@ echo "[reset] 2/5 런타임 큐를 비웁니다"
 rm -f .trihouse/p0/pinky_0*_task_events.sqlite3
 
 echo "[reset] 3/5 컨테이너 6 개를 확인합니다"
+
 running="$(docker ps --format '{{.Names}}' | grep -cE 'trihouse-mysql|trihouse_p0-' || true)"
 if [[ "$running" -lt 6 ]]; then
   echo "[reset]     $running 개만 떠 있습니다. 올립니다."

@@ -118,7 +118,11 @@ class OutboundPlan:
 
 
 class OutboundPlanner:
-    """Allocate lots deterministically and group allocations into zone visits."""
+    """주문 수량에 lot을 배정하고, 한 번 방문할 온도 구역별 묶음을 만든다.
+
+    이 클래스는 DB를 직접 읽거나 로봇을 고르지 않는다. Repository가 전달한 주문,
+    잠긴 재고 사본, 발행 지도 위치만 받아 같은 입력에는 같은 계획을 돌려준다.
+    """
 
     def plan(
         self,
@@ -127,6 +131,8 @@ class OutboundPlanner:
         locations: PlanningLocations,
     ) -> OutboundPlan:
         self._validate_order(order)
+        # 상품별 lot 후보를 모은 뒤 유통기한 → 입고시각 → lot_id 순(FEFO)으로
+        # 정렬한다. 먼저 만료될 재고를 먼저 출고하기 위한 순서다.
         lots_by_product: dict[str, list[InventoryLotSnapshot]] = {}
         for candidate in inventory:
             lots_by_product.setdefault(candidate.product_code, []).append(candidate)
@@ -137,6 +143,8 @@ class OutboundPlanner:
         zone_items: dict[str, list[PlannedItem]] = {zone: [] for zone in ZONE_ORDER}
         remaining_by_lot = {candidate.lot_id: candidate.reservable_qty for candidate in inventory}
 
+        # 주문 line마다 필요한 수량이 0이 될 때까지 앞쪽 lot에서 차례로 가져온다.
+        # 한 lot으로 부족하면 여러 lot에 나누어 배정될 수 있다.
         for requested in order.items:
             remaining = requested.quantity
             allocations: list[LotAllocation] = []
@@ -155,6 +163,7 @@ class OutboundPlanner:
                         reserved_qty=reserved,
                     )
                 )
+                # 선택한 lot은 자기 temperature_zone 방문 묶음에 들어간다.
                 zone_items[candidate.temperature_zone].append(
                     PlannedItem(
                         line_no=requested.line_no,
@@ -187,6 +196,8 @@ class OutboundPlanner:
 
         line_by_number = {line.line_no: line for line in planned_lines}
         bundles = []
+        # 실제 재고가 배정된 구역만 ambient → chilled → frozen 순서로 방문한다.
+        # 같은 구역의 여러 상품은 하나의 ZoneBundle로 묶여 Pinky가 한 번 방문한다.
         for zone in ZONE_ORDER:
             items = zone_items[zone]
             if not items:
@@ -239,6 +250,7 @@ class OutboundPlanner:
 
     @staticmethod
     def _fefo_key(candidate: InventoryLotSnapshot) -> tuple[bool, date, bool, datetime, int]:
+        """유통기한 없는 lot은 뒤로 보내고, 동률은 입고시각과 lot_id로 푼다."""
         return (
             candidate.expiry_date is None,
             candidate.expiry_date or date.max,
