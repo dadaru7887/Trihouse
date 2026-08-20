@@ -20,7 +20,13 @@ from rclpy.duration import Duration
 from rclpy.node import Node
 from std_msgs.msg import Bool
 from trihouse_interfaces.action import ExecuteTransport
-from trihouse_interfaces.msg import ConnectionState, KeepOutZone, RobotStatus, TaskEvent
+from trihouse_interfaces.msg import (
+    ConnectionState,
+    KeepOutZone,
+    PersonDetection,
+    RobotStatus,
+    TaskEvent,
+)
 from trihouse_interfaces.srv import ClearEmergency
 
 from .measurement_log import MeasurementLogWriter
@@ -33,6 +39,7 @@ from .protocol import (
     parse_clear_keep_out_zone,
     parse_emergency_command,
     parse_keep_out_zone,
+    parse_person_detection,
     parse_transport_command,
 )
 
@@ -304,6 +311,11 @@ class GatewayNode(Node):
         # 비상 요청과 접근 금지 구역은 해당 로컬 안전 노드에 ROS 메시지로 넘긴다.
         self.emergency_pub = self.create_publisher(Bool, 'trihouse/safety/emergency_request', 10)
         self.keep_out_pub = self.create_publisher(KeepOutZone, 'trihouse/safety/keep_out_zones', 10)
+        # 5080 추론이 4060 관제를 거쳐 내려온 사람 관측. `VLM/RL -> Safety
+        # Supervisor 우회` 가 금지 연결이라 이 경로만 쓴다.
+        self.person_pub = self.create_publisher(
+            PersonDetection, 'trihouse/vision/person_detection/base', 10
+        )
         self.clear_emergency = self.create_client(ClearEmergency, 'trihouse/safety/clear_emergency')
 
         # NDJSON client는 별도 thread에서 재접속하며 수신 결과만 queue에 추가한다.
@@ -511,6 +523,9 @@ class GatewayNode(Node):
             if payload.get('type') == 'keep_out_zone':
                 self._handle_keep_out_zone(payload)
                 continue
+            if payload.get('type') == 'person_detection':
+                self._handle_person_detection(payload)
+                continue
             if payload.get('type') == 'clear_keep_out_zone':
                 self._clear_keep_out_zone(payload)
                 continue
@@ -667,6 +682,51 @@ class GatewayNode(Node):
                 'accepted': True,
             }
         )
+
+    def _handle_person_detection(self, payload: dict) -> None:
+        """사람 관측을 안전 gate 가 듣는 topic 으로 흘린다.
+
+        **명령 처리와 다르다.** `message_id` 중복 검사도 ack 도 하지 않는다 —
+        이것은 10~15 Hz 로 흐르는 관측이고, 명령 규약을 씌우면 `seen` 목록이
+        무한히 커지고 ack 가 역류해 링크를 채운다. 최신 값만 의미가 있다.
+
+        잘못된 payload 는 거절을 보내되 링크를 막지 않는다. 관측 하나가 깨졌다고
+        뒤따르는 정상 관측까지 버리면 사람이 보이는데도 로봇이 안 느려진다.
+        """
+        try:
+            observation = parse_person_detection(payload)
+        except ProtocolError as error:
+            self.link.send(
+                {
+                    'type': 'command_rejected',
+                    'robot_id': self.robot_id,
+                    'detail': str(error),
+                }
+            )
+            return
+
+        message = PersonDetection()
+        message.header.stamp = self.get_clock().now().to_msg()
+        # 좌표가 실리지 않았으므로 프레임을 주장하지 않는다. 캘리브레이션이
+        # 끝나 pose 가 들어오면 그때 `base_footprint` 를 적는다.
+        message.header.frame_id = 'base_footprint' if observation.pose else ''
+        message.robot_id = self.robot_id
+        message.camera_id = observation.camera_id
+        message.track_id = observation.track_id
+        message.model_version = observation.model_version
+        message.confidence = float(observation.confidence)
+        message.pose_class = observation.pose_class
+        message.ttl_ms = observation.ttl_ms
+        if observation.bbox is not None:
+            x_offset, y_offset, width, height = observation.bbox
+            message.bbox.x_offset = x_offset
+            message.bbox.y_offset = y_offset
+            message.bbox.width = width
+            message.bbox.height = height
+        if observation.pose is not None:
+            message.pose.pose.position.x = observation.pose[0]
+            message.pose.pose.position.y = observation.pose[1]
+        self.person_pub.publish(message)
 
     def _clear_keep_out_zone(self, payload: dict) -> None:
         """기존 접근 금지 구역을 즉시 만료시키는 메시지를 발행한다."""

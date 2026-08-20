@@ -29,7 +29,8 @@
 | vision bridge | 발행 | `/trihouse/vision/person_detection/camera` | `trihouse_interfaces/msg/PersonDetection` | transformer |
 | vision bridge | 발행 | `/trihouse/vision/object_detection/camera` | `trihouse_interfaces/msg/ObjectDetection` | transformer |
 | vision bridge | 발행 | `/trihouse/vision/marker_observation/camera` | `trihouse_interfaces/msg/MarkerObservation` | transformer |
-| vision transform | 발행 | `/trihouse/vision/person_detection/base` | `trihouse_interfaces/msg/PersonDetection` | LED/safety |
+| gateway | 발행 | `/trihouse/vision/person_detection/base` | `trihouse_interfaces/msg/PersonDetection` | LED/safety |
+| vision transform | (예정) | `/trihouse/vision/person_detection/base` | `trihouse_interfaces/msg/PersonDetection` | LED/safety |
 | vision transform | 발행 | `/trihouse/vision/object_detection/base` | `trihouse_interfaces/msg/ObjectDetection` | fleet/safety |
 | vision transform | 발행 | `/trihouse/vision/marker_observation/base` | `trihouse_interfaces/msg/MarkerObservation` | docking/fleet |
 | docking | 구독 | `/trihouse/vision/marker_observation/base`, `/trihouse/vision/readiness` | `MarkerObservation`, `Readiness` | vision |
