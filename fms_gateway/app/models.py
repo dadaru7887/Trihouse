@@ -888,3 +888,32 @@ class OperationEventView(BaseModel):
 class MapProjectChangesRecorded(BaseModel):
     map_name: str
     events: list[OperationEventView]
+
+
+class PersonDetectionReport(BaseModel):
+    """5080 추론이 올리는 사람 관측.
+
+    `robot_id` 를 받지 않는다. `config/cameras.yaml` 의 `attached_to` 가 수신
+    로봇을 정하고, 같은 사실을 두 곳에서 받으면 어긋날 수 있다. `extra="forbid"`
+    가 실수로 실어 보낸 `robot_id` 를 조용히 무시하지 않고 거절한다.
+
+    `pose` 는 캘리브레이션이 끝난 카메라만 싣는다. 없으면 안전 gate 가 거리
+    대신 "보이면 감속" 으로 동작한다 — 지어낸 좌표를 싣지 않는다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    camera_id: str = Field(min_length=1, max_length=64)
+    confidence: float = Field(gt=0.0, le=1.0)
+    ttl_ms: int | None = Field(default=None, gt=0, le=60_000)
+    observed_at_ms: int | None = Field(default=None, ge=0)
+    track_id: str | None = Field(default=None, max_length=64)
+    model_version: str | None = Field(default=None, max_length=64)
+    pose_class: str | None = Field(default=None, max_length=32)
+    pose: dict[str, float] | None = None
+    bbox: dict[str, int] | None = None
+
+
+class PersonDetectionDelivery(BaseModel):
+    robot_id: str
+    delivered: bool

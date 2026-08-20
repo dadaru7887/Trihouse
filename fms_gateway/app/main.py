@@ -21,6 +21,7 @@ from fastapi import (
     HTTPException,
     Path,
     Query,
+    Request,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
@@ -59,6 +60,8 @@ from .models import (
     ReservationAnomaly,
     ReservationsExpired,
     LoadAttemptRequest,
+    PersonDetectionDelivery,
+    PersonDetectionReport,
     LoadAttemptView,
     PickRecoveryRequest,
     PickRecoveryView,
@@ -128,7 +131,13 @@ from .repositories import (
     PickRecoveryConflict,
     WorkerCompletionConflict,
 )
-from .tcp_protocol import TcpIngestionServer
+from .tcp_protocol import (
+    PersonDetectionRoutingError,
+    RobotLinkRegistry,
+    TcpIngestionServer,
+    route_person_detection,
+)
+from control_tower.gateway.camera_registry import load_camera_registry
 
 
 logger = logging.getLogger(__name__)
@@ -197,6 +206,8 @@ def create_app(
                 on_message=RepositoryIngestion(repo),
             )
             await tcp_server.start()
+            # 관제가 로봇에게 먼저 말을 거는 통로. 사람 관측이 이 장부를 쓴다.
+            _app.state.robot_links = tcp_server.links
         try:
             yield
         finally:
@@ -208,6 +219,42 @@ def create_app(
     )
     app.state.map_source_staging = source_staging
     app.state.map_deployments = deployments
+    # TCP 서버가 없는 구성(테스트, read-only 인스턴스)에서도 라우트가 뜨도록
+    # 빈 장부를 먼저 둔다. lifespan 이 실제 서버의 것으로 바꾼다.
+    app.state.robot_links = RobotLinkRegistry()
+
+    @app.post(
+        "/internal/v1/vision/person-detections",
+        response_model=PersonDetectionDelivery,
+    )
+    async def receive_person_detection(
+        observation: PersonDetectionReport, request: Request
+    ) -> PersonDetectionDelivery:
+        """5080 추론이 올린 사람 관측을 해당 로봇에 밀어 넣는다.
+
+        `docs/architecture/system_overview.md` 의 금지 연결에 `VLM/RL → Safety
+        Supervisor 우회` 가 있다. 5080 은 로봇에 직접 꽂히지 않고 여기를 거친다.
+
+        요청은 `robot_id` 를 싣지 않는다 — `config/cameras.yaml` 의 `attached_to`
+        가 이미 답이고, 둘을 함께 받으면 어긋날 수 있다. 그 어긋남은 "엉뚱한
+        로봇이 감속한다" 로 나타나 현장에서 되짚기가 매우 어렵다.
+
+        실패를 조용히 삼키지 않고 이유를 나눠서 답한다. 카메라 ID 오타와 로봇
+        미접속은 현장에서 고치는 방법이 전혀 다르다.
+        """
+        try:
+            robot_id = route_person_detection(observation.camera_id, load_camera_registry())
+        except PersonDetectionRoutingError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+        payload = observation.model_dump(exclude_none=True)
+        payload["type"] = "person_detection"
+        delivered = await request.app.state.robot_links.push(robot_id, payload)
+        if not delivered:
+            raise HTTPException(
+                status_code=409, detail=f"{robot_id} is not connected"
+            )
+        return PersonDetectionDelivery(robot_id=robot_id, delivered=True)
 
     @app.get("/health")
     def health() -> dict[str, str]:

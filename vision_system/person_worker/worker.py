@@ -34,6 +34,7 @@ import yaml
 
 from vision_system.person_worker.fall_monitor import FallMonitor, MonitorConfig
 from vision_system.person_worker.posture import PostureConfig, PostureEstimator
+from vision_system.person_worker.reporting import ReportPolicy, ReportThrottle
 from vision_system.yolo_inference_server.detector import Detector, DetectorConfig
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "configs/realtime.yaml"
@@ -71,7 +72,64 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source", default="0", help="카메라 번호, 영상 파일 또는 RTSP URL")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--headless", action="store_true", help="창을 띄우지 않는다")
+    parser.add_argument(
+        "--camera-id",
+        help=(
+            "관측에 실을 카메라 ID. RTSP source 면 URL 의 마지막 segment 에서 "
+            "저절로 나오므로 줄 필요가 없다"
+        ),
+    )
+    parser.add_argument(
+        "--report-url",
+        help="관제(4060)의 사람 관측 수신 주소. 생략하면 표준출력에만 찍는다",
+    )
+    parser.add_argument(
+        "--ttl-ms",
+        type=int,
+        default=ReportPolicy().ttl_ms,
+        help="관측 수명(ms). 이 절반 주기로 갱신을 보낸다",
+    )
     return parser.parse_args(argv)
+
+
+def resolve_camera_id(source: str, explicit: str | None) -> str:
+    """관측에 실을 카메라 ID 를 정한다.
+
+    RTSP 경로 규약이 `<역할>/<camera_id>` 이므로 URL 이 이미 논리 ID 를 싣고
+    있다. 같은 사실을 두 곳에서 받으면 둘이 어긋날 수 있어 URL 을 정본으로 쓴다 —
+    `inference_common/stream.py` 가 같은 이유로 `camera_id` 를 파생시킨다.
+
+    로컬 카메라 index(`--source 0`)에는 URL 이 없으므로 그때만 직접 받는다.
+    """
+    if explicit:
+        return explicit
+    if "://" in source:
+        segment = source.rstrip("/").rsplit("/", 1)[-1]
+        if segment:
+            return segment
+    raise SystemExit(
+        "카메라 ID 를 정할 수 없습니다. RTSP source 를 쓰거나 --camera-id 를 주세요"
+    )
+
+
+def _post(url: str, payload: dict) -> None:
+    """관측 하나를 관제에 올린다. 실패해도 추론 루프를 멈추지 않는다.
+
+    사람이 보이는 동안 관측은 계속 흐른다. 한 번 못 보낸 것 때문에 카메라 읽기가
+    멈추면 그 뒤로 아무것도 못 본다. 실패는 찍고 다음 것을 보낸다.
+    """
+    import urllib.error
+    import urllib.request
+
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        url, data=body, headers={"Content-Type": "application/json"}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=1.0) as response:
+            response.read()
+    except (urllib.error.URLError, OSError, TimeoutError) as error:
+        print(json.dumps({"type": "REPORT_FAILED", "detail": str(error)}), flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -82,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
     detector = Detector(args.weights, detector_config)
     posture = PostureEstimator(posture_config)
     monitor = FallMonitor(monitor_config)
+    throttle = ReportThrottle(ReportPolicy(ttl_ms=args.ttl_ms))
+    camera_id = resolve_camera_id(args.source, args.camera_id)
 
     device = detector.load()
     print(json.dumps({"device": device.to_dict()}, ensure_ascii=False), flush=True)
@@ -114,15 +174,22 @@ def main(argv: list[str] | None = None) -> int:
                         low_motion=not measurement.moving,
                     )
                     state = result["state"]
-                    print(json.dumps({
-                        "type": "PERSON_OBSERVATION",
-                        "confidence": person.confidence,
-                        "centroid": measurement.centroid,
-                        "aspect_ratio": measurement.aspect_ratio,
-                        "state": state,
-                        "timestamp": time.time(),
-                    }, ensure_ascii=False), flush=True)
+                    # 상태가 그대로면 수명의 절반 주기로만 올린다. 15 Hz 를 그대로
+                    # 흘리면 TCP 8788 이 관측으로 차고 주행 명령이 뒤로 밀린다.
+                    if throttle.should_report(timestamp, f"PERSON:{state}"):
+                        observation = {
+                            "type": "person_detection",
+                            "camera_id": camera_id,
+                            "confidence": round(float(person.confidence), 4),
+                            "pose_class": state,
+                            "ttl_ms": args.ttl_ms,
+                            "observed_at_ms": int(time.time() * 1000),
+                        }
+                        print(json.dumps(observation, ensure_ascii=False), flush=True)
+                        if args.report_url:
+                            _post(args.report_url, observation)
                     if result["event"]:
+                        # 낙상 확정은 사람이 재확인할 사건이라 늘 올린다.
                         print(json.dumps({
                             "type": FALL_EVENT, "state": state, "timestamp": time.time(),
                         }, ensure_ascii=False), flush=True)

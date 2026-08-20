@@ -178,3 +178,77 @@ def test_the_registry_is_reachable_from_the_server() -> None:
         host="127.0.0.1", port=0, registered_robot_ids=lambda: (), on_message=lambda _: None
     )
     assert isinstance(server.links, tcp_protocol.RobotLinkRegistry)
+
+
+# --------------------------------------------------------- HTTP 수신 라우트
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from fms_gateway.app.main import create_app  # noqa: E402
+
+
+class _FakeRepository:
+    def ping(self) -> bool:
+        return True
+
+    def list_registered_robot_ids(self):
+        return ('PK_01', 'PK_02')
+
+
+def _client(links: RobotLinkRegistry) -> TestClient:
+    app = create_app(_FakeRepository())
+    app.state.robot_links = links
+    return TestClient(app)
+
+
+ROUTE = '/internal/v1/vision/person-detections'
+
+
+def test_an_observation_reaches_the_attached_robot() -> None:
+    links = RobotLinkRegistry()
+    writer = _Writer()
+    links.attach('PK_01', writer)
+    with _client(links) as client:
+        response = client.post(ROUTE, json={'camera_id': 'CAM-PK-01', 'confidence': 0.82})
+    assert response.status_code == 200
+    assert response.json()['robot_id'] == 'PK_01'
+    assert writer.lines[0]['type'] == 'person_detection'
+    assert writer.lines[0]['confidence'] == 0.82
+
+
+def test_an_unknown_camera_is_answered_not_swallowed() -> None:
+    """현장에서 관측이 안 갈 때 5080 화면에 이유가 찍혀야 한다.
+
+    멀티캐스트 대신 HTTP 를 쓰는 이유가 이것이다 — 조용히 유실되면 5080·4060·
+    로봇 셋 중 어디가 문제인지 알 수 없다.
+    """
+    with _client(RobotLinkRegistry()) as client:
+        response = client.post(ROUTE, json={'camera_id': 'CAM-GHOST', 'confidence': 0.5})
+    assert response.status_code == 400
+    assert 'CAM-GHOST' in response.json()['detail']
+
+
+def test_a_disconnected_robot_is_reported_as_such() -> None:
+    """로봇이 아직 안 붙은 것과 카메라 ID 오타는 다른 문제다. 구분해서 답한다."""
+    with _client(RobotLinkRegistry()) as client:
+        response = client.post(ROUTE, json={'camera_id': 'CAM-PK-01', 'confidence': 0.5})
+    assert response.status_code == 409
+    assert 'PK_01' in response.json()['detail']
+
+
+def test_a_detection_without_confidence_is_refused() -> None:
+    with _client(RobotLinkRegistry()) as client:
+        response = client.post(ROUTE, json={'camera_id': 'CAM-PK-01'})
+    assert response.status_code == 422
+
+
+def test_the_request_never_carries_a_robot_id() -> None:
+    """카메라 명부가 정본이다. 요청이 로봇을 지정하면 둘이 어긋날 수 있다."""
+    links = RobotLinkRegistry()
+    writer = _Writer()
+    links.attach('PK_01', writer)
+    with _client(links) as client:
+        response = client.post(
+            ROUTE, json={'camera_id': 'CAM-PK-01', 'confidence': 0.5, 'robot_id': 'PK_02'}
+        )
+    assert response.status_code == 422, '알 수 없는 field 는 거절한다'

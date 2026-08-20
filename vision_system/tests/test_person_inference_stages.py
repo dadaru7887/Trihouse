@@ -187,3 +187,21 @@ def test_one_config_file_feeds_all_three_stages() -> None:
 def test_a_camera_index_and_a_url_are_told_apart() -> None:
     assert parse_source("0") == 0
     assert parse_source("rtsp://host:8554/pinky/CAM-PK-01") == "rtsp://host:8554/pinky/CAM-PK-01"
+
+
+# ------------------------------------------------------------- 카메라 신원
+
+from vision_system.person_worker.worker import resolve_camera_id  # noqa: E402
+
+
+def test_the_rtsp_url_already_carries_the_camera_id() -> None:
+    """경로 규약이 `<역할>/<camera_id>` 다. 같은 사실을 두 곳에서 받지 않는다."""
+    assert resolve_camera_id("rtsp://host:8554/pinky/CAM-PK-01", None) == "CAM-PK-01"
+    assert resolve_camera_id("rtsp://host:8554/omx/CAM-OMX-01-WRIST", None) == "CAM-OMX-01-WRIST"
+
+
+def test_a_local_camera_index_must_be_told_its_identity() -> None:
+    """URL 이 없으면 파생할 근거가 없다. 지어내지 않고 멈춘다."""
+    with pytest.raises(SystemExit):
+        resolve_camera_id("0", None)
+    assert resolve_camera_id("0", "CAM-PK-01") == "CAM-PK-01"
