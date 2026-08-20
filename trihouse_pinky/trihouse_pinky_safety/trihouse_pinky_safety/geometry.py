@@ -19,10 +19,20 @@ SCAN_ORIGIN_OFFSET_X_M = -0.017
 # 있다. 이 값을 키우면 통로를 한 번도 못 지난다.
 PROTECTIVE_HALF_WIDTH_M = 0.08
 
-# 제자리 회전이 쓸고 지나가는 원의 반지름. Nav2 발자국의 외접반경이다
-# (`nav2_params.yaml` 의 footprint). 회전할 때는 옆에 있는 것이 곧 부딪히는 것이라
-# 직사각형이 아니라 이 원으로 판정해야 한다.
-SWEPT_RADIUS_M = 0.171
+# 회전 중심에서 로봇 앞 끝·뒤 끝까지. `nav2_params.yaml` 의 footprint 와 같아야
+# 하고 `test_safety_fields_match_the_robot.py` 가 묶는다.
+#
+# **앞뒤가 대칭이 아니다.** 바퀴 축이 앞쪽에 치우쳐 있고 바구니가 뒤에 달린다.
+# 그래서 여유를 회전 중심에서 재면 같은 숫자가 앞에서는 범퍼까지 0.26 m, 뒤에서는
+# 바구니까지 0.13 m 를 뜻하게 된다. 방향마다 몸 길이를 빼야 `stop_distance_m` 이
+# 앞뒤에서 같은 뜻이 된다.
+FOOTPRINT_FRONT_M = 0.04
+FOOTPRINT_REAR_M = 0.16
+
+# 제자리 회전이 쓸고 지나가는 원의 반지름. 발자국에서 **파생한다** — 따로 적어
+# 두면 발자국을 고쳤을 때 둘이 갈라지고, 그 갈라짐은 "회전이 막힌다" 또는
+# "회전하다 벽을 친다" 로 나타나 원인에서 멀다.
+SWEPT_RADIUS_M = math.hypot(max(FOOTPRINT_FRONT_M, FOOTPRINT_REAR_M), PROTECTIVE_HALF_WIDTH_M)
 
 # 회전인지 주행인지 가르는 문턱. 원호 주행(직진 성분이 있는 회전)은 회전으로
 # 보지 않는다 — 그때는 경로가 있고, 원으로 판정하면 이 방에서는 늘 막힌다.
@@ -60,7 +70,7 @@ def _base_frame_points(
         )
 
 
-def forward_path_distance(
+def path_clearance(
     ranges: Sequence[float],
     *,
     angle_min: float,
@@ -70,27 +80,44 @@ def forward_path_distance(
     forward_offset_rad: float = SCAN_FORWARD_OFFSET_RAD,
     origin_offset_x_m: float = SCAN_ORIGIN_OFFSET_X_M,
     half_width_m: float = PROTECTIVE_HALF_WIDTH_M,
+    reverse: bool = False,
+    front_extent_m: float = FOOTPRINT_FRONT_M,
+    rear_extent_m: float = FOOTPRINT_REAR_M,
 ) -> float | None:
-    """보호 필드(로봇 폭 직사각형) 안에서 가장 가까운 것까지의 **전방** 거리.
+    """진행 방향의 보호 필드 안에서 **로봇 몸에서부터** 가장 가까운 여유. 없으면 `None`.
 
-    없으면 `None`. `None` 과 0 m 는 다르다 — 앞의 것은 "경로가 비었다" 이고 뒤의
-    것은 "닿았다" 이다. 둘을 섞으면 센서가 빠졌을 때 로봇이 그냥 달린다.
+    필드는 진행 방향을 따라 뒤집힌다. 후진 도킹에서는 위험이 뒤에 있고, 필드가
+    앞만 보면 로봇은 뒤를 못 본 채 벽으로 들어간다. 라이다는 이미 360 도를 보고
+    있으므로 센서를 더할 필요는 없다 — 판정만 방향을 따라가면 된다.
+
+    여유를 회전 중심이 아니라 **몸 끝**에서 재는 이유는 이 로봇이 앞뒤로 대칭이
+    아니기 때문이다. 중심에서 재면 같은 `stop_distance_m` 이 앞에서는 범퍼까지
+    0.26 m, 뒤에서는 바구니까지 0.13 m 를 뜻하게 된다.
 
     부채꼴이 아니라 직사각형인 이유: 폭 0.20 m 통로의 평행한 옆벽은 반각을
     아무리 좁혀도 결국 부채꼴 안으로 들어온다. 위험한지는 각도가 아니라 **옆으로
     얼마나 비껴 있는가**로 갈린다.
+
+    `None` 과 0 m 는 다르다 — 앞의 것은 "경로가 비었다" 이고 뒤의 것은 "닿았다"
+    이다. 둘을 섞으면 센서가 빠졌을 때 로봇이 그냥 달린다.
     """
     if angle_increment == 0.0:
         return None
+    direction = -1.0 if reverse else 1.0
+    body = rear_extent_m if reverse else front_extent_m
     nearest: float | None = None
     for forward, lateral in _base_frame_points(
         ranges, angle_min, angle_increment, range_min, range_max,
         forward_offset_rad, origin_offset_x_m,
     ):
-        if forward <= 0.0 or abs(lateral) > half_width_m:
+        along = forward * direction
+        if along <= 0.0 or abs(lateral) > half_width_m:
             continue
-        if nearest is None or forward < nearest:
-            nearest = forward
+        # 이미 몸에 닿은 것은 음수가 아니라 0 이다. 음수 여유는 뜻이 없고
+        # `<= stop_distance_m` 비교를 조용히 통과할 수도 있다.
+        clearance = max(0.0, along - body)
+        if nearest is None or clearance < nearest:
+            nearest = clearance
     return nearest
 
 

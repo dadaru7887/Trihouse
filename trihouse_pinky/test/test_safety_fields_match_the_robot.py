@@ -32,6 +32,7 @@ import sys
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 
+import pytest
 import yaml
 
 PINKY = Path(__file__).resolve().parents[1]
@@ -44,12 +45,14 @@ NAV2_PARAMS = (
 sys.path.insert(0, str(PINKY / "trihouse_pinky_safety"))
 
 from trihouse_pinky_safety.geometry import (  # noqa: E402
+    FOOTPRINT_FRONT_M,
+    FOOTPRINT_REAR_M,
     PROTECTIVE_HALF_WIDTH_M,
     SCAN_FORWARD_OFFSET_RAD,
     SCAN_ORIGIN_OFFSET_X_M,
     SWEPT_RADIUS_M,
-    forward_path_distance,
     nearest_range,
+    path_clearance,
     rotating_in_place,
 )
 
@@ -140,15 +143,8 @@ def test_the_mounting_chain_stays_axis_aligned() -> None:
         link = parent[link]
 
 
-def test_the_swept_radius_matches_the_nav2_footprint() -> None:
-    """회전이 쓸고 가는 원은 Nav2 가 쓰는 발자국에서 나와야 한다.
-
-    Nav2 는 이 발자국으로 경로를 만들고 안전 gate 는 같은 몸으로 회전을 막는다.
-    둘이 갈라지면 Nav2 가 낸 회전을 gate 가 거절하거나(주행 불가), gate 가
-    통과시킨 회전에서 로봇이 벽을 친다.
-    """
-    if not NAV2_PARAMS.exists():
-        return
+def _nav2_footprint() -> tuple[float, float, float]:
+    """벤더 params 의 발자국에서 (앞, 뒤, 반폭) 을 읽는다. 뒤는 크기다."""
     document = yaml.safe_load(NAV2_PARAMS.read_text(encoding="utf-8"))
     footprints: list[str] = []
 
@@ -165,15 +161,47 @@ def test_the_swept_radius_matches_the_nav2_footprint() -> None:
 
     walk(document)
     assert footprints, "nav2 params 에 footprint 가 없다"
-    circumscribed = max(
-        math.hypot(x, y)
+    corners = [
+        tuple(float(v) for v in pair.split(","))
         for text in footprints
-        for x, y in [tuple(float(v) for v in pair.split(","))
-                     for pair in text.strip()[2:-2].split("], [")]
+        for pair in text.strip()[2:-2].split("], [")
+    ]
+    return (
+        max(x for x, _ in corners),
+        -min(x for x, _ in corners),
+        max(abs(y) for _, y in corners),
     )
-    assert abs(circumscribed - SWEPT_RADIUS_M) < 5e-3, (
-        f"Nav2 발자국의 외접반경은 {circumscribed:.4f} m 인데 "
-        f"SWEPT_RADIUS_M 는 {SWEPT_RADIUS_M:.4f} m 다"
+
+
+def test_the_safety_footprint_matches_the_nav2_footprint() -> None:
+    """안전 gate 와 Nav2 가 **같은 몸**을 봐야 한다.
+
+    둘이 갈라지면 Nav2 가 낸 회전을 gate 가 거절하거나(주행 불가), gate 가
+    통과시킨 회전에서 로봇이 벽을 친다. 앞뒤를 따로 묶는 이유는 이 로봇이
+    앞뒤로 대칭이 아니기 때문이다 — 바퀴 축이 앞쪽에 치우쳐 있고 바구니가 뒤에
+    달린다. 후진 여유를 앞 기준으로 재면 실제보다 13 cm 넉넉하게 나온다.
+    """
+    if not NAV2_PARAMS.exists():
+        return
+    front, rear, half_width = _nav2_footprint()
+    assert abs(front - FOOTPRINT_FRONT_M) < 5e-3, (
+        f"Nav2 발자국의 앞 끝은 {front:.4f} m 인데 "
+        f"FOOTPRINT_FRONT_M 는 {FOOTPRINT_FRONT_M:.4f} m 다"
+    )
+    assert abs(rear - FOOTPRINT_REAR_M) < 5e-3, (
+        f"Nav2 발자국의 뒤 끝은 {rear:.4f} m 인데 "
+        f"FOOTPRINT_REAR_M 는 {FOOTPRINT_REAR_M:.4f} m 다"
+    )
+    assert PROTECTIVE_HALF_WIDTH_M >= half_width, (
+        f"보호 필드 반폭 {PROTECTIVE_HALF_WIDTH_M} m 가 발자국 반폭 "
+        f"{half_width} m 보다 좁다 — 몸이 지나가는 자리를 안 본다"
+    )
+
+
+def test_the_swept_radius_is_derived_not_maintained_by_hand() -> None:
+    """회전 원은 발자국에서 나온다. 따로 적어 두면 둘이 갈라진다."""
+    assert SWEPT_RADIUS_M == pytest.approx(
+        math.hypot(max(FOOTPRINT_FRONT_M, FOOTPRINT_REAR_M), PROTECTIVE_HALF_WIDTH_M)
     )
 
 
@@ -202,13 +230,48 @@ def _scan(bearings: dict[float, float], beams: int = 720) -> dict:
     }
 
 
-def test_an_obstacle_behind_the_robot_is_not_on_the_path() -> None:
-    """뒤쪽 벽이 STOP 을 걸면 로봇은 영원히 못 움직인다."""
-    assert forward_path_distance(**_scan({180.0: 0.10})) is None
+def test_an_obstacle_behind_the_robot_is_not_on_the_forward_path() -> None:
+    """뒤쪽 벽이 전진을 막으면 로봇은 영원히 못 움직인다."""
+    assert path_clearance(**_scan({180.0: 0.30})) is None
 
 
-def test_an_obstacle_straight_ahead_is_on_the_path() -> None:
-    assert abs(forward_path_distance(**_scan({0.0: 0.25})) - 0.25) < 1e-3
+def test_an_obstacle_ahead_is_not_on_the_reverse_path() -> None:
+    """후진할 때 앞쪽 벽은 멀어지는 방향이다."""
+    assert path_clearance(**_scan({0.0: 0.30}), reverse=True) is None
+
+
+def test_the_field_flips_with_the_direction_of_travel() -> None:
+    """같은 장애물이 전진에는 위험하고 후진에는 아니다. 그 반대도 같다.
+
+    후진 도킹을 넣으면 위험은 뒤에 있다. 필드가 앞만 보면 로봇은 뒤를 못 보고
+    벽으로 들어간다 — 라이다는 이미 360 도를 보고 있고 판정만 앞을 보고 있었다.
+    """
+    ahead = _scan({0.0: 0.30})
+    behind = _scan({180.0: 0.30})
+    assert path_clearance(**ahead) is not None
+    assert path_clearance(**ahead, reverse=True) is None
+    assert path_clearance(**behind) is None
+    assert path_clearance(**behind, reverse=True) is not None
+
+
+def test_clearance_is_measured_from_the_robot_edge_not_its_centre() -> None:
+    """`stop_distance_m` 이 앞뒤에서 같은 뜻이어야 한다.
+
+    회전 중심에서 재면 앞은 범퍼에서 0.26 m, 뒤는 바구니에서 0.13 m 가 되어
+    같은 숫자가 방향마다 다른 안전 여유를 뜻하게 된다. 로봇이 뒤로 훨씬
+    길기 때문이다.
+    """
+    ahead = path_clearance(**_scan({0.0: 0.30}))
+    behind = path_clearance(**_scan({180.0: 0.30}), reverse=True)
+    assert abs(ahead - (0.30 - FOOTPRINT_FRONT_M)) < 1e-3
+    assert abs(behind - (0.30 - FOOTPRINT_REAR_M)) < 1e-3
+    assert behind < ahead, "로봇이 뒤로 더 길므로 같은 벽이 뒤에서 더 가깝다"
+
+
+def test_something_already_touching_the_robot_reads_zero_not_negative() -> None:
+    """음수 여유는 뜻이 없고, 비교 연산에서 조용히 통과할 수 있다."""
+    touching = path_clearance(**_scan({180.0: 0.10}), reverse=True)
+    assert touching == 0.0
 
 
 def test_a_wall_alongside_a_narrow_corridor_is_not_on_the_path() -> None:
@@ -219,45 +282,44 @@ def test_a_wall_alongside_a_narrow_corridor_is_not_on_the_path() -> None:
     """
     lateral, forward = 0.10, 0.25
     bearing = math.degrees(math.atan2(lateral, forward))
-    assert forward_path_distance(**_scan({bearing: math.hypot(lateral, forward)})) is None
-    assert forward_path_distance(**_scan({-bearing: math.hypot(lateral, forward)})) is None
+    assert path_clearance(**_scan({bearing: math.hypot(lateral, forward)})) is None
+    assert path_clearance(**_scan({-bearing: math.hypot(lateral, forward)})) is None
+
+
+def test_the_reverse_corridor_is_the_same_width() -> None:
+    """후진해서 도크에 들어갈 때도 옆벽은 스치는 것이지 부딪히는 것이 아니다."""
+    lateral, behind = 0.10, 0.25
+    bearing = 180.0 - math.degrees(math.atan2(lateral, behind))
+    assert path_clearance(**_scan({bearing: math.hypot(lateral, behind)}), reverse=True) is None
 
 
 def test_something_inside_the_robot_width_is_on_the_path() -> None:
     """반폭 안쪽으로 들어오면 정면이 아니어도 부딪힌다."""
     lateral, forward = PROTECTIVE_HALF_WIDTH_M - 0.01, 0.20
     bearing = math.degrees(math.atan2(lateral, forward))
-    distance = forward_path_distance(**_scan({bearing: math.hypot(lateral, forward)}))
-    assert distance is not None and abs(distance - forward) < 1e-3
-
-
-def test_the_path_distance_is_measured_forward_not_along_the_beam() -> None:
-    """비스듬한 빔의 길이가 아니라 전방 성분이 남은 거리다."""
-    lateral, forward = 0.05, 0.20
-    bearing = math.degrees(math.atan2(lateral, forward))
-    beam = math.hypot(lateral, forward)
-    distance = forward_path_distance(**_scan({bearing: beam}))
-    assert abs(distance - forward) < 1e-3 and forward < beam
+    distance = path_clearance(**_scan({bearing: math.hypot(lateral, forward)}))
+    assert distance is not None and abs(distance - (forward - FOOTPRINT_FRONT_M)) < 1e-3
 
 
 def test_the_scan_origin_offset_brings_obstacles_closer() -> None:
     """라이다가 뒤에 있으므로 회전 중심에서 잰 거리는 더 짧다."""
     plain = _scan({0.0: 0.30})
     plain["origin_offset_x_m"] = SCAN_ORIGIN_OFFSET_X_M
-    assert abs(forward_path_distance(**plain) - (0.30 + SCAN_ORIGIN_OFFSET_X_M)) < 1e-3
+    expected = 0.30 + SCAN_ORIGIN_OFFSET_X_M - FOOTPRINT_FRONT_M
+    assert abs(path_clearance(**plain) - expected) < 1e-3
 
 
 def test_readings_outside_the_sensor_range_are_discarded() -> None:
     """`inf` 나 0 은 측정이 아니다. 그것을 최솟값으로 쓰면 없는 벽이 생긴다."""
-    assert abs(forward_path_distance(**_scan({0.0: float("inf"), 1.0: 0.40})) - 0.40) < 5e-3
-    assert abs(forward_path_distance(**_scan({0.0: 0.0, 1.0: 0.40})) - 0.40) < 5e-3
+    assert path_clearance(**_scan({0.0: float("inf"), 1.0: 0.40})) is not None
+    assert path_clearance(**_scan({0.0: 0.0, 1.0: 0.40})) is not None
 
 
 def test_an_empty_path_gives_none() -> None:
     """측정이 없는 것과 0 m 는 다르다. gate 는 그 둘을 구분해야 한다."""
     empty = _scan({})
     empty["ranges"] = [float("inf")] * len(empty["ranges"])
-    assert forward_path_distance(**empty) is None
+    assert path_clearance(**empty) is None
 
 
 # ------------------------------------------------------- 경고 필드와 회전
@@ -369,3 +431,33 @@ def test_a_stopped_robot_does_not_accept_work() -> None:
     """STOP·EMERGENCY 는 실제 차단이다."""
     assert not safety_allows_work(SafetyStateMsg.STATE_STOP)
     assert not safety_allows_work(SafetyStateMsg.STATE_EMERGENCY)
+
+
+# ------------------------------------------------- 후진 시 센서 근거
+
+import inspect  # noqa: E402
+
+from trihouse_pinky_safety.safety_supervisor_node import SafetySupervisor  # noqa: E402
+
+PATH_DISTANCE = inspect.getsource(SafetySupervisor._path_distance)
+ON_SCAN = inspect.getsource(SafetySupervisor._on_scan)
+
+
+def test_the_ultrasonic_is_not_used_as_evidence_when_reversing() -> None:
+    """초음파는 정면(`ultrasonic_link`)만 본다. 후진 근거가 되지 못한다.
+
+    섞으면 뒤가 막혔는데 초음파의 "정면 3 m" 가 최솟값 경쟁에서 이겨 gate 를
+    통과해 버린다. 시뮬의 `sim_hardware` 는 실제로 3.0 m 상수를 낸다.
+    """
+    assert "if not reversing and self.front_range" in PATH_DISTANCE
+
+
+def test_the_direction_comes_from_the_command_not_the_scan() -> None:
+    """스캔이 올 때는 어느 쪽으로 갈지 모른다. 명령이 정한다."""
+    assert "commanded_linear_x < 0.0" in PATH_DISTANCE
+    assert "reverse=False" in ON_SCAN and "reverse=True" in ON_SCAN
+
+
+def test_both_directions_are_measured_from_one_scan() -> None:
+    """스캔 한 번에 두 방향을 다 재 둔다. 명령마다 다시 훑지 않는다."""
+    assert "self.forward_clearance" in ON_SCAN and "self.reverse_clearance" in ON_SCAN

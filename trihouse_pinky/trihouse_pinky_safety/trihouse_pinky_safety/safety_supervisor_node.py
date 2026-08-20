@@ -19,12 +19,14 @@ from trihouse_interfaces.msg import ConnectionState, IndicatorState, KeepOutZone
 from trihouse_interfaces.srv import ClearEmergency
 
 from .geometry import (
+    FOOTPRINT_FRONT_M,
+    FOOTPRINT_REAR_M,
     PROTECTIVE_HALF_WIDTH_M,
     SCAN_FORWARD_OFFSET_RAD,
     SCAN_ORIGIN_OFFSET_X_M,
     SWEPT_RADIUS_M,
-    forward_path_distance,
     nearest_range,
+    path_clearance,
     point_in_polygon,
     rotating_in_place,
 )
@@ -63,11 +65,15 @@ class SafetySupervisor(Node):
         self.declare_parameter('scan_forward_offset_rad', SCAN_FORWARD_OFFSET_RAD)
         self.declare_parameter('scan_origin_offset_x_m', SCAN_ORIGIN_OFFSET_X_M)
         self.declare_parameter('protective_half_width_m', PROTECTIVE_HALF_WIDTH_M)
+        self.declare_parameter('footprint_front_m', FOOTPRINT_FRONT_M)
+        self.declare_parameter('footprint_rear_m', FOOTPRINT_REAR_M)
         # 회전이 쓸고 가는 원. 발자국 외접반경에 여유를 더한 값이다.
         self.declare_parameter('swept_clearance_m', SWEPT_RADIUS_M + 0.02)
         self.scan_forward_offset_rad = float(self.get_parameter('scan_forward_offset_rad').value)
         self.scan_origin_offset_x_m = float(self.get_parameter('scan_origin_offset_x_m').value)
         self.protective_half_width_m = float(self.get_parameter('protective_half_width_m').value)
+        self.footprint_front_m = float(self.get_parameter('footprint_front_m').value)
+        self.footprint_rear_m = float(self.get_parameter('footprint_rear_m').value)
         self.swept_clearance_m = float(self.get_parameter('swept_clearance_m').value)
         self.robot_id = self.get_parameter('robot_id').value
         self.sensor_timeout_s = float(self.get_parameter('sensor_timeout_s').value)
@@ -76,7 +82,8 @@ class SafetySupervisor(Node):
         self.nav = MotionCommand(0.0, 0.0)
         self.dock: MotionCommand | None = None
         self.front_range: float | None = None
-        self.scan_range: float | None = None
+        self.forward_clearance: float | None = None
+        self.reverse_clearance: float | None = None
         self.nearby_range: float | None = None
         self.person_detected = False
         self.person_distance = None
@@ -125,8 +132,17 @@ class SafetySupervisor(Node):
             forward_offset_rad=self.scan_forward_offset_rad,
             origin_offset_x_m=self.scan_origin_offset_x_m,
         )
-        self.scan_range = forward_path_distance(
-            message.ranges, half_width_m=self.protective_half_width_m, **shape
+        # 진행 방향은 스캔이 올 때가 아니라 명령을 낼 때 정해진다. 여기서는
+        # 두 방향을 다 재 두고 `_publish` 가 그때의 명령으로 고른다.
+        self.forward_clearance = path_clearance(
+            message.ranges, half_width_m=self.protective_half_width_m,
+            reverse=False, front_extent_m=self.footprint_front_m,
+            rear_extent_m=self.footprint_rear_m, **shape
+        )
+        self.reverse_clearance = path_clearance(
+            message.ranges, half_width_m=self.protective_half_width_m,
+            reverse=True, front_extent_m=self.footprint_front_m,
+            rear_extent_m=self.footprint_rear_m, **shape
         )
         self.nearby_range = nearest_range(message.ranges, **shape)
         self.last_scan_at = monotonic(); self.last_sensor_at = self.last_scan_at
@@ -176,7 +192,7 @@ class SafetySupervisor(Node):
             and nearby <= self.swept_clearance_m
         )
         inputs = SafetyInputs(sensor_fresh=scan_fresh and (range_fresh or not self.require_ultrasonic),
-                              front_distance_m=self._front_distance(),
+                              front_distance_m=self._path_distance(desired.linear_x),
                               swept_blocked=swept_blocked,
                               person_detected=person_detected,
                               person_distance_m=self.person_distance if person_detected else None,
@@ -193,10 +209,22 @@ class SafetySupervisor(Node):
         indicator.source = 'safety_supervisor'; indicator.detail = decision.reason
         self.indicator_pub.publish(indicator)
 
-    def _front_distance(self) -> float | None:
+    def _path_distance(self, commanded_linear_x: float) -> float | None:
+        """진행 방향의 여유. 후진이면 뒤쪽 필드를 본다.
+
+        초음파는 정면(`ultrasonic_link`)만 보므로 후진에는 근거가 되지 못한다.
+        후진 여유는 라이다만으로 재고, 그 사실을 여기서 명시적으로 가른다 —
+        섞으면 뒤가 막혔는데 초음파의 "정면 3 m" 가 이겨 통과해 버린다.
+        """
         now = monotonic()
-        values = [value for value, timestamp in ((self.front_range, self.last_range_at), (self.scan_range, self.last_scan_at)) if value is not None and now - timestamp <= self.sensor_timeout_s]
-        return min(values) if values else None
+        reversing = commanded_linear_x < 0.0
+        scan = self.reverse_clearance if reversing else self.forward_clearance
+        candidates = []
+        if scan is not None and now - self.last_scan_at <= self.sensor_timeout_s:
+            candidates.append(scan)
+        if not reversing and self.front_range is not None and now - self.last_range_at <= self.sensor_timeout_s:
+            candidates.append(self.front_range)
+        return min(candidates) if candidates else None
 
     def _in_keep_out_zone(self) -> bool:
         if self.position is None:
