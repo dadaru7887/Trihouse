@@ -119,6 +119,68 @@ def test_cancelling_releases_every_resource_the_job_was_holding(seeded_schema) -
     ) == 1
 
 
+def test_mixed_zone_assignment_reserves_and_cancels_both_omx_devices(
+    seeded_schema,
+) -> None:
+    """EN: MySQL must reserve one Pinky and every required OMX atomically.
+
+    KO: MySQL은 Pinky 한 대와 필요한 모든 OMX를 원자적으로 예약해야 한다.
+    """
+    install_active_map()
+    repository = _repository()
+    job_id = repository.create_job(
+        {
+            "job_code": "CANCEL-MIXED-ZONE",
+            "operation_type": "outbound",
+            "priority": "normal",
+            "context": {"source": "public_product_order"},
+            "steps": [
+                {
+                    "step_no": 10,
+                    "action_type": "prepare",
+                    "executor_type": "arm",
+                    "input": {"dependencies": [], "omx_id": "OMX_01"},
+                },
+                {
+                    "step_no": 20,
+                    "action_type": "prepare",
+                    "executor_type": "arm",
+                    "input": {"dependencies": [10], "omx_id": "OMX_02"},
+                },
+            ],
+        }
+    )["job_id"]
+
+    repository.assign_job_resources(
+        job_id,
+        {**ASSIGNMENT, "omx_ids": ["OMX_01", "OMX_02"]},
+    )
+
+    held_devices = {
+        row["device_id"]
+        for row in rows(
+            "SELECT device_id FROM reservations "
+            "WHERE job_id=%s AND state IN ('reserved','in_use') "
+            "AND device_id IS NOT NULL",
+            (job_id,),
+        )
+    }
+    assert held_devices == {"PK_01", "OMX_01", "OMX_02"}
+
+    result = repository.cancel_job(
+        job_id,
+        {"reason": "mixed-zone test cleanup", "requested_by": "W-OP-01"},
+        "cancel-mixed-zone",
+    )
+
+    assert result["released_device_ids"] == ["OMX_01", "OMX_02", "PK_01"]
+    assert scalar(
+        "SELECT COUNT(*) FROM reservations "
+        "WHERE job_id=%s AND state IN ('reserved','in_use')",
+        (job_id,),
+    ) == 0
+
+
 def test_cancelling_releases_the_ordered_inventory_reservation(seeded_schema) -> None:
     """취소된 출고 주문은 lot 수량은 보존하고 예약만 되돌린다."""
     job_id = _assigned_job("inventory-release", product_code="SKU-DUMPLING")

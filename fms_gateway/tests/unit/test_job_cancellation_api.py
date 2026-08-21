@@ -77,6 +77,47 @@ def test_cancelling_returns_the_resources_it_handed_back():
     assert client.get(f"/api/v1/jobs/{job_id}").json()["state"] == "cancelled"
 
 
+def test_cancelling_a_mixed_zone_job_releases_both_arms_and_one_pinky():
+    """EN: Cancelling a shared Job must release every later-zone OMX.
+
+    KO: 공통 Job을 취소하면 뒤 구역의 OMX도 모두 해제해야 한다.
+    """
+    repository = InMemoryFmsRepository()
+    client = TestClient(create_app(repository))
+    job = _job()
+    job["steps"] = [
+        {
+            "step_no": 10,
+            "action_type": "prepare",
+            "executor_type": "arm",
+            "target_location_id": 11,
+            "input": {"dependencies": [], "omx_id": "OMX_01"},
+        },
+        {
+            "step_no": 20,
+            "action_type": "prepare",
+            "executor_type": "arm",
+            "target_location_id": 12,
+            "input": {"dependencies": [10], "omx_id": "OMX_02"},
+        },
+    ]
+    job_id = client.post("/internal/v1/jobs", json=job).json()["job_id"]
+    assigned = client.post(
+        f"/internal/v1/jobs/{job_id}/assignment",
+        json={**ASSIGNMENT, "omx_ids": ["OMX_01", "OMX_02"]},
+    )
+    assert assigned.status_code == 200, assigned.text
+
+    response = client.post(
+        f"/internal/v1/jobs/{job_id}/cancel",
+        headers={"Idempotency-Key": "cancel-api-mixed"},
+        json=CANCEL,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["released_device_ids"] == ["OMX_01", "OMX_02", "PK_01"]
+
+
 def test_the_idempotency_key_is_required():
     client, job_id = _client_with_assigned_job()
 

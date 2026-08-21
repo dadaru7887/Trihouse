@@ -278,6 +278,28 @@ class ResourceUnavailable(Exception):
     pass
 
 
+def _required_assignment_omx_ids(
+    assignment: dict[str, Any], step_omx_ids: list[str]
+) -> tuple[str, ...]:
+    """EN: Return visit-ordered workcells and reject an incomplete declaration.
+
+    KO: 방문 순서 작업셀을 반환하고 누락된 배정 선언은 거부한다.
+    """
+    required = tuple(dict.fromkeys(step_omx_ids)) or (str(assignment["omx_id"]),)
+    declared = assignment.get("omx_ids")
+    # EN: Direct repository callers from the legacy contract may omit omx_ids;
+    # HTTP callers always send the normalized field. Explicit data must exactly
+    # match the arm steps so the assignment ledger cannot overstate reservations.
+    # KO: 예전 저장소 직접 호출은 omx_ids를 생략할 수 있지만 HTTP 요청에는 정규화된
+    # 필드가 항상 들어온다. 명시한 목록은 arm step과 정확히 같아야 예약 원장이 거짓이 아니다.
+    if (
+        str(assignment["omx_id"]) != required[0]
+        or (declared is not None and tuple(declared) != required)
+    ):
+        raise ResourceAssignmentConflict("OMX_ASSIGNMENT_MISMATCH")
+    return required
+
+
 class JobStepNotFound(Exception):
     pass
 
@@ -3648,17 +3670,18 @@ class MySqlFmsRepository:
                 # 한다.
                 cursor.execute(
                     """
-                    SELECT DISTINCT JSON_UNQUOTE(JSON_EXTRACT(input, '$.omx_id')) AS omx_id
+                    SELECT JSON_UNQUOTE(JSON_EXTRACT(input, '$.omx_id')) AS omx_id
                     FROM job_steps
                     WHERE job_id = %s
                       AND executor_type = 'arm'
                       AND JSON_UNQUOTE(JSON_EXTRACT(input, '$.omx_id')) IS NOT NULL
+                    ORDER BY step_no
                     """,
                     (job_id,),
                 )
-                omx_ids = sorted(
-                    {assignment["omx_id"]}
-                    | {row["omx_id"] for row in cursor.fetchall() if row["omx_id"]}
+                omx_ids = _required_assignment_omx_ids(
+                    assignment,
+                    [str(row["omx_id"]) for row in cursor.fetchall() if row["omx_id"]],
                 )
                 device_ids = sorted((assignment["mobile_id"], *omx_ids))
                 device_placeholders = ", ".join(["%s"] * len(device_ids))
@@ -7208,14 +7231,20 @@ class InMemoryFmsRepository:
             elif int(assignment["revision"]) != 1:
                 raise ResourceAssignmentConflict("INITIAL_ASSIGNMENT_REVISION_MUST_BE_ONE")
 
-            zone_omx_ids = {
-                str((step.get("input") or {}).get("omx_id"))
-                for step in self._steps.values()
-                if step["job_id"] == job_id
-                and step["executor_type"] == "arm"
-                and (step.get("input") or {}).get("omx_id")
-            }
-            omx_ids = tuple(sorted({assignment["omx_id"], *zone_omx_ids}))
+            arm_steps = sorted(
+                (
+                    step
+                    for step in self._steps.values()
+                    if step["job_id"] == job_id
+                    and step["executor_type"] == "arm"
+                    and (step.get("input") or {}).get("omx_id")
+                ),
+                key=lambda step: int(step["step_no"]),
+            )
+            omx_ids = _required_assignment_omx_ids(
+                assignment,
+                [str(step["input"]["omx_id"]) for step in arm_steps],
+            )
             resources = (
                 assignment["mobile_id"],
                 *omx_ids,
@@ -7307,10 +7336,12 @@ class InMemoryFmsRepository:
                     )
                 )
                 assignment = (job.get("context") or {}).get("assignment") or {}
-                is_device = resource in {
+                assigned_devices = {
                     assignment.get("mobile_id"),
                     assignment.get("omx_id"),
+                    *(assignment.get("omx_ids") or ()),
                 }
+                is_device = resource in assigned_devices
                 device_id = resource if is_device else None
                 self._reserved_assignment_resources.pop(resource)
                 self._reservation_ids.pop(resource, None)
@@ -7510,7 +7541,17 @@ class InMemoryFmsRepository:
             # Dock 은 코드로 예약되고 로봇·팔은 device_id 로 예약된다. 돌려주는
             # 자원 중 장비만 device 로 보고한다.
             assignment = (job.get("context") or {}).get("assignment") or {}
-            devices = {assignment.get("mobile_id"), assignment.get("omx_id")}
+            devices = {
+                assignment.get("mobile_id"),
+                assignment.get("omx_id"),
+                *(assignment.get("omx_ids") or ()),
+                *(
+                    step.get("assigned_device_id")
+                    for step in self._steps.values()
+                    if step["job_id"] == job_id
+                    and step["executor_type"] in {"mobile", "arm"}
+                ),
+            }
             released_device_ids = sorted(
                 resource for resource in held if resource in devices
             )

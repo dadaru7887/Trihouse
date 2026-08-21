@@ -239,8 +239,21 @@ class JobAssignmentRequest(BaseModel):
     revision: int = Field(ge=1)
     mobile_id: str = Field(min_length=1, max_length=64)
     omx_id: str = Field(min_length=1, max_length=64)
+    omx_ids: list[str] = Field(default_factory=list, max_length=16)
     packing_dock_code: str = Field(min_length=1, max_length=96)
     charger_code: str = Field(min_length=1, max_length=96)
+
+    @model_validator(mode="after")
+    def normalize_workcell_ids(self) -> "JobAssignmentRequest":
+        if not self.omx_ids:
+            self.omx_ids = [self.omx_id]
+        if (
+            any(not value or len(value) > 64 for value in self.omx_ids)
+            or len(self.omx_ids) != len(set(self.omx_ids))
+            or self.omx_id not in self.omx_ids
+        ):
+            raise ValueError("omx_ids must be unique and include omx_id")
+        return self
 
 
 class JobAssignmentView(JobAssignmentRequest):

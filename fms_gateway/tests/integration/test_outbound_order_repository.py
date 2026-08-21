@@ -140,6 +140,16 @@ def install_active_map() -> None:
                         %s, %s, %s,
                         JSON_OBJECT('authoring_managed', true, 'active', true,
                                     'map_revision', 'trihouse_test_01:test'))
+                ON DUPLICATE KEY UPDATE
+                  parent_location_id = VALUES(parent_location_id),
+                  name = VALUES(name),
+                  location_type = VALUES(location_type),
+                  temperature_zone = VALUES(temperature_zone),
+                  map_name = VALUES(map_name),
+                  rmf_waypoint_name = VALUES(rmf_waypoint_name),
+                  pose_x = VALUES(pose_x), pose_y = VALUES(pose_y),
+                  pose_yaw = VALUES(pose_yaw), metadata = VALUES(metadata),
+                  state = 'available'
                 """,
                 (
                     parent_id,

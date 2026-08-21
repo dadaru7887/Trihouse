@@ -193,6 +193,13 @@ class JobAssignmentRequest:
     omx_id: str
     packing_dock_code: str
     charger_code: str
+    omx_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        normalized = self.omx_ids or (self.omx_id,)
+        if len(normalized) != len(set(normalized)) or self.omx_id not in normalized:
+            raise ValueError("omx_ids must be unique and include omx_id")
+        object.__setattr__(self, "omx_ids", tuple(normalized))
 
 
 @dataclass(frozen=True)
@@ -203,10 +210,19 @@ class JobAssignmentResponse:
     omx_id: str
     packing_dock_code: str
     charger_code: str
+    omx_ids: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "JobAssignmentResponse":
-        return cls(**{name: value[name] for name in cls.__dataclass_fields__})
+        return cls(
+            job_id=int(value["job_id"]),
+            revision=int(value["revision"]),
+            mobile_id=str(value["mobile_id"]),
+            omx_id=str(value["omx_id"]),
+            packing_dock_code=str(value["packing_dock_code"]),
+            charger_code=str(value["charger_code"]),
+            omx_ids=tuple(value.get("omx_ids") or (value["omx_id"],)),
+        )
 
 
 @dataclass(frozen=True)

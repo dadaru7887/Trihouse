@@ -75,5 +75,17 @@ Simulation 구현은 `tests/simulation/omx`에만 둔다. Hardware와 같은
 
 명령의 `omx_id`가 로컬 `DEVICE_ID`와 다르면 모션 전에 거부한다. 정책/카메라/serial
 준비 실패, stale assignment, 알 수 없는 상품, zone mismatch는 fail-closed한다.
+
+## 혼합 온도 주문 배정
+
+한 Job에는 Pinky 한 대만 배정한다. `assignment.mobile_id`는 모든 창고 이동과
+포장대·충전소 복귀에서 바뀌지 않는다. 필요한 OMX 작업셀은 방문 순서대로
+`assignment.omx_ids`에 기록하고, 첫 작업셀은 기존 소비자 호환을 위해
+`assignment.omx_id`에도 기록한다.
+
+구역은 `ambient → chilled → frozen` 순서이며 주문에 없는 구역은 건너뛴다. 각
+arm step의 `input.omx_id`와 `assigned_device_id`가 실제 명령 대상을 결정한다.
+Pinky 한 대, 필요한 OMX 전체, 포장대와 충전소는 첫 이동 전에 한 트랜잭션으로
+예약한다. 하나라도 사용할 수 없으면 부분 출발하지 않고 Job을 queued로 유지한다.
 검증 순서는 no-motion Action, OMX_01 단일 품목, OMX_02 냉동 단일 품목, 수량 반복,
 두 팔 동시 명령, 전체 주문 흐름이다.

@@ -322,21 +322,25 @@ class JobRunner:
         reserved: "_Reserved",
     ) -> JobAssignmentRequest | None:
         mobile = _first_free(devices, "mobile", reserved.mobiles)
-        required_arms = {
-            str(step.input["omx_id"])
-            for step in detail.steps
-            if step.executor_type == "arm" and step.input.get("omx_id")
-        }
-        # The current assignment schema reserves one arm per Job. A multi-workcell
-        # order must not silently reserve the wrong one until that schema expands.
-        if len(required_arms) > 1:
-            return None
-        arm = (
-            _specific_free(devices, next(iter(required_arms)), "arm", reserved.arms)
-            if required_arms
-            else _first_free(devices, "arm", reserved.arms)
+        # EN: Preserve step order while removing duplicates. This makes the
+        # first visited workcell the backward-compatible primary ``omx_id``.
+        # KO: step 순서를 유지하며 중복을 제거한다. 첫 방문 작업셀은 기존 단일
+        # ``omx_id`` 필드와 호환되는 대표값으로 사용한다.
+        required_arms = tuple(
+            dict.fromkeys(
+                str(step.input["omx_id"])
+                for step in sorted(detail.steps, key=lambda candidate: candidate.step_no)
+                if step.executor_type == "arm" and step.input.get("omx_id")
+            )
         )
-        if mobile is None or arm is None:
+        if not required_arms:
+            first_arm = _first_free(devices, "arm", reserved.arms)
+            required_arms = (first_arm,) if first_arm is not None else ()
+        all_arms_free = required_arms and all(
+            _specific_free(devices, arm_id, "arm", reserved.arms) is not None
+            for arm_id in required_arms
+        )
+        if mobile is None or not all_arms_free:
             return None
         charger = CHARGER_BY_MOBILE.get(mobile)
         if charger is None:
@@ -353,9 +357,10 @@ class JobRunner:
         return JobAssignmentRequest(
             revision=1,
             mobile_id=mobile,
-            omx_id=arm,
+            omx_id=required_arms[0],
             packing_dock_code=dock,
             charger_code=charger,
+            omx_ids=required_arms,
         )
 
     def _dock_candidates(self) -> tuple[PackingDockCandidate, ...]:
@@ -386,7 +391,7 @@ class _Reserved:
 
     def reserve(self, request: JobAssignmentRequest) -> None:
         self.mobiles.add(request.mobile_id)
-        self.arms.add(request.omx_id)
+        self.arms.update(request.omx_ids or (request.omx_id,))
         self.docks.add(request.packing_dock_code)
 
 
@@ -398,12 +403,20 @@ def _reserved_resources(details: list[JobDetailResponse]) -> _Reserved:
             continue
         for key, target in (
             ("mobile_id", reserved.mobiles),
-            ("omx_id", reserved.arms),
             ("packing_dock_code", reserved.docks),
         ):
             value = assignment.get(key)
             if isinstance(value, str) and value:
                 target.add(value)
+        omx_ids = assignment.get("omx_ids")
+        if isinstance(omx_ids, list):
+            reserved.arms.update(
+                value for value in omx_ids if isinstance(value, str) and value
+            )
+        else:
+            value = assignment.get("omx_id")
+            if isinstance(value, str) and value:
+                reserved.arms.add(value)
     return reserved
 
 

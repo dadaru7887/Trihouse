@@ -7,6 +7,11 @@ import pytest
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = REPOSITORY_ROOT / "db" / "migrations" / "001_physical_v1_baseline.sql"
+MIGRATION_PATHS = tuple(
+    path
+    for path in sorted((REPOSITORY_ROOT / "db" / "migrations").glob("[0-9][0-9][0-9]_*.sql"))
+    if path.name != "001_physical_v1_baseline.sql"
+)
 SEED_PATH = REPOSITORY_ROOT / "db" / "seeds" / "seed_dev.sql"
 QR_PAYLOAD_PATH = REPOSITORY_ROOT / "docs" / "database" / "item_qr_payloads.json"
 
@@ -123,6 +128,11 @@ def fresh_schema():
         cursor.execute("DROP DATABASE IF EXISTS trihouse_fms")
         cursor.close()
         execute_sql_script(connection, SCHEMA_PATH)
+        for migration_path in MIGRATION_PATHS:
+            cursor = connection.cursor()
+            cursor.execute("USE trihouse_fms")
+            cursor.close()
+            execute_sql_script(connection, migration_path)
         connection.commit()
     finally:
         connection.close()

@@ -59,11 +59,19 @@ def _order_job(job_id: int, *, state="queued", assignment=None, steps=None):
     )
 
 
-def _assignment(mobile: str, omx: str, dock: str, charger: str) -> dict:
+def _assignment(
+    mobile: str,
+    omx: str,
+    dock: str,
+    charger: str,
+    *,
+    omx_ids: tuple[str, ...] | None = None,
+) -> dict:
     return {
         "revision": 1,
         "mobile_id": mobile,
         "omx_id": omx,
+        "omx_ids": list(omx_ids or (omx,)),
         "packing_dock_code": dock,
         "charger_code": charger,
     }
@@ -107,6 +115,7 @@ class FakeGateway:
                     request.omx_id,
                     request.packing_dock_code,
                     request.charger_code,
+                    omx_ids=request.omx_ids,
                 ),
             },
             steps=detail.steps,
@@ -181,6 +190,39 @@ def test_order_uses_the_arm_pinned_by_database_capability_planning() -> None:
     assert gateway.assignments[0][1].omx_id == "OMX_02"
 
 
+def test_mixed_zone_order_reserves_both_arms_for_one_pinky() -> None:
+    """EN: Reserving only one arm would let another Job take a later workcell.
+
+    KO: 팔 하나만 예약하면 다른 Job이 뒤에 방문할 작업셀을 선점할 수 있다.
+    """
+    mixed_steps = (
+        JobStepDetail(100, 10, "prepare", "arm", "pending", input={"dependencies": [], "omx_id": "OMX_01"}),
+        JobStepDetail(101, 20, "navigate", "mobile", "pending", input={"dependencies": []}),
+        JobStepDetail(102, 30, "load", "fms", "pending", input={"dependencies": [10, 20]}),
+        JobStepDetail(103, 40, "prepare", "arm", "pending", input={"dependencies": [30], "omx_id": "OMX_02"}),
+        JobStepDetail(104, 50, "navigate", "mobile", "pending", input={"dependencies": [30]}),
+        JobStepDetail(105, 60, "load", "fms", "pending", input={"dependencies": [40, 50]}),
+    )
+    next_ambient_order = (
+        JobStepDetail(200, 10, "prepare", "arm", "pending", input={"dependencies": [], "omx_id": "OMX_01"}),
+    )
+    gateway = FakeGateway(
+        [
+            _order_job(1, steps=mixed_steps),
+            _order_job(2, steps=next_ambient_order),
+        ]
+    )
+
+    report = JobRunner(gateway).run_once()
+
+    assert report.assigned == (1,)
+    request = gateway.assignments[0][1]
+    assert request.mobile_id == "PK_01"
+    assert request.omx_ids == ("OMX_01", "OMX_02")
+    assert [step_id for step_id, _ in gateway.dispatches] == [100, 101]
+    assert any("job 2" in reason for reason in report.blocked)
+
+
 def test_a_third_order_waits_because_no_robot_is_free() -> None:
     """Exhausted resources must block, not raise and not steal a busy robot."""
     gateway = FakeGateway([_order_job(1), _order_job(2), _order_job(3)])
@@ -210,6 +252,34 @@ def test_resources_held_by_an_existing_job_are_not_reassigned() -> None:
     assert request.mobile_id == "PK_02"
     assert request.omx_id == "OMX_02"
     assert request.packing_dock_code == "PACKING-01-DOCK-02"
+
+
+def test_restart_reconstructs_every_arm_reserved_by_a_mixed_zone_job() -> None:
+    """EN: Reading only legacy omx_id after restart would double-book OMX_02.
+
+    KO: 재시작 후 기존 omx_id만 읽으면 OMX_02가 이중 배정된다.
+    """
+    running = _order_job(
+        1,
+        state="running",
+        assignment=_assignment(
+            "PK_01",
+            "OMX_01",
+            "PACKING-01-DOCK-01",
+            "TRIHOUSE-TEST-01-CHG-01",
+            omx_ids=("OMX_01", "OMX_02"),
+        ),
+        steps=_steps("succeeded", "running"),
+    )
+    frozen_steps = (
+        JobStepDetail(200, 10, "prepare", "arm", "pending", input={"dependencies": [], "omx_id": "OMX_02"}),
+    )
+    gateway = FakeGateway([running, _order_job(2, steps=frozen_steps)])
+
+    report = JobRunner(gateway).run_once()
+
+    assert gateway.assignments == []
+    assert any("job 2" in reason for reason in report.blocked)
 
 
 def test_a_held_job_keeps_its_resources_but_is_never_advanced() -> None:

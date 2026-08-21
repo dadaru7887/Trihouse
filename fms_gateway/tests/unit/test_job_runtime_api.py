@@ -437,6 +437,103 @@ def test_rmf_acceptance_cannot_substitute_control_tower_assignment():
     assert detail["steps"][0]["assignment_revision"] == 1
 
 
+def test_assignment_accepts_every_workcell_required_by_mixed_zone_steps():
+    """EN: omx_ids exposes every atomic reservation for a mixed order.
+
+    KO: omx_ids는 혼합 주문에서 원자적으로 예약한 모든 작업셀을 보여준다.
+    """
+    repository = InMemoryFmsRepository()
+    client = TestClient(create_app(repository))
+    body = outbound_job()
+    body["steps"] = [
+        {
+            "step_no": 10,
+            "action_type": "prepare",
+            "executor_type": "arm",
+            "input": {"dependencies": [], "omx_id": "OMX_01"},
+        },
+        {
+            "step_no": 20,
+            "action_type": "navigate",
+            "executor_type": "mobile",
+            "input": {"dependencies": [10]},
+        },
+        {
+            "step_no": 30,
+            "action_type": "prepare",
+            "executor_type": "arm",
+            "input": {"dependencies": [20], "omx_id": "OMX_02"},
+        },
+        {
+            "step_no": 40,
+            "action_type": "navigate",
+            "executor_type": "mobile",
+            "input": {"dependencies": [30]},
+        },
+    ]
+    job_id = client.post("/internal/v1/jobs", json=body).json()["job_id"]
+
+    response = client.post(
+        f"/internal/v1/jobs/{job_id}/assignment",
+        json={
+            "revision": 1,
+            "mobile_id": "PK_01",
+            "omx_id": "OMX_01",
+            "omx_ids": ["OMX_01", "OMX_02"],
+            "packing_dock_code": "PACKING-01-DOCK-01",
+            "charger_code": "TRIHOUSE-TEST-01-CHG-01",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["omx_ids"] == ["OMX_01", "OMX_02"]
+    detail = client.get(f"/api/v1/jobs/{job_id}").json()
+    assert detail["context"]["assignment"]["omx_ids"] == ["OMX_01", "OMX_02"]
+    assert [step["assigned_device_id"] for step in detail["steps"]] == [
+        "OMX_01", "PK_01", "OMX_02", "PK_01",
+    ]
+
+
+def test_assignment_rejects_a_workcell_list_that_omits_a_later_zone():
+    """EN: Reject a list that omits an OMX needed later in the route.
+
+    KO: 경로 후반에 필요한 OMX가 누락된 목록은 거부한다.
+    """
+    repository = InMemoryFmsRepository()
+    client = TestClient(create_app(repository))
+    body = outbound_job()
+    body["steps"] = [
+        {
+            "step_no": 10,
+            "action_type": "prepare",
+            "executor_type": "arm",
+            "input": {"dependencies": [], "omx_id": "OMX_01"},
+        },
+        {
+            "step_no": 20,
+            "action_type": "prepare",
+            "executor_type": "arm",
+            "input": {"dependencies": [10], "omx_id": "OMX_02"},
+        },
+    ]
+    job_id = client.post("/internal/v1/jobs", json=body).json()["job_id"]
+
+    response = client.post(
+        f"/internal/v1/jobs/{job_id}/assignment",
+        json={
+            "revision": 1,
+            "mobile_id": "PK_01",
+            "omx_id": "OMX_01",
+            "omx_ids": ["OMX_01"],
+            "packing_dock_code": "PACKING-01-DOCK-01",
+            "charger_code": "TRIHOUSE-TEST-01-CHG-01",
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "OMX_ASSIGNMENT_MISMATCH"
+
+
 def test_rejected_rmf_dispatch_is_failed_without_mapping():
     client = TestClient(create_app(InMemoryFmsRepository()))
     step_id = client.post("/internal/v1/jobs", json=outbound_job()).json()["steps"][0][

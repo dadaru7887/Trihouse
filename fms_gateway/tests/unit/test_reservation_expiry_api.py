@@ -61,6 +61,42 @@ def test_the_sweep_reports_what_it_released():
     assert all(entry["job_active"] for entry in expired)
 
 
+def test_mixed_zone_expiry_reports_the_later_omx_as_a_device():
+    """EN: Expiry must classify OMX_02 as a device, not a location.
+
+    KO: 만료 처리에서 OMX_02를 위치가 아닌 장비로 분류해야 한다.
+    """
+    repository = InMemoryFmsRepository()
+    client = TestClient(create_app(repository))
+    job = _job()
+    job["steps"] = [
+        {
+            "step_no": 10,
+            "action_type": "prepare",
+            "executor_type": "arm",
+            "input": {"dependencies": [], "omx_id": "OMX_01"},
+        },
+        {
+            "step_no": 20,
+            "action_type": "prepare",
+            "executor_type": "arm",
+            "input": {"dependencies": [10], "omx_id": "OMX_02"},
+        },
+    ]
+    job_id = client.post("/internal/v1/jobs", json=job).json()["job_id"]
+    assigned = client.post(
+        f"/internal/v1/jobs/{job_id}/assignment",
+        json={**ASSIGNMENT, "omx_ids": ["OMX_01", "OMX_02"]},
+    )
+    assert assigned.status_code == 200, assigned.text
+    repository.force_reservation_expiry(job_id)
+
+    expired = client.post("/internal/v1/reservations/expire").json()["expired"]
+
+    omx_02 = next(entry for entry in expired if entry["device_id"] == "OMX_02")
+    assert omx_02["location_id"] is None
+
+
 def test_a_job_with_nothing_overdue_is_left_alone():
     repository = InMemoryFmsRepository()
     client = TestClient(create_app(repository))
