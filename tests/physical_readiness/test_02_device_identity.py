@@ -45,10 +45,10 @@ def test_database_accepts_only_the_approved_command_ids():
     assert set(re.findall(r"'([^']+)'", constraint.group(1))) == CANONICAL_DEVICE_IDS
 
 
-def test_hardware_seed_does_not_create_demo_orders_or_inventory():
+def test_hardware_seed_does_not_create_demo_orders_or_jobs():
     sql = HARDWARE_SEED_SQL.read_text(encoding="utf-8")
 
-    for table in ("orders", "order_lines", "inventory_lots", "jobs", "job_steps"):
+    for table in ("orders", "order_lines", "jobs", "job_steps"):
         assert not re.search(rf"INSERT INTO\s+{table}\b", sql, re.IGNORECASE)
     assert "'project1'," not in sql
     assert not any(name in sql for name in ("'픽업1'", "'드랍오프1'", "'충전1'", "'충전2'"))

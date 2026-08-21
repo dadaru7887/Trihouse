@@ -8,6 +8,7 @@
 ```bash
 pytest -q tests/physical_readiness/test_01_database_baseline.py
 pytest -q tests/physical_readiness/test_02_device_identity.py
+pytest -q tests/physical_readiness/test_02_physical_seed_data.py
 pytest -q tests/physical_readiness/test_06_pinky_pi_compose.py
 ```
 
@@ -26,6 +27,7 @@ pytest -q tests/physical_readiness -m "not hardware"
 |---:|---|---|---|
 | 01 | `test_01_database_baseline.py` | 001 schema, migration archive, Compose mount | 구현됨 |
 | 02 | `test_02_device_identity.py` | command ID, DB name, hardware seed, map publication | 구현됨 |
+| 02 | `test_02_physical_seed_data.py` | `new_map_2` 좌표, 작업자 역할, 실제 재고, heartbeat gate | 구현됨 |
 | 03 | `test_03_role_environment.py` | 공통 `.env`와 역할별 필수 변수 | 역할별 Compose 구현 시 추가 |
 | 04 | `test_04_control_4060_compose.py` | 관제·QR·영상 수집 서비스 | 역할별 Compose 구현 시 추가 |
 | 05 | `test_05_ai_5080_compose.py` | YOLO·VLM/RL·ACT 추론 서비스 | 역할별 Compose 구현 시 추가 |

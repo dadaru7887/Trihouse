@@ -39,7 +39,7 @@ def test_development_seed_uses_only_the_operational_device_registry() -> None:
     )
     assert seeded_ids == CANONICAL_IDS
     assert not any(legacy_id in seed for legacy_id in LEGACY_IDS)
-    assert "'project1_pinky'" in seed
+    assert "'new_map_2_pinky'" in seed
     assert "'rmf_robot_name', 'PK_01'" in seed
     assert "'rmf_robot_name', 'PK_02'" in seed
     assert "'pinky_fleet'" not in seed
