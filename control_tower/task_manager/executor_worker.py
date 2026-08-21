@@ -214,15 +214,44 @@ class ExecutorWorker:
         """
         started_ms = self._clock_ms()
         if dispatch.action_type == "load":
+            self._run_arm_load(dispatch)
             self._confirm_load(dispatch)
         return {"transfer_ms": max(self._clock_ms() - started_ms, 0)}
+
+    def _run_arm_load(self, dispatch: ExecutorDispatch) -> None:
+        """Authorize the prepared OMX to transfer its item to Pinky.
+
+        ``load`` is issued only after the Gateway has released Step 30, whose
+        dependencies require both the OMX preparation step and Pinky's
+        navigation step to have succeeded.  The simulator (and the eventual
+        hardware adapter) rejects it unless the same OMX is still ``OMX_READY``.
+        Its command UUID is stable, so polling Step 30 again cannot repeat a
+        physical transfer after a delayed cargo confirmation.
+        """
+        omx_id = _omx_id_for_dispatch(dispatch)
+        if omx_id is None:
+            raise LookupError(f"load step {dispatch.job_step_id} is missing OMX identity")
+        simulator = self._simulators.get(omx_id)
+        if simulator is None:
+            raise LookupError(f"no simulator is configured for {omx_id!r}")
+        simulator.execute(
+            {
+                "command_uuid": _command_uuid(dispatch),
+                "kind": "load",
+                "job_step_id": dispatch.job_step_id,
+                "assignment_revision": dispatch.assignment_revision,
+                "omx_id": omx_id,
+                "expected_items": _expected_items(dispatch),
+                "marker_id": _marker_id(dispatch),
+            }
+        )
 
     def _confirm_load(self, dispatch: ExecutorDispatch) -> None:
         """로봇의 화물 관측을 품목별 적재 증거로 옮긴다."""
         step_input = dispatch.payload.get("input") or {}
         handover_group_id = step_input.get("handover_group_id")
         pinky_id = dispatch.assignment.get("mobile_id") or dispatch.assigned_device_id
-        omx_id = dispatch.assignment.get("omx_id")
+        omx_id = _omx_id_for_dispatch(dispatch)
         if not (handover_group_id and pinky_id and omx_id):
             raise LookupError(
                 f"load step {dispatch.job_step_id} is missing handover identity"
@@ -314,12 +343,30 @@ class ExecutorWorker:
 
     @staticmethod
     def _actor_device(dispatch: ExecutorDispatch) -> str | None:
+        if dispatch.executor_type == "arm":
+            return _omx_id_for_dispatch(dispatch)
         if dispatch.assigned_device_id:
             return dispatch.assigned_device_id
-        if dispatch.executor_type == "arm":
-            omx_id = dispatch.assignment.get("omx_id")
-            return omx_id if isinstance(omx_id, str) and omx_id else None
         return None
+
+
+def _omx_id_for_dispatch(dispatch: ExecutorDispatch) -> str | None:
+    """Return the workcell pinned to this temperature-zone transfer.
+
+    Older single-zone jobs do not carry ``input.omx_id``.  They keep using the
+    job-level assignment during the migration, while mixed-zone jobs always
+    prefer their explicit ZoneBundle workcell.
+    """
+    step_input = dispatch.payload.get("input") or {}
+    omx_id = step_input.get("omx_id")
+    if isinstance(omx_id, str) and omx_id:
+        return omx_id
+    # FMS load steps are assigned to Pinky for dispatch ownership, not OMX.
+    # Only an arm step's assigned_device_id is an OMX fallback.
+    if dispatch.executor_type == "arm" and dispatch.assigned_device_id:
+        return dispatch.assigned_device_id
+    omx_id = dispatch.assignment.get("omx_id")
+    return omx_id if isinstance(omx_id, str) and omx_id else None
 
 
 def _expected_items(dispatch: ExecutorDispatch) -> tuple[str, ...]:

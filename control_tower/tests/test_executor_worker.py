@@ -326,6 +326,49 @@ def test_a_confirmed_cargo_closes_the_load_step_with_one_attempt_per_item() -> N
     assert submitted[0].handover_group_id == "group-1"
 
 
+def test_a_load_step_commands_the_prepared_omx_before_recording_cargo() -> None:
+    """Removing the OMX ``load`` command must leave Step 30 open.
+
+    Step 10 prepares the item and Step 20 confirms Pinky's arrival.  Step 30
+    is the only point that authorizes the arm to transfer the prepared item.
+    A cargo observation alone must not make that transfer look as if it ran.
+    """
+    from trihouse_omx_adapter.protocol_simulator import OmxProtocolSimulator
+
+    simulator = OmxProtocolSimulator(omx_id="OMX_01")
+    gateway = LoadGateway([_dispatch(), _load_dispatch()])
+
+    report = _worker(gateway, {"OMX_01": simulator}).run_once()
+
+    assert report.succeeded == (100, 4)
+    assert simulator.state == "LOAD_COMPLETE"
+
+
+def test_a_frozen_load_uses_its_zone_workcell_instead_of_the_job_default() -> None:
+    """냉동 ZoneBundle의 Step 30은 OMX_02에만 load를 보낸다."""
+    simulator = FakeSimulator(omx_id="OMX_02")
+    gateway = LoadGateway(
+        [
+            _load_dispatch(
+                payload={
+                    "input": {
+                        "handover_group_id": "group-frozen",
+                        "temperature_zone": "frozen",
+                        "omx_id": "OMX_02",
+                    }
+                }
+            )
+        ]
+    )
+
+    report = _worker(gateway, {"OMX_02": simulator}).run_once()
+
+    assert report.succeeded == (4,)
+    assert simulator.commands[0]["kind"] == "load"
+    assert simulator.commands[0]["omx_id"] == "OMX_02"
+    assert gateway.load_attempts[0][1].omx_id == "OMX_02"
+
+
 def test_an_unloaded_robot_defers_instead_of_failing_the_step() -> None:
     """아직 안 실린 것은 실패가 아니라 대기다. 실패로 적으면 운영자가 없는 문제를 쫓고,
     outbox 재시도 예산만 태운다."""

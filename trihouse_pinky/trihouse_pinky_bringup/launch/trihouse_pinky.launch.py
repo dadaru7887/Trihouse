@@ -31,6 +31,10 @@ def generate_launch_description():
     omx_station_id = LaunchConfiguration('omx_station_id')
     nav2_params_file = LaunchConfiguration('nav2_params_file')
     vision_enabled = LaunchConfiguration('vision_enabled')
+    docking_enabled = LaunchConfiguration('docking_enabled')
+    narrow_zones_file = LaunchConfiguration('narrow_zones_file')
+    narrow_map_name = LaunchConfiguration('narrow_map_name')
+    marker_docks_file = LaunchConfiguration('marker_docks_file')
     vision_config = LaunchConfiguration('vision_config_file')
     vendor_bringup = PathJoinSubstitution([FindPackageShare('pinky_bringup'), 'launch', 'bringup_robot.launch.xml'])
     navigation = PathJoinSubstitution([FindPackageShare('pinky_navigation'), 'launch', 'bringup_launch.xml'])
@@ -55,6 +59,9 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('vision_enabled', default_value='false'),
         DeclareLaunchArgument('docking_enabled', default_value='false'),
+        DeclareLaunchArgument('narrow_zones_file', default_value=''),
+        DeclareLaunchArgument('narrow_map_name', default_value=''),
+        DeclareLaunchArgument('marker_docks_file', default_value=''),
         DeclareLaunchArgument('omx_station_id', default_value='station-1'),
         DeclareLaunchArgument('font_path', default_value=''),
         # 이 그룹 안의 모든 것이 `/<namespace>/...` 아래로 들어간다. 벤더
@@ -81,7 +88,21 @@ def generate_launch_description():
             Node(package='trihouse_pinky_fleet', executable='battery_policy'),
             Node(package='trihouse_pinky_fleet', executable='status_node', parameters=[{'robot_id': robot_id, 'map_revision': map_revision}]),
             Node(package='trihouse_pinky_fleet', executable='recovery_health', parameters=[{'robot_id': robot_id}]),
-            Node(package='trihouse_pinky_fleet', executable='fleet_node', parameters=[{'robot_id': robot_id, 'map_revision': map_revision}]),
+            Node(package='trihouse_pinky_fleet', executable='fleet_node', parameters=[{
+                'robot_id': robot_id,
+                'map_revision': map_revision,
+                'narrow_zones_file': narrow_zones_file,
+                'narrow_map_name': narrow_map_name,
+            }]),
+            Node(
+                package='trihouse_pinky_docking',
+                executable='marker_dock',
+                parameters=[{
+                    'profiles_file': marker_docks_file,
+                    'map_name': narrow_map_name,
+                }],
+                condition=IfCondition(docking_enabled),
+            ),
             Node(package='trihouse_pinky_fleet', executable='fleet_gateway', parameters=[{'robot_id': robot_id, 'control_host': control_host, 'control_port': control_port}]),
             # 카메라는 ROS 토픽으로 나가지 않는다. 이 노드는 ffmpeg 로
             # MediaMTX(PC1) 에 RTSP 를 밀고, 서버가 그것을 읽어 QR·ArUco 를

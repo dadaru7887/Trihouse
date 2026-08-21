@@ -30,6 +30,7 @@ from trihouse_pinky_fleet.narrow_zone_pilot import (  # noqa: E402
 )
 
 ZONE_FILE = REPOSITORY / "config" / "narrow_zones.trihouse_map_01.yaml"
+NEW_MAP_2_ZONE_FILE = REPOSITORY / "config" / "narrow_zones.new_map_2.yaml"
 FROZEN = "frozen_storage_loading_dock_01"
 
 
@@ -57,6 +58,62 @@ def test_a_zone_table_for_another_map_is_refused() -> None:
     document = yaml.safe_load(ZONE_FILE.read_text(encoding="utf-8"))
     with pytest.raises(NarrowZoneError, match="지도"):
         load_zones(document, map_name="new_map_2")
+
+
+def test_a_marker_dock_keeps_its_expected_marker_id() -> None:
+    document = {
+        "map_name": "new_map_2",
+        "zones": {
+            "ambient_storage_loading_dock_01": {
+                "entry": {"x": 1.0, "y": 0.7, "yaw": 0.0},
+                "zone": {"length": 0.4, "width": 0.4},
+                "enter": [["straight", -0.3]],
+                "exit": [["straight", 0.3]],
+                "marker_id": "2",
+            }
+        },
+    }
+    zone = load_zones(document, map_name="new_map_2")[
+        "ambient_storage_loading_dock_01"
+    ]
+    assert zone.marker_id == "2"
+
+
+def test_a_disabled_unmeasured_marker_zone_is_not_executable() -> None:
+    document = {
+        "map_name": "new_map_2",
+        "zones": {
+            "frozen_storage_loading_dock_01": {
+                "enabled": False,
+                "marker_id": "0",
+                "entry": None,
+                "zone": None,
+            }
+        },
+    }
+    assert load_zones(document, map_name="new_map_2") == {}
+
+
+def test_new_map_2_has_calibrated_egress_plans_for_both_chargers() -> None:
+    """새 지도에서는 충전 베이 안에서 Nav2를 바로 시작하면 안 된다.
+
+    두 충전소 모두 먼저 저속 규칙 주행으로 병목 01까지 빠져나온 뒤에만 일반
+    Nav2 경로를 시작한다. 이 표가 없으면 같은 좌표계의 지도여도 초기 목표가 벽과
+    너무 가까워 Regulated Pure Pursuit가 즉시 충돌로 중단한다.
+    """
+    assert NEW_MAP_2_ZONE_FILE.is_file(), "new_map_2 전용 협로 표가 없다"
+    document = yaml.safe_load(NEW_MAP_2_ZONE_FILE.read_text(encoding="utf-8"))
+    zones = load_zones(document, map_name="new_map_2")
+    chargers = {"charging_station_01", "charging_station_02"}
+    assert chargers <= set(zones)
+    for name in chargers:
+        zone = zones[name]
+        # 충전 베이에서는 회전 외접원이 벽을 스친다. 먼저 현재 방향으로 저속
+        # 전진해 여유를 만든 다음에만 회전한다.
+        assert [kind for kind, _ in zone.exit] == [STRAIGHT, ROTATE, STRAIGHT]
+        assert zone.exit[0][1] > 0.40
+        assert zone.exit[-1][1] > 0.30
+        assert zone.exit_target == pytest.approx((0.841, -0.111, zone.exit[1][1]))
 
 
 def test_the_zone_rectangle_is_oriented_not_circular() -> None:

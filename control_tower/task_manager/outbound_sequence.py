@@ -6,6 +6,16 @@ from typing import Any
 from .outbound_planner import OutboundPlan
 
 
+# 물리 작업셀 배정: 상온·냉장은 OMX_01, 냉동은 OMX_02에서만 적재한다.
+# Job이 여러 온도 구역을 포함할 수 있으므로 이 값은 Job 전역 assignment가 아니라
+# ZoneBundle별 step input에 기록한다.
+OMX_BY_TEMPERATURE_ZONE = {
+    "ambient": "OMX_01",
+    "chilled": "OMX_01",
+    "frozen": "OMX_02",
+}
+
+
 @dataclass(frozen=True)
 class OutboundStepTemplate:
     """One logical step before runtime location IDs and a mobile are assigned."""
@@ -88,11 +98,18 @@ def planned_outbound_steps(plan: OutboundPlan) -> tuple[PlannedOutboundStep, ...
     previous_gate: int | None = None
     # 온도 구역별 반복 구간: 물건 준비와 로봇 도착이 끝나야 load gate를 통과한다.
     for bundle in plan.bundles:
+        try:
+            omx_id = OMX_BY_TEMPERATURE_ZONE[bundle.temperature_zone]
+        except KeyError as error:
+            raise ValueError(
+                f"no OMX workcell is configured for {bundle.temperature_zone!r}"
+            ) from error
         inherited_dependencies = [] if previous_gate is None else [previous_gate]
         product_codes = list(dict.fromkeys(item.product_code for item in bundle.items))
         common = {
             "handover_group_id": bundle.handover_group_id,
             "temperature_zone": bundle.temperature_zone,
+            "omx_id": omx_id,
             "dock_location_id": bundle.dock_location_id,
             "product_codes": product_codes,
         }

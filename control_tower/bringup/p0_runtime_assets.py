@@ -311,6 +311,17 @@ def derive_nav2_params(
     않아 파라미터가 한 개도 적용되지 않는다.
     """
     document = yaml.safe_load(source.read_text(encoding="utf-8"))
+    # 일부 벤더 복사본에는 BOM/오타처럼 보이는 접두사가 붙은 `지amcl:` 키가
+    # 있었다. 그대로 두면 아래에서 만든 `amcl:`은 initial_pose만 가진 별도
+    # 블록이 되고, 실제 AMCL은 scan/odom frame 설정을 하나도 못 받아 map->odom
+    # TF를 내지 못한다. 원본은 수정하지 않고 런타임 파생본에서만 정규화한다.
+    if isinstance(document, dict) and "amcl" not in document:
+        malformed_amcl = [
+            key for key in document
+            if isinstance(key, str) and key.endswith("amcl") and key != "amcl"
+        ]
+        if len(malformed_amcl) == 1:
+            document["amcl"] = document.pop(malformed_amcl[0])
     # 벤더가 이 절을 채우면 그것을 그대로 쓴다. 우리 기본값은 빈 자리만 메운다.
     document.setdefault("collision_monitor", COLLISION_MONITOR_DEFAULTS)
     document.setdefault("docking_server", DOCKING_SERVER_DEFAULTS)

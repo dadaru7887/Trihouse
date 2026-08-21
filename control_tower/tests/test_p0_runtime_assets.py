@@ -456,3 +456,34 @@ def test_every_frame_in_the_real_vendor_params_resolves_to_one_namespace(tmp_pat
 
     walk(document)
     assert stray == []
+
+
+def test_vendor_amcl_key_is_normalized_before_the_initial_pose_is_added(tmp_path):
+    """복사본에 숨은 접두사가 있어도 실제 /amcl 설정을 잃으면 안 된다."""
+    module = _module()
+    source = tmp_path / "vendor.yaml"
+    source.write_text(
+        yaml.safe_dump(
+            {
+                "지amcl": {
+                    "ros__parameters": {
+                        "base_frame_id": "base_footprint",
+                        "odom_frame_id": "odom",
+                        "scan_topic": "scan",
+                    }
+                }
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    destination = tmp_path / "derived.yaml"
+
+    module.derive_nav2_params(source, "pinky_01", destination, initial_pose=(0.1, 0.2, 0.3))
+
+    document = yaml.safe_load(destination.read_text(encoding="utf-8"))
+    assert "지amcl" not in document
+    amcl = document["amcl"]["ros__parameters"]
+    assert amcl["odom_frame_id"] == "pinky_01/odom"
+    assert amcl["scan_topic"] == "/pinky_01/scan"
+    assert amcl["initial_pose"] == {"x": 0.1, "y": 0.2, "z": 0.0, "yaw": 0.3}

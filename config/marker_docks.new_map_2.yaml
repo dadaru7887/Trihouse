@@ -1,0 +1,55 @@
+# new_map_2 전용 ArUco 협로 후진 도킹 표.
+#
+# marker_id는 2026-08-13 실물 검출로 확정됐다(상온=2, 냉장=1, 냉동=0).
+# 나머지는 로봇을 "마커가 보이고 180도 회전 가능한 앞 공간"에 세운 뒤 재야 한다.
+# verified=false인 항목은 marker_dock action server가 적재하지 않아 절대 움직이지 않는다.
+map_name: new_map_2
+
+docks:
+  ambient_storage_loading_dock_01:
+    verified: false
+    marker_id: '2'
+    minimum_confidence: null
+    stable_observations: null
+    observation_timeout_s: null
+    standoff_m: null
+    distance_tolerance_m: null
+    bearing_tolerance_rad: null
+    turn_direction: null
+    reverse_distance_m: null
+    activation_x_m: null
+    activation_y_m: null
+    activation_radius_m: null
+    note: 상온 출입구는 대각선. 마커 정면 정렬 pose와 회전 외접원 여유를 실측한다.
+
+  chilled_storage_loading_dock_01:
+    verified: false
+    marker_id: '1'
+    minimum_confidence: null
+    stable_observations: null
+    observation_timeout_s: null
+    standoff_m: null
+    distance_tolerance_m: null
+    bearing_tolerance_rad: null
+    turn_direction: null
+    reverse_distance_m: null
+    activation_x_m: null
+    activation_y_m: null
+    activation_radius_m: null
+    note: 냉장 출입구는 대각선. 상온 값을 복사하지 말고 별도로 실측한다.
+
+  frozen_storage_loading_dock_01:
+    verified: false
+    marker_id: '0'
+    minimum_confidence: null
+    stable_observations: null
+    observation_timeout_s: null
+    standoff_m: null
+    distance_tolerance_m: null
+    bearing_tolerance_rad: null
+    turn_direction: null
+    reverse_distance_m: null
+    activation_x_m: null
+    activation_y_m: null
+    activation_radius_m: null
+    note: 냉동 출입구는 벽 쪽. 벽에서 먼 회전 방향과 앞 공간 pose를 반드시 실측한다.

@@ -74,6 +74,12 @@ class NarrowZone:
     enter: tuple[tuple[str, float | None], ...]
     exit: tuple[tuple[str, float | None], ...]
     measured: Mapping[str, Any]
+    # 있으면 Nav2가 entry에 도착한 뒤 고정 시퀀스 대신 /trihouse/dock action이
+    # 해당 ArUco를 정렬하고 180도 회전·후진을 끝까지 소유한다.
+    marker_id: str | None = None
+    # 탈출 직후 Nav2 에 넘기기 전에 대조할 map 좌표. 특히 충전 베이는 시작점이
+    # 벽에 가까워서 "존만 벗어남"으로는 충분하지 않다.
+    exit_target: tuple[float, float, float] | None = None
 
 
 def _step(raw: Sequence[Any], where: str) -> tuple[str, float | None]:
@@ -102,6 +108,8 @@ def load_zones(document: Mapping[str, Any], *, map_name: str) -> dict[str, Narro
         )
     zones: dict[str, NarrowZone] = {}
     for code, body in (document.get("zones") or {}).items():
+        if not bool(body.get("enabled", True)):
+            continue
         entry, shape = body.get("entry") or {}, body.get("zone") or {}
         try:
             geometry = ZoneGeometry(
@@ -110,12 +118,28 @@ def load_zones(document: Mapping[str, Any], *, map_name: str) -> dict[str, Narro
             )
         except (KeyError, TypeError, ValueError) as error:
             raise NarrowZoneError(f"{code}: entry/zone 값이 온전하지 않다") from error
+        raw_exit_target = body.get("exit_target")
+        if raw_exit_target is None:
+            exit_target = None
+        else:
+            try:
+                exit_target = (
+                    float(raw_exit_target["x"]),
+                    float(raw_exit_target["y"]),
+                    float(raw_exit_target["yaw"]),
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise NarrowZoneError(f"{code}: exit_target 값이 온전하지 않다") from error
         zones[str(code)] = NarrowZone(
             destination_code=str(code),
             geometry=geometry,
             enter=tuple(_step(raw, f"{code}.enter") for raw in body.get("enter") or ()),
             exit=tuple(_step(raw, f"{code}.exit") for raw in body.get("exit") or ()),
             measured=dict(body.get("measured") or {}),
+            marker_id=(
+                str(body["marker_id"]) if body.get("marker_id") is not None else None
+            ),
+            exit_target=exit_target,
         )
     return zones
 

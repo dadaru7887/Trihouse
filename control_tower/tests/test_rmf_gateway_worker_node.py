@@ -217,3 +217,12 @@ def test_simulation_bringup_runs_the_worker_on_simulation_time() -> None:
     # 모듈 이름은 머리말 주석에도 나온다. 실제 실행 줄은 마지막 등장이다.
     worker_block = script.rsplit("rmf_gateway_worker_node", 1)[1].split("\nfi")[0]
     assert "--use-sim-time" in worker_block
+
+
+def test_p0_up_passes_map_specific_waypoints_to_simulation_bringup() -> None:
+    """new_map_2로 Nav2를 띄우면서 구 지도 waypoint를 넘기면 안 된다."""
+    script = (
+        Path(__file__).resolve().parents[2] / "scripts" / "p0_up.sh"
+    ).read_text(encoding="utf-8")
+    assert "trihouse_test_01_physical_features.${MAP_NAME}.jsonl" in script
+    assert "PHYSICAL_FEATURES_FILE=\"$FEATURES_FILE\"" in script

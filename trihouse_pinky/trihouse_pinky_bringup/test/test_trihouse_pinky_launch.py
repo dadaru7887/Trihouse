@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
-from launch_ros.actions import SetRemap
+from launch_ros.actions import Node, SetRemap
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCH = ROOT / "launch" / "trihouse_pinky.launch.py"
@@ -183,3 +183,16 @@ def test_vision_stays_inside_the_robot_namespace() -> None:
     ]
 
     assert any("vision.launch.py" in location for location in included)
+
+
+def test_marker_docking_is_wired_inside_the_robot_namespace() -> None:
+    description = _module().generate_launch_description()
+    arguments = _declared_arguments(description)
+    assert {"marker_docks_file", "narrow_zones_file", "narrow_map_name"} <= arguments
+
+    nodes = [entity for entity in _flatten(description.entities) if isinstance(entity, Node)]
+    assert any(
+        str(node.node_package) == "trihouse_pinky_docking"
+        and str(node.node_executable) == "marker_dock"
+        for node in nodes
+    )

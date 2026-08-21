@@ -219,3 +219,25 @@ def test_each_zone_has_parallel_branches_that_converge_before_loading() -> None:
     ]
     assert steps[-1].target_location_id is None
     assert steps[-1].input["target_role"] == "assigned_robot_home"
+
+
+def test_mixed_temperature_bundles_pin_each_transfer_to_its_workcell_arm() -> None:
+    """혼합 주문은 상온·냉장 OMX_01 뒤 냉동 OMX_02 순서로 적재한다."""
+    plan = OutboundPlanner().plan(
+        order(("SKU-ORANGE", 1), ("SKU-MILK", 1), ("SKU-ICEBAR", 1)),
+        (
+            lot(1, "SKU-ORANGE", "ambient", 11, 1, expiry_date=date(2026, 8, 28), received_at=None),
+            lot(2, "SKU-MILK", "chilled", 12, 1, expiry_date=date(2026, 9, 20), received_at=None),
+            lot(3, "SKU-ICEBAR", "frozen", 13, 1, expiry_date=date(2027, 8, 25), received_at=None),
+        ),
+        LOCATIONS,
+    )
+
+    transfers = [step for step in planned_outbound_steps(plan) if step.action_type in {"pick", "load"}]
+
+    assert [step.input["temperature_zone"] for step in transfers] == [
+        "ambient", "ambient", "chilled", "chilled", "frozen", "frozen",
+    ]
+    assert [step.input["omx_id"] for step in transfers] == [
+        "OMX_01", "OMX_01", "OMX_01", "OMX_01", "OMX_02", "OMX_02",
+    ]

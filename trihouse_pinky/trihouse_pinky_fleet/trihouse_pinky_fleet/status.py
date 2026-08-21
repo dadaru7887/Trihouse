@@ -66,23 +66,33 @@ def build_status(inputs: StatusInputs) -> StatusSummary:
     # fresh가 False인 센서의 오류 이름만 tuple에 포함된다.
     sensor_errors = tuple(
         name for name, fresh in (
+            # scan_stale: LiDAR 관측이 timeout 안에 오지 않아 충돌 여유를 믿을 수 없다.
             ("scan_stale", inputs.scan_fresh),
+            # odom_stale: 바퀴/관성 기반 이동 관측이 끊겨 정지·이동 판정을 할 수 없다.
             ("odom_stale", inputs.odom_fresh),
+            # battery_stale: 최신 SOC/전압이 없어 작업 완료·복귀 에너지를 보장할 수 없다.
             ("battery_stale", inputs.battery_fresh),
+            # map_pose_stale: map 좌표 자세가 오래돼 Nav2·RMF의 현재 위치로 쓸 수 없다.
             ("map_pose_stale", inputs.map_pose_fresh),
         ) if not fresh
     )
     execution_errors = tuple(
         name for name, allowed in (
+            # nav_unavailable: Nav2/action server가 없어 이동 명령을 실행할 수 없다.
             ("nav_unavailable", inputs.nav_available),
+            # control_link_offline: 모터 제어 경로가 끊겨 속도 명령 전달을 보장할 수 없다.
             ("control_link_offline", inputs.control_link_online),
+            # safety_blocked: LiDAR/초음파/사람 보호 필드가 현재 속도를 허용하지 않는다.
             ("safety_blocked", inputs.safety_clear),
         ) if not allowed
     )
     dispatch_errors = tuple(
         name for name, allowed in (
+            # battery_not_dispatchable: 새 작업을 수락하기에는 배터리 정책 여유가 부족하다.
             ("battery_not_dispatchable", inputs.battery_dispatchable),
+            # maintenance_blocked: 정비·장애·E-stop 정책이 새 작업 배정을 막는다.
             ("maintenance_blocked", inputs.maintenance_clear),
+            # cargo_blocks_dispatch: 현재 화물 상태상 새 이동 작업을 섞으면 안 된다.
             ("cargo_blocks_dispatch", inputs.cargo_allows_dispatch),
         ) if not allowed
     )

@@ -3615,15 +3615,34 @@ class MySqlFmsRepository:
                         "PACKING_DOCK_CHARGER_MUST_DIFFER"
                     )
 
-                device_ids = sorted((assignment["mobile_id"], assignment["omx_id"]))
+                # 혼합 온도 주문은 step마다 고정된 작업셀 OMX를 쓴다. Job 전역의
+                # omx_id는 레거시 단일 구역 주문의 기본값으로 남기되, 필요한 모든
+                # 팔을 한 assignment에서 함께 잠가 중간에 다른 job이 빼앗지 못하게
+                # 한다.
                 cursor.execute(
                     """
+                    SELECT DISTINCT JSON_UNQUOTE(JSON_EXTRACT(input, '$.omx_id')) AS omx_id
+                    FROM job_steps
+                    WHERE job_id = %s
+                      AND executor_type = 'arm'
+                      AND JSON_UNQUOTE(JSON_EXTRACT(input, '$.omx_id')) IS NOT NULL
+                    """,
+                    (job_id,),
+                )
+                omx_ids = sorted(
+                    {assignment["omx_id"]}
+                    | {row["omx_id"] for row in cursor.fetchall() if row["omx_id"]}
+                )
+                device_ids = sorted((assignment["mobile_id"], *omx_ids))
+                device_placeholders = ", ".join(["%s"] * len(device_ids))
+                cursor.execute(
+                    f"""
                     SELECT device.device_id, device.device_type, device.active,
                            device.control_mode, state.state AS runtime_state,
                            state.health
                     FROM devices device
                     LEFT JOIN device_states state ON state.device_id = device.device_id
-                    WHERE device.device_id IN (%s, %s)
+                    WHERE device.device_id IN ({device_placeholders})
                     ORDER BY device.device_id
                     FOR UPDATE
                     """,
@@ -3634,7 +3653,7 @@ class MySqlFmsRepository:
                     raise ResourceUnavailable("assigned device is not registered")
                 if devices[assignment["mobile_id"]]["device_type"] != "mobile":
                     raise ResourceAssignmentConflict("MOBILE_DEVICE_TYPE_MISMATCH")
-                if devices[assignment["omx_id"]]["device_type"] != "arm":
+                if any(devices[omx_id]["device_type"] != "arm" for omx_id in omx_ids):
                     raise ResourceAssignmentConflict("OMX_DEVICE_TYPE_MISMATCH")
                 if any(
                     not row["active"]
@@ -3704,16 +3723,14 @@ class MySqlFmsRepository:
                 if charger["state"] != "available":
                     raise ResourceAssignmentConflict("CHARGER_UNAVAILABLE")
 
-                resource_params = (
-                    assignment["mobile_id"],
-                    assignment["omx_id"],
-                    locations[assignment["packing_dock_code"]]["location_id"],
-                )
+                reserved_device_ids = (assignment["mobile_id"], *omx_ids)
+                reservation_placeholders = ", ".join(["%s"] * len(reserved_device_ids))
+                resource_params = (*reserved_device_ids, locations[assignment["packing_dock_code"]]["location_id"])
                 cursor.execute(
-                    """
+                    f"""
                     SELECT reservation_id, job_id FROM reservations
                     WHERE state IN ('reserved','in_use')
-                      AND (device_id IN (%s, %s) OR location_id = %s)
+                      AND (device_id IN ({reservation_placeholders}) OR location_id = %s)
                     ORDER BY active_resource_key
                     FOR UPDATE
                     """,
@@ -3754,7 +3771,11 @@ class MySqlFmsRepository:
                     """
                     UPDATE job_steps
                     SET assigned_device_id = CASE executor_type
-                          WHEN 'mobile' THEN %s WHEN 'arm' THEN %s ELSE NULL END,
+                          WHEN 'mobile' THEN %s
+                          WHEN 'arm' THEN COALESCE(
+                            JSON_UNQUOTE(JSON_EXTRACT(input, '$.omx_id')), %s
+                          )
+                          ELSE NULL END,
                         assignment_revision = %s,
                         target_location_id = CASE WHEN
                           (action_type = 'navigate' AND
@@ -3785,9 +3806,7 @@ class MySqlFmsRepository:
                         job_id,
                     ),
                 )
-                for device_id in sorted(
-                    (assignment["mobile_id"], assignment["omx_id"])
-                ):
+                for device_id in sorted(reserved_device_ids):
                     cursor.execute(
                         """
                         INSERT INTO reservations
@@ -4615,7 +4634,7 @@ class MySqlFmsRepository:
                     step_input.get("handover_group_id"),
                     int(row["assignment_revision"]),
                     assignment.get("mobile_id"),
-                    assignment.get("omx_id"),
+                    step_input.get("omx_id") or assignment.get("omx_id"),
                 )
                 actual = (
                     int(canonical["job_id"]),
@@ -7153,9 +7172,17 @@ class InMemoryFmsRepository:
             elif int(assignment["revision"]) != 1:
                 raise ResourceAssignmentConflict("INITIAL_ASSIGNMENT_REVISION_MUST_BE_ONE")
 
+            zone_omx_ids = {
+                str((step.get("input") or {}).get("omx_id"))
+                for step in self._steps.values()
+                if step["job_id"] == job_id
+                and step["executor_type"] == "arm"
+                and (step.get("input") or {}).get("omx_id")
+            }
+            omx_ids = tuple(sorted({assignment["omx_id"], *zone_omx_ids}))
             resources = (
                 assignment["mobile_id"],
-                assignment["omx_id"],
+                *omx_ids,
                 assignment["packing_dock_code"],
             )
             if any(
@@ -7166,12 +7193,8 @@ class InMemoryFmsRepository:
                 raise ResourceUnavailable("one or more resources are already reserved")
 
             if current is not None:
-                for value in (
-                    current["mobile_id"],
-                    current["omx_id"],
-                    current["packing_dock_code"],
-                ):
-                    if self._reserved_assignment_resources.get(value) == job_id:
+                for value, owner in tuple(self._reserved_assignment_resources.items()):
+                    if owner == job_id:
                         self._reserved_assignment_resources.pop(value)
                         self._reservation_ids.pop(value, None)
             for resource in resources:
@@ -7190,11 +7213,11 @@ class InMemoryFmsRepository:
                 if step["job_id"] != job_id:
                     continue
                 step["assignment_revision"] = int(assignment["revision"])
+                payload = step.get("input") or {}
                 step["assigned_device_id"] = {
                     "mobile": assignment["mobile_id"],
-                    "arm": assignment["omx_id"],
+                    "arm": payload.get("omx_id") or assignment["omx_id"],
                 }.get(step["executor_type"])
-                payload = step.get("input") or {}
                 is_packing = (
                     step["action_type"] == "navigate"
                     and payload.get("branch") == "packing_navigate"

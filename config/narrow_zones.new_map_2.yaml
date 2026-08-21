@@ -1,0 +1,70 @@
+# new_map_2 전용 저속 협로 표.
+#
+# 충전 베이는 시작점 바로 앞의 벽 여유가 작다. 따라서 어떤 주문이든 일반 Nav2 를
+# 먼저 보내지 않고, 아래 두 규칙 시퀀스로 bottleneck_zone_01 까지 빠져나온 다음에
+# Nav2 를 시작한다. 명령은 fleet_node -> cmd_vel_nav 로 나가므로 velocity_smoother와
+# collision_monitor 를 계속 통과한다.
+map_name: new_map_2
+
+zones:
+  # 창고 세 곳은 아래 앞 공간을 실측한 뒤에만 enabled=true로 바꾼다. entry는 Nav2가
+  # 멈춰 ArUco 탐색을 시작할 map pose, zone은 도킹 뒤 로봇까지 포함해야 한다.
+  # marker_id가 있으면 enter 배열 대신 /trihouse/dock action을 호출한다.
+  ambient_storage_loading_dock_01:
+    enabled: false
+    marker_id: '2'
+    entry: null
+    zone: null
+    enter: []
+    exit: []
+
+  chilled_storage_loading_dock_01:
+    enabled: false
+    marker_id: '1'
+    entry: null
+    zone: null
+    enter: []
+    exit: []
+
+  frozen_storage_loading_dock_01:
+    enabled: false
+    marker_id: '0'
+    entry: null
+    zone: null
+    enter: []
+    exit: []
+
+  charging_station_01:
+    entry: { x: 0.065, y: 0.227, yaw: -0.005 }
+    zone: { length: 0.30, width: 0.30 }
+    # 귀환 때는 Nav2가 충전 좌표까지 정차하고 이 0 m 스텝이 즉시 완료된다.
+    enter:
+      - [straight, 0.0]
+    exit:
+      - [straight, 0.680]
+      - [rotate, -1.276]
+      - [straight, 0.345]
+    exit_target: { x: 0.841, y: -0.111, yaw: -1.276 }
+    measured:
+      date: 2026-08-21
+      source: new_map_2_geometry
+      note: >-
+        charging_station_01에서 먼저 0.68 m 저속 전진해 회전 외접원 여유를 만든 뒤,
+        bottleneck_zone_01로 회전·전진한다. 베이 안 제자리 회전은 swept_stop으로 금지된다.
+
+  charging_station_02:
+    entry: { x: 0.076, y: -0.013, yaw: 0.239 }
+    zone: { length: 0.30, width: 0.30 }
+    enter:
+      - [straight, 0.0]
+    exit:
+      - [straight, 0.650]
+      - [rotate, -1.083]
+      - [straight, 0.333]
+    exit_target: { x: 0.841, y: -0.111, yaw: -1.083 }
+    measured:
+      date: 2026-08-21
+      source: new_map_2_geometry
+      note: >-
+        charging_station_02에서 먼저 0.65 m 저속 전진해 회전 여유를 만든 뒤,
+        bottleneck_zone_01로 회전·전진한다.

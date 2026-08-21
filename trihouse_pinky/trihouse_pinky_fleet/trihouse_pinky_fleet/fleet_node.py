@@ -15,7 +15,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.task import Future
 from std_msgs.msg import Bool, String
-from trihouse_interfaces.action import ExecuteTransport
+from trihouse_interfaces.action import Dock, ExecuteTransport
 from trihouse_interfaces.msg import CargoState, HandoverState, NavigationState, Readiness, RobotHealth, RobotStatus, SafetyState, TaskEvent
 
 from .workflow import JobCommand, JobPhase, TransportWorkflow
@@ -146,6 +146,7 @@ class FleetNode(Node):
         self.declare_parameter('narrow_map_name', '')
         self.narrow_zones = self._load_narrow_zones()
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        self.dock_client = ActionClient(self, Dock, 'trihouse/dock')
         self.nav_goal_handles = {}
         self.server = ActionServer(
             self,
@@ -240,6 +241,34 @@ class FleetNode(Node):
                     result.message = f'협로 탈출 실패: {detail}'
                     result.completed_at = self.get_clock().now().to_msg()
                     return result
+                if stuck_in.exit_target is not None:
+                    if self.map_pose is None:
+                        goal_handle.abort()
+                        result.success = False
+                        result.code = ExecuteTransport.Result.CODE_NAVIGATION_FAILED
+                        result.message = '협로 탈출 뒤 map pose 를 잃었다'
+                        result.completed_at = self.get_clock().now().to_msg()
+                        return result
+                    escaped, distance, yaw_error = verify_pose(
+                        self.map_pose,
+                        stuck_in.exit_target,
+                        xy_tolerance_m=PRECISE_STOP_XY_TOLERANCE_M,
+                        yaw_tolerance_rad=PRECISE_STOP_YAW_TOLERANCE_RAD,
+                    )
+                    self.get_logger().info(
+                        f'{stuck_in.destination_code}: 협로 탈출 target 과 거리 '
+                        f'{distance:.3f} m, yaw 차 {yaw_error:.3f} rad'
+                    )
+                    if not escaped:
+                        goal_handle.abort()
+                        result.success = False
+                        result.code = ExecuteTransport.Result.CODE_NAVIGATION_FAILED
+                        result.message = (
+                            '협로 탈출 target 불일치 '
+                            f'(거리 {distance:.3f} m, yaw {yaw_error:.3f} rad)'
+                        )
+                        result.completed_at = self.get_clock().now().to_msg()
+                        return result
 
         if self.workflow.phase is JobPhase.WAITING_HANDOVER and not return_mode:
             accepted = self.workflow.reassign(
@@ -356,9 +385,14 @@ class FleetNode(Node):
         # 엉뚱한 자리에서 후진하는 것이 가만히 있는 것보다 나쁘다.
         narrow_detail = ''
         if narrow_zone is not None and nav_result.status == 4:
-            ran, narrow_detail = await self._run_narrow_plan(
-                NarrowZonePlan(narrow_zone, leaving=False)
-            )
+            if narrow_zone.marker_id is not None:
+                ran, narrow_detail = await self._run_marker_dock(
+                    narrow_zone.marker_id, goal
+                )
+            else:
+                ran, narrow_detail = await self._run_narrow_plan(
+                    NarrowZonePlan(narrow_zone, leaving=False)
+                )
             if not ran:
                 self._publish_event(
                     goal, TaskEvent.EVENT_FAILED, narrow_detail,
@@ -582,6 +616,23 @@ class FleetNode(Node):
 
     def _stop_narrow_drive(self) -> None:
         self.narrow_cmd_pub.publish(Twist())
+
+    async def _run_marker_dock(self, marker_id: str, transport_goal) -> tuple[bool, str]:
+        """ArUco action server가 정렬·180도 회전·후진을 모두 끝낼 때까지 기다린다."""
+        if not self.dock_client.wait_for_server(timeout_sec=2.0):
+            return False, 'marker dock action server가 없다'
+        request = Dock.Goal()
+        request.job_id = transport_goal.task_context.job_id
+        request.job_step_id = transport_goal.task_context.command_id
+        request.marker_id = marker_id
+        handle = await self.dock_client.send_goal_async(request)
+        if not handle.accepted:
+            return False, f'ArUco marker {marker_id} 도킹 요청이 거절됐다'
+        wrapped = await handle.get_result_async()
+        dock_result = wrapped.result
+        if not dock_result.success:
+            return False, f'ArUco 도킹 실패({dock_result.code}): {dock_result.message}'
+        return True, dock_result.message
 
     async def _run_narrow_plan(self, plan: NarrowZonePlan) -> tuple[bool, str]:
         """시퀀스를 스텝 하나씩 실행한다. 되먹임이 없으므로 중단 조건이 안전의 전부다."""

@@ -115,3 +115,26 @@ def test_inmemory_rejects_same_packing_and_charger_location() -> None:
     with pytest.raises(ResourceAssignmentConflict, match="PACKING_DOCK_CHARGER_MUST_DIFFER"):
         repository.assign_job_resources(job_id, changed)
 
+
+def test_inmemory_reserves_each_zone_workcell_and_assigns_frozen_arm_step() -> None:
+    """혼합 주문은 OMX_01·OMX_02를 모두 예약하고 냉동 step은 OMX_02에 보낸다."""
+    repository = InMemoryFmsRepository()
+    job_id = repository.create_job(
+        {
+            "job_code": "MIXED-ZONE",
+            "operation_type": "outbound",
+            "priority": "normal",
+            "context": {"source": "public_product_order"},
+            "steps": [
+                {"step_no": 10, "action_type": "pick", "executor_type": "arm", "target_location_id": 1, "input": {"omx_id": "OMX_01"}},
+                {"step_no": 20, "action_type": "pick", "executor_type": "arm", "target_location_id": 2, "input": {"omx_id": "OMX_02"}},
+            ],
+        }
+    )["job_id"]
+
+    repository.assign_job_resources(job_id, ASSIGNMENT)
+
+    assert repository._reserved_assignment_resources["OMX_01"] == job_id
+    assert repository._reserved_assignment_resources["OMX_02"] == job_id
+    steps = repository.get_job(job_id)["steps"]
+    assert [step["assigned_device_id"] for step in steps] == ["OMX_01", "OMX_02"]

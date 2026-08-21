@@ -60,6 +60,15 @@ fi
 MAP_NAME="$(basename "$NAV2_MAP" .yaml)"
 echo "[up] 지도: $MAP_NAME  ($NAV2_MAP)"
 
+# Nav2 지도와 RMF graph waypoint는 반드시 같은 지도 좌표계여야 한다. 기본 파일은
+# trihouse_map_01에서 측정한 값이므로 new_map_2를 선택했을 때 fallback하지 않는다.
+FEATURES_FILE="control_ui/rmf_control_ui/data/import/trihouse_test_01_physical_features.${MAP_NAME}.jsonl"
+if [[ ! -f "$FEATURES_FILE" ]]; then
+  echo "[up] 지도 '$MAP_NAME' 전용 waypoint 파일이 없습니다: $FEATURES_FILE" >&2
+  echo "     scripts/rebuild_new_map_2.py 등으로 해당 지도 좌표계를 준비하세요." >&2
+  exit 1
+fi
+
 # 아래 줄 이음(\) 사이에 주석을 끼워 넣지 말 것. `\` 다음 줄이 `#` 로 시작하면
 # 거기서 명령이 끝나 `env` 가 환경변수만 출력하고 bringup 이 실행되지 않는다.
 
@@ -67,6 +76,7 @@ setsid nohup env \
   TRIHOUSE_MAP_REVISION="$REVISION" \
   TRIHOUSE_ROBOTS=PK_01 \
   TRIHOUSE_NAV2_MAP="$NAV2_MAP" \
+  PHYSICAL_FEATURES_FILE="$FEATURES_FILE" \
   ROS_DOMAIN_ID=0 \
   control_tower/bringup/p0_simulation_bringup.sh > /tmp/sim.log 2>&1 &
 disown
