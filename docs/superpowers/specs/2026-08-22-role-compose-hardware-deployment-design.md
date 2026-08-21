@@ -156,8 +156,8 @@ RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 FASTDDS_BUILTIN_TRANSPORTS=UDPv4
 
 # [lan]
-CONTROL_4060_IP=192.168.0.40
-AI_5080_IP=192.168.0.50
+CONTROL_4060_IP=192.168.0.9
+AI_5080_IP=192.168.0.7
 FMS_API_PORT=8080
 FMS_TCP_PORT=8788
 MEDIAMTX_RTSP_PORT=8554
@@ -183,16 +183,16 @@ FMS_API_HOST=0.0.0.0
 FMS_TCP_BIND=0.0.0.0
 CONTROL_UI_HOST=0.0.0.0
 CONTROL_UI_PORT=3100
-EDGE_BIND_ADDRESS=192.168.0.40
+EDGE_BIND_ADDRESS=192.168.0.9
 RMF_DASHBOARD_PORT=3000
 
 # [control-4060/media]
 MTX_VIEWER_PASS=change_me_viewer
-PINKY_PK_01_IP=192.168.0.11
-PINKY_PK_02_IP=192.168.0.12
+PINKY_PK_01_IP=192.168.0.21
+PINKY_PK_02_IP=192.168.0.22
 OMX_PC_01_IP=192.168.0.31
 OMX_PC_02_IP=192.168.0.32
-PC1_PUBLISHER_IP=192.168.0.40
+PC1_PUBLISHER_IP=192.168.0.9
 TRIHOUSE_VIDEO_DIR=/srv/trihouse/video
 TRIHOUSE_RECORD_SEGMENT_DURATION=60s
 TRIHOUSE_RECORD_DELETE_AFTER=168h
@@ -211,8 +211,8 @@ LAN 주소 또는 `0.0.0.0`에 bind한다. 방화벽은 같은 운영 subnet만 
 
 ```dotenv
 # [ai-5080/endpoints]
-FMS_GATEWAY_URL=http://192.168.0.40:8080
-VISION_RTSP_BASE_URL=rtsp://viewer:change_me_viewer@192.168.0.40:8554
+FMS_GATEWAY_URL=http://192.168.0.9:8080
+VISION_RTSP_BASE_URL=rtsp://viewer:change_me_viewer@192.168.0.9:8554
 
 # [ai-5080/runtime]
 TRIHOUSE_AI_IMAGE=trihouse_ai_5080:env
@@ -238,14 +238,16 @@ read-only로 마운트하고 `VISION_RTSP_BASE_URL` 뒤에 registry의 역할 �
 # [pinky/identity]
 DEVICE_ID=PK_01
 ROS_NAMESPACE=pinky_01
-ROBOT_LAN_IP=192.168.0.11
+ROBOT_LAN_IP=192.168.0.21
 
 # [pinky/control]
-FMS_GATEWAY_URL=http://192.168.0.40:8080
-FMS_TCP_HOST=192.168.0.40
+FMS_GATEWAY_URL=http://192.168.0.9:8080
+FMS_TCP_HOST=192.168.0.9
 MAP_NAME=trihouse_test_01
 MAP_REVISION=trihouse_test_01:approved_revision
-NAV2_MAP_FILE=/opt/trihouse/maps/trihouse_test_01/map.yaml
+PINKY_MAP_DIR=/home/newuser/Trihouse/pinky_pro/pinky_navigation/map
+NAV2_MAP_FILE=/opt/trihouse/maps/new_map_2.yaml
+NAV2_MAP_IMAGE=/opt/trihouse/maps/new_map_2.pgm
 NAV2_PARAMS_FILE=/opt/trihouse/config/nav2/pinky_01.yaml
 NARROW_ZONES_FILE=/opt/trihouse/config/narrow_zones.yaml
 MARKER_DOCKS_FILE=/opt/trihouse/config/marker_docks.yaml
@@ -256,14 +258,17 @@ PINKY_SERIAL_DEVICE=/dev/ttyUSB0
 
 # [pinky/media]
 CAMERA_ID=CAM-PK-01
-RTSP_PUBLISH_URL=rtsp://192.168.0.40:8554/pinky/CAM-PK-01
+RTSP_PUBLISH_URL=rtsp://192.168.0.9:8554/pinky/CAM-PK-01
 CAMERA_WIDTH=1280
 CAMERA_HEIGHT=720
 CAMERA_FPS=15
 ```
 
-`MAP_REVISION`의 예시 문자열은 hardware에서 허용되는 값이 아니다. Gateway가
-발행한 실제 revision과 지도 파일을 bootstrap 단계에서 내려받아 채워야 한다.
+`PINKY_MAP_DIR`는 Raspberry Pi 호스트에 실제로 존재하는 디렉터리다. Compose는 이
+디렉터리를 컨테이너의 `/opt/trihouse/maps`에 read-only로 bind mount한다. 따라서
+`NAV2_MAP_FILE`과 YAML이 참조하는 PGM은 컨테이너 경로를 사용한다. `MAP_REVISION`의
+예시 문자열은 hardware에서 허용되는 값이 아니다. 현재 지도 파일의 SHA-256과
+Gateway에 발행된 실제 revision을 대조한 뒤 실제 revision을 채운다.
 
 ### 5. OMX PC 구간
 
@@ -277,7 +282,7 @@ PAIRED_PINKY_ID=PK_01
 ROBOT_LAN_IP=192.168.0.31
 
 # [omx/control]
-FMS_GATEWAY_URL=http://192.168.0.40:8080
+FMS_GATEWAY_URL=http://192.168.0.9:8080
 OMX_SERIAL_DEVICE=/dev/ttyUSB0
 OMX_JOINT_STATE_TOPIC=joint_states
 OMX_GRIPPER_ACK_TOPIC=gripper/ack
@@ -287,7 +292,7 @@ OMX_PAYLOAD_LIMIT_KG=0.5
 # [omx/media]
 OMX_CAMERA_DEVICE=/dev/video0
 CAMERA_ID=CAM-OMX-01-WRIST
-RTSP_PUBLISH_URL=rtsp://192.168.0.40:8554/omx/CAM-OMX-01-WRIST
+RTSP_PUBLISH_URL=rtsp://192.168.0.9:8554/omx/CAM-OMX-01-WRIST
 CAMERA_WIDTH=1280
 CAMERA_HEIGHT=720
 CAMERA_FPS=15
@@ -371,6 +376,121 @@ runbook은 전체 LAN에서 한 mode만 사용하도록 명시한다.
   검사한다.
 
 물리 이동 명령, 주문 생성, DB 쓰기, 컨테이너 시작과 장치 reset은 doctor에서 금지한다.
+
+## `.env` 실제 값을 찾는 명령
+
+각 명령은 해당 역할 PC에서 실행한다. 탐색 명령은 읽기 전용이며 장치를 움직이지
+않는다.
+
+### LAN 주소와 공유기 연결
+
+```bash
+ip -br -4 address show
+ip route
+ip route get 192.168.0.9
+ping -c 3 192.168.0.9
+```
+
+`ip -br`에서 공유기에 연결된 interface의 `192.168.0.x/24`가 그 호스트의
+`ROBOT_LAN_IP`, `CONTROL_4060_IP` 또는 `AI_5080_IP`다. 첨부된 공유기 명부의 확정
+주소는 다음과 같다.
+
+| 역할 | 예약할 주소 |
+|---|---|
+| `ai-5080` | `192.168.0.7` |
+| `control-4060` | `192.168.0.9` |
+| `pinky-01` | `192.168.0.21` |
+| `pinky-02` | `192.168.0.22` |
+| `omx-01` | `192.168.0.31` |
+| `omx-02` | `192.168.0.32` |
+
+위 여섯 주소는 공유기에서 MAC별 DHCP 예약이 완료된 운영 정본이다. bootstrap은
+해당 역할 PC의 실제 interface 주소가 예약값과 일치하는지 검사한다. 장비 교체로 MAC이
+달라지면 `.env`를 임의로 바꾸기 전에 공유기의 DHCP 예약부터 갱신한다.
+
+### 카메라 장치
+
+```bash
+v4l2-ctl --list-devices
+ls -l /dev/v4l/by-id/
+v4l2-ctl --device /dev/video0 --all
+v4l2-ctl --device /dev/video0 --list-formats-ext
+udevadm info --query=property --name=/dev/video0
+```
+
+가능하면 재부팅 때 번호가 달라질 수 있는 `/dev/video0` 대신
+`/dev/v4l/by-id/<장치명>`을 `.env`에 기록한다. H.264 지원 여부와 해상도/FPS는
+`--list-formats-ext` 결과로 정한다.
+
+### Pinky·OMX serial 장치
+
+```bash
+ls -l /dev/serial/by-id/
+udevadm info --query=property --name=/dev/ttyUSB0
+id
+getent group dialout
+```
+
+serial도 `/dev/serial/by-id/<장치명>`을 우선 사용한다. 현재 사용자가 `dialout`
+그룹에 없으면 bootstrap은 실패 이유와 필요한 관리자 명령을 출력하되 자동으로
+권한을 바꾸지 않는다.
+
+### Pinky 지도
+
+```bash
+realpath /home/newuser/Trihouse/pinky_pro/pinky_navigation/map
+test -r /home/newuser/Trihouse/pinky_pro/pinky_navigation/map/new_map_2.yaml
+test -r /home/newuser/Trihouse/pinky_pro/pinky_navigation/map/new_map_2.pgm
+sha256sum \
+  /home/newuser/Trihouse/pinky_pro/pinky_navigation/map/new_map_2.yaml \
+  /home/newuser/Trihouse/pinky_pro/pinky_navigation/map/new_map_2.pgm
+sed -n '1,40p' \
+  /home/newuser/Trihouse/pinky_pro/pinky_navigation/map/new_map_2.yaml
+```
+
+YAML의 `image:`가 `new_map_2.pgm` 또는 같은 디렉터리에서 해석되는 상대 경로인지
+확인한다. 두 파일은 같은 read-only mount에 있어야 한다.
+
+### RTX 5080 GPU와 4060 endpoint
+
+```bash
+nvidia-smi
+docker version
+docker compose version
+curl --fail http://192.168.0.9:8080/ready
+ffprobe -v error -rtsp_transport tcp \
+  -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate \
+  -of default=noprint_wrappers=1 \
+  'rtsp://viewer:<실제비밀번호>@192.168.0.9:8554/pinky/CAM-PK-01'
+```
+
+비밀번호가 포함된 실제 RTSP URL을 shell history, 문서 또는 로그에 남기지 않는다.
+실행할 때는 read-only `.env`에서 불러오거나 일시적인 shell 변수로 전달한다.
+
+### ROS 2 domain과 graph
+
+```bash
+printenv ROS_DOMAIN_ID
+ros2 node list
+ros2 topic list | sort
+ros2 topic echo --once /pinky_01/trihouse/status
+ros2 action info /pinky_01/trihouse/transport/execute
+```
+
+모든 호스트에서 첫 명령은 `12`여야 한다. Pinky status의 `robot_id`는 namespace가
+아니라 `PK_01` 또는 `PK_02`여야 한다.
+
+## `.env`와 `.env.example`의 수명주기
+
+- `.env.example`: Git에 포함되는 팀 공용 스키마와 설명이다. 삭제하지 않는다.
+- `.env`: 각 PC의 실제 값과 비밀을 담으며 `.gitignore`에 의해 Git에서 제외된다.
+- Compose는 `${VARIABLE}`을 해석할 때 `.env`를 읽고, `control_stack`은 역할·mode와
+  preflight에 같은 파일을 사용한다.
+- 코드가 모든 환경값을 `.env`에서 읽는 것은 아니다. 바뀌지 않는 정책과 업무 규칙은
+  코드/config에 남고, 호스트마다 달라지는 주소·경로·ID·비밀·image tag만 `.env`에
+  둔다.
+- `.env.example`이 바뀌면 각 호스트의 `.env`를 대조하되 실제 비밀번호를 저장소로
+  복사하지 않는다.
 
 ## 테스트 전략
 
