@@ -214,6 +214,7 @@ def _handle_dispatch(
     episode_steps: int,
     fps: float,
     debug_gripper: bool,
+    policy_runtime_module=None,
 ) -> None:
     if dispatch.executor_type != "arm" or dispatch.action_type != ARM_ACTION_TYPE:
         print(
@@ -286,6 +287,7 @@ def _handle_dispatch(
         is_first_order=False,
         gateway=gateway,
         worker_id=WORKER_ID,
+        policy_runtime_module=policy_runtime_module,
     )
 
 
@@ -299,6 +301,7 @@ def _run_cycle(
     episode_steps: int,
     fps: float,
     debug_gripper: bool,
+    policy_runtime_module=None,
 ) -> bool:
     """한 사이클: dispatch 최대 하나 클레임 → 처리. 클레임된 게 있었으면 True."""
     dispatches = gateway.claim_executor_dispatches(
@@ -316,6 +319,7 @@ def _run_cycle(
         episode_steps=episode_steps,
         fps=fps,
         debug_gripper=debug_gripper,
+        policy_runtime_module=policy_runtime_module,
     )
     return True
 
@@ -333,6 +337,7 @@ def run_poll_loop(
     poll_interval_s: float,
     once: bool,
     shutdown: ShutdownSignal,
+    policy_runtime_module=None,
 ) -> None:
     """executor_worker_node.py의 run_poll_loop와 같은 철학.
 
@@ -352,6 +357,7 @@ def run_poll_loop(
                 episode_steps=episode_steps,
                 fps=fps,
                 debug_gripper=debug_gripper,
+                policy_runtime_module=policy_runtime_module,
             )
         except Exception as error:  # noqa: BLE001
             print(f"[job_loop] cycle failed: {error}")
@@ -398,6 +404,14 @@ def run(args: argparse.Namespace) -> None:
     bench_ = bench.Bench()
     shutdown = ShutdownSignal.installed()
 
+    policy_runtime_module = None
+    if args.remote_infer_url:
+        import remote_policy_runtime
+
+        remote_policy_runtime.configure(base_url=args.remote_infer_url, timeout_s=args.remote_infer_timeout_s)
+        policy_runtime_module = remote_policy_runtime
+        print(f"[policy] 원격 추론 사용: {args.remote_infer_url}")
+
     with robot_session.RobotSession(robot) as connected_robot:
         dataset_features = policy_runtime.build_dataset_features(connected_robot)
         run_poll_loop(
@@ -412,6 +426,7 @@ def run(args: argparse.Namespace) -> None:
             poll_interval_s=args.poll_interval_s,
             once=args.once,
             shutdown=shutdown,
+            policy_runtime_module=policy_runtime_module,
         )
 
     print("\n" + bench_.summary())
@@ -456,6 +471,18 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--debug-gripper", action="store_true",
         help="매 스텝마다 그리퍼 Present_Current/Present_Position을 콘솔에 실시간 출력.",
+    )
+    parser.add_argument(
+        "--remote-infer-url",
+        default=None,
+        help="주어지면 정책 추론을 로컬 GPU 대신 이 URL(remote_infer_server.py)로 원격 실행한다. "
+             "GPU 없는 PC(예: OMX_01)에서 씀 — 안 주면(기본값) 지금까지처럼 로컬에서 추론.",
+    )
+    parser.add_argument(
+        "--remote-infer-timeout-s",
+        type=float,
+        default=5.0,
+        help="--remote-infer-url 요청 타임아웃(초). 넘기면 재시도 없이 즉시 실패(fail-closed).",
     )
     return parser
 

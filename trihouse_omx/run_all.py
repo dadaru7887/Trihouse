@@ -102,6 +102,8 @@ def _build_children(args: argparse.Namespace) -> list[_Child]:
     ]
     if args.front_cam:
         job_loop_cmd += ["--front-cam", args.front_cam]
+    if args.remote_infer_url:
+        job_loop_cmd += ["--remote-infer-url", args.remote_infer_url, "--remote-infer-timeout-s", str(args.remote_infer_timeout_s)]
 
     stream_cmd = [
         args.system_python, str(_HERE / "stream_wrist_camera.py"),
@@ -163,6 +165,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--system-python", default=DEFAULT_SYSTEM_PYTHON, help=f"stream_wrist_camera.py용 시스템 파이썬. 기본 {DEFAULT_SYSTEM_PYTHON}")
     parser.add_argument("--startup-delay-s", type=float, default=DEFAULT_STARTUP_DELAY_S)
     parser.add_argument("--restart-backoff-s", type=float, default=DEFAULT_RESTART_BACKOFF_S)
+    parser.add_argument(
+        "--remote-infer-url",
+        default=None,
+        help="주어지면 job_loop.py --remote-infer-url로 그대로 전달(GPU 없는 PC용 원격 추론). "
+             "안 주면(기본값) job_loop.py가 지금처럼 로컬에서 추론.",
+    )
+    parser.add_argument("--remote-infer-timeout-s", type=float, default=5.0, help="job_loop.py --remote-infer-timeout-s에 그대로 넘김")
     return parser
 
 

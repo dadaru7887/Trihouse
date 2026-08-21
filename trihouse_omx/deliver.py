@@ -106,6 +106,7 @@ def run_item(
     fps: float,
     bench_: bench.Bench,
     debug_gripper: bool = False,
+    policy_runtime_module=None,
 ) -> ItemVerdict:
     """정책 하나를 실행해 물체 하나를 pick+place한다.
 
@@ -115,7 +116,14 @@ def run_item(
     또 움직이기 시작하는 게 실물로 확인됐다 — 그래서 파지 후 그리퍼가 다시
     열려 물건을 놓았다고 확인되는 순간(release confirmed) 바로 루프를 끝내고
     다음 아이템으로 넘어간다.
+
+    policy_runtime_module: 안 주면(기본값) 이 파일 맨 위에서 import한 실제
+    policy_runtime(로컬 GPU 추론)을 쓴다. OMX_01처럼 GPU가 없는 PC에서는
+    remote_policy_runtime(5080 원격 추론, 같은 이름의 함수 4개를 제공)을
+    넘기면 된다 — 이 함수의 나머지 로직(파지/해제 판정, fail-closed 등)은
+    완전히 그대로다.
     """
+    pr = policy_runtime_module or policy_runtime
     entry = policy_catalog.lookup(item.product_code, zone=zone)
     control_interval_s = 1.0 / fps
 
@@ -128,13 +136,13 @@ def run_item(
     release_debounce = grasp_check.Debouncer()
 
     with bench_.measure(order_id=order_id, product_code=item.product_code, is_first_order=is_first_order) as tick:
-        loaded = policy_runtime.load_policy(entry.policy_repo_id)
+        loaded = pr.load_policy(entry.policy_repo_id)
         loaded.reset()
         tick("policy_loaded")
 
         for step in range(episode_steps):
             loop_start = time.perf_counter()
-            action = policy_runtime.infer_step(robot, loaded, dataset_features, task=entry.label_ko)
+            action = pr.infer_step(robot, loaded, dataset_features, task=entry.label_ko)
             robot.send_action(action)
             if step == 0:
                 tick("first_action")
@@ -204,6 +212,7 @@ def run_order(
     is_first_order: bool = False,
     gateway=None,
     worker_id: str = "trihouse-omx",
+    policy_runtime_module=None,
 ) -> None:
     """주문 하나(핑키 대기 → 품목별 pick+place → 완료 보고)를 끝까지 처리한다.
 
@@ -213,7 +222,8 @@ def run_order(
 
     gateway/worker_id는 outcome_report.report_outcome에 그대로 넘긴다 — CLI
     경로(job_loop.py를 거치지 않는 run(args))는 안 주므로 기존과 동일하게 로컬
-    JSONL만 남긴다.
+    JSONL만 남긴다. policy_runtime_module은 run_item()에 그대로 전달한다
+    (로컬/원격 추론 선택 — run_item()의 docstring 참고).
     """
     print(f"\n=== order {order.order_id} (job_step_id={order.job_step_id}) ===")
 
@@ -252,6 +262,7 @@ def run_order(
             fps=fps,
             bench_=bench_,
             debug_gripper=debug_gripper,
+            policy_runtime_module=policy_runtime_module,
         )
         item_results.append((item, verdict))
         print(
@@ -345,6 +356,14 @@ def run(args: argparse.Namespace) -> None:
         orders = mock_inputs.default_deliver_queue(args.zone)
     bench_ = bench.Bench()
 
+    policy_runtime_module = None
+    if args.remote_infer_url:
+        import remote_policy_runtime
+
+        remote_policy_runtime.configure(base_url=args.remote_infer_url, timeout_s=args.remote_infer_timeout_s)
+        policy_runtime_module = remote_policy_runtime
+        print(f"[policy] 원격 추론 사용: {args.remote_infer_url}")
+
     with robot_session.RobotSession(robot) as connected_robot:
         dataset_features = policy_runtime.build_dataset_features(connected_robot)
 
@@ -359,6 +378,7 @@ def run(args: argparse.Namespace) -> None:
                 bench_=bench_,
                 debug_gripper=args.debug_gripper,
                 is_first_order=order_index == 0,
+                policy_runtime_module=policy_runtime_module,
             )
 
     print("\n" + bench_.summary())
@@ -429,6 +449,18 @@ def _parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="--order로 만든 모든 주문의 핑키 도착을 이만큼 지연 (0=즉시 도착, 안전 게이트 테스트용)",
+    )
+    parser.add_argument(
+        "--remote-infer-url",
+        default=None,
+        help="주어지면 정책 추론을 로컬 GPU 대신 이 URL(remote_infer_server.py)로 원격 실행한다. "
+             "GPU 없는 PC(예: OMX_01)에서 씀 — 안 주면(기본값) 지금까지처럼 로컬에서 추론.",
+    )
+    parser.add_argument(
+        "--remote-infer-timeout-s",
+        type=float,
+        default=5.0,
+        help="--remote-infer-url 요청 타임아웃(초). 넘기면 재시도 없이 즉시 실패(fail-closed).",
     )
     return parser
 

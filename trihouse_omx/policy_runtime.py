@@ -12,7 +12,10 @@ robot.observation_features/action_features만으로 같은 모양의 features �
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
+
+import torch
 
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.pipeline_features import (
@@ -26,7 +29,7 @@ from lerobot.policies.utils import make_robot_action
 from lerobot.processor import make_default_processors
 from lerobot.robots.omx_follower import OmxFollower
 from lerobot.utils.constants import OBS_STR
-from lerobot.utils.control_utils import predict_action
+from lerobot.utils.control_utils import predict_action, prepare_observation_for_inference
 from lerobot.utils.utils import get_safe_torch_device
 
 
@@ -104,3 +107,35 @@ def infer_step(
         robot_type=robot.robot_type,
     )
     return make_robot_action(action_values, dataset_features)
+
+
+def infer_chunk(
+    observation_frame: dict,
+    loaded: LoadedPolicy,
+    *,
+    task: str,
+    robot_type: str,
+) -> list[list[float]]:
+    """infer_step()의 "서버 쪽" 버전 — remote_infer_server.py가 쓴다.
+
+    select_action()(큐에서 하나씩만 꺼내주는 것) 대신 predict_action_chunk()를
+    직접 불러서 청크 전체(기본 100개)를 한 번에 받는다. robot 객체가 필요 없다
+    — 카메라는 호출자(원격 클라이언트) 쪽에만 있으므로, 이미 만들어진 numpy
+    observation_frame(build_dataset_frame()이 만드는 것과 같은 모양)만 받는다.
+
+    반환값은 make_robot_action() 이전의 raw float 값들이다 — 이름-값 매핑에
+    필요한 dataset_features는 클라이언트만 갖고 있으므로, 그 변환은 클라이언트
+    쪽(infer_step()이 이미 하듯)에서 한다.
+    """
+    device = get_safe_torch_device(loaded.policy.config.device)
+    with torch.inference_mode(), (
+        torch.autocast(device_type=device.type)
+        if device.type == "cuda" and loaded.policy.config.use_amp
+        else nullcontext()
+    ):
+        observation = prepare_observation_for_inference(dict(observation_frame), device, task, robot_type)
+        observation = loaded.preprocessor(observation)
+        chunk = loaded.policy.predict_action_chunk(observation)
+        chunk = chunk[:, : loaded.policy.config.n_action_steps]
+        steps = [loaded.postprocessor(chunk[:, i]) for i in range(chunk.shape[1])]
+    return [step.squeeze(0).to("cpu").tolist() for step in steps]
