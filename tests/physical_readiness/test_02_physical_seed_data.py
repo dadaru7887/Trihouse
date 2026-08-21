@@ -28,6 +28,17 @@ EXPECTED_INVENTORY_LOTS = {
     "LOT-FRZ-ICEBAR-001",
     "LOT-FRZ-ICECONE-001",
 }
+EXPECTED_MEASURED_WAYPOINTS = {
+    "charging_station_01": (0.0570244747, 0.1949666005, 0.1093261667),
+    "charging_station_02": (0.1336554086, -0.0065562838, 0.1569596446),
+    "charging_station_narrow_exit": (0.7992961442, 0.0854053105, 0.0923642279),
+    "frozen_storage_narrow_entry": (1.1792881155, -1.1896842748, 0.0109381190),
+    "frozen_storage_loading_dock_01": (1.3314581184, -0.8149269956, -1.57214),
+}
+EXPECTED_BOTTLENECKS = {
+    "bottleneck_zone_01": (0.8950655337, -0.1263644716, "bottleneck_01"),
+    "bottleneck_zone_02": (0.3313029472, -0.7861488338, "bottleneck_02"),
+}
 
 
 def _records() -> list[dict]:
@@ -55,13 +66,13 @@ def _sql_number(value: float) -> str:
 def test_physical_feature_source_uses_new_map_2_as_its_operating_map() -> None:
     records = _records()
 
-    assert len(records) == 13
+    assert len(records) == 15
     assert {record["target_map_name"] for record in records} == {"new_map_2"}
 
 
 def test_both_seeds_copy_all_measured_waypoint_poses_from_new_map_2() -> None:
     waypoints = [record for record in _records() if record["record_type"] == "waypoint"]
-    assert len(waypoints) == 8
+    assert len(waypoints) == 10
 
     for seed_path in SEED_PATHS:
         sql = seed_path.read_text(encoding="utf-8")
@@ -78,6 +89,38 @@ def test_both_seeds_copy_all_measured_waypoint_poses_from_new_map_2() -> None:
                 f"{seed_path.name} does not match {waypoint['location_code']}"
             )
         assert sql.count("'new_map_2'") >= len(waypoints)
+
+
+def test_new_measurements_replace_operating_points_without_renaming_db_ids() -> None:
+    records = _records()
+    waypoints = {
+        record["source_id"]: record
+        for record in records
+        if record["record_type"] == "waypoint"
+    }
+    bottlenecks = {
+        record["source_id"]: record
+        for record in records
+        if record["record_type"] == "bottleneck"
+    }
+
+    for source_id, expected in EXPECTED_MEASURED_WAYPOINTS.items():
+        pose = waypoints[source_id]["map_pose"]
+        assert (pose["x"], pose["y"], pose["yaw"]) == expected
+        assert re.fullmatch(r"[a-z][a-z0-9_]*", source_id)
+        assert re.fullmatch(
+            r"[a-z][a-z0-9_]*", waypoints[source_id]["rmf_waypoint_name"]
+        )
+
+    for source_id, expected in EXPECTED_BOTTLENECKS.items():
+        record = bottlenecks[source_id]
+        assert (
+            record["map_pose"]["x"],
+            record["map_pose"]["y"],
+            record["mutex_group"],
+        ) == expected
+        assert re.fullmatch(r"[a-z][a-z0-9_]*", source_id)
+        assert re.fullmatch(r"[a-z][a-z0-9_]*", record["mutex_group"])
 
 
 def test_physical_waypoints_reuse_parent_ids_without_reading_the_insert_target() -> None:

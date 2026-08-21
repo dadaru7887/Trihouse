@@ -118,7 +118,9 @@ def test_new_map_2_has_calibrated_egress_plans_for_both_chargers() -> None:
         assert [kind for kind, _ in zone.exit] == [STRAIGHT, ROTATE, STRAIGHT]
         assert zone.exit[0][1] > 0.40
         assert zone.exit[-1][1] > 0.30
-        assert zone.exit_target == pytest.approx((0.841, -0.111, zone.exit[1][1]))
+        assert zone.exit_target == pytest.approx(
+            (0.7992961442, 0.0854053105, 0.0923642279)
+        )
 
 
 def test_new_map_2_frozen_rule_uses_the_measured_entry_and_exact_dock_yaw() -> None:

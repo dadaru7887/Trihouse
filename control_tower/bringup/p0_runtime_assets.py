@@ -46,8 +46,12 @@ LANE_TOPOLOGY: tuple[tuple[str, str], ...] = (
     ("chilled_storage_loading_dock_01", "TRIHOUSE-TEST-01-BOTTLENECK-01"),
     ("frozen_storage_loading_dock_01", "TRIHOUSE-TEST-01-BOTTLENECK-01"),
     ("TRIHOUSE-TEST-01-BOTTLENECK-01", "TRIHOUSE-TEST-01-BOTTLENECK-02"),
-    ("TRIHOUSE-TEST-01-BOTTLENECK-01", "charging_station_01"),
-    ("TRIHOUSE-TEST-01-BOTTLENECK-01", "charging_station_02"),
+    # EN: Both charging bays must finish their local narrow-exit sequence before
+    # entering the shared RMF graph. KO: 두 충전 베이는 로컬 협로 탈출을 끝낸 뒤
+    # 공통 탈출점에서만 RMF 경로에 합류한다.
+    ("TRIHOUSE-TEST-01-BOTTLENECK-01", "charging_station_narrow_exit"),
+    ("charging_station_narrow_exit", "charging_station_01"),
+    ("charging_station_narrow_exit", "charging_station_02"),
     ("TRIHOUSE-TEST-01-BOTTLENECK-02", "packing_station_loading_dock_01"),
     ("TRIHOUSE-TEST-01-BOTTLENECK-02", "packing_station_loading_dock_02"),
     ("TRIHOUSE-TEST-01-BOTTLENECK-02", "safety_zone_01"),

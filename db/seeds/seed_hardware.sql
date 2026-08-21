@@ -88,7 +88,15 @@ VALUES
   (NULL, 'TRIHOUSE-TEST-01-CHG-02', 'Pinky Charging Station 02', 'charger',
    'charging', NULL, 'new_map_2', 'charging_station_02',
    0.1336554086, -0.0065562838, 0.1569596446, 'available',
-   JSON_OBJECT('coordinate_source', 'trihouse_test_01_physical_features.new_map_2.jsonl', 'provisional', true))
+   JSON_OBJECT('coordinate_source', 'trihouse_test_01_physical_features.new_map_2.jsonl', 'provisional', true)),
+  (NULL, 'TRIHOUSE-TEST-01-CHG-EXIT', 'Charging Station Narrow Exit', 'staging',
+   'charging', NULL, 'new_map_2', 'charging_station_narrow_exit',
+   0.7992961442, 0.0854053105, 0.0923642279, 'available',
+   JSON_OBJECT('coordinate_source', 'waypoint.md', 'provisional', false)),
+  (@wh_frz_id, 'WH-FRZ-01-NARROW-ENTRY', 'Frozen Storage Narrow Entry', 'staging',
+   'frozen', 'frozen', 'new_map_2', 'frozen_storage_narrow_entry',
+   1.1792881155, -1.1896842748, 0.010938119, 'available',
+   JSON_OBJECT('coordinate_source', 'waypoint.md', 'provisional', false))
 ON DUPLICATE KEY UPDATE
   parent_location_id = VALUES(parent_location_id),
   name = VALUES(name),

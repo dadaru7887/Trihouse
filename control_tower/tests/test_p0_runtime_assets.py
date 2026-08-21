@@ -21,6 +21,10 @@ FEATURES = (
     ROOT / "control_ui" / "rmf_control_ui" / "data" / "import"
     / "trihouse_test_01_physical_features.jsonl"
 )
+NEW_MAP_2_FEATURES = (
+    ROOT / "control_ui" / "rmf_control_ui" / "data" / "import"
+    / "trihouse_test_01_physical_features.new_map_2.jsonl"
+)
 
 
 def _module():
@@ -85,6 +89,51 @@ def test_a_missing_charger_record_stops_the_bringup(tmp_path: Path) -> None:
 
     with pytest.raises(SystemExit):
         module.charger_pose({}, "PK_01")
+
+
+def test_new_map_2_routes_both_chargers_through_the_measured_departure() -> None:
+    """A direct charger-to-bottleneck lane would skip the mandatory narrow exit."""
+    module = _module()
+    waypoints, bottlenecks = module.load_features(NEW_MAP_2_FEATURES)
+    level = yaml.safe_load(
+        module.build_nav_graph("new_map_2", waypoints, bottlenecks)
+    )["levels"]["L1"]
+    names = [vertex[2]["name"] for vertex in level["vertices"]]
+    edges = {
+        (names[lane[0]], names[lane[1]])
+        for lane in level["lanes"]
+    }
+
+    expected = {
+        ("charging_station_01", "charging_station_narrow_exit"),
+        ("charging_station_02", "charging_station_narrow_exit"),
+        ("charging_station_narrow_exit", "TRIHOUSE-TEST-01-BOTTLENECK-01"),
+    }
+    assert expected <= edges
+    assert (
+        "charging_station_01",
+        "TRIHOUSE-TEST-01-BOTTLENECK-01",
+    ) not in edges
+    assert (
+        "charging_station_02",
+        "TRIHOUSE-TEST-01-BOTTLENECK-01",
+    ) not in edges
+
+
+def test_new_map_2_keeps_two_independent_mutex_groups_at_measured_centres() -> None:
+    module = _module()
+    waypoints, bottlenecks = module.load_features(NEW_MAP_2_FEATURES)
+    level = yaml.safe_load(
+        module.build_nav_graph("new_map_2", waypoints, bottlenecks)
+    )["levels"]["L1"]
+    vertices = {vertex[2]["name"]: vertex for vertex in level["vertices"]}
+
+    first = vertices["TRIHOUSE-TEST-01-BOTTLENECK-01"]
+    second = vertices["TRIHOUSE-TEST-01-BOTTLENECK-02"]
+    assert first[:2] == [0.8950655337, -0.1263644716]
+    assert first[2]["mutex_group"] == "bottleneck_01"
+    assert second[:2] == [0.3313029472, -0.7861488338]
+    assert second[2]["mutex_group"] == "bottleneck_02"
 
 
 def test_the_derived_parameters_carry_the_initial_pose(tmp_path: Path) -> None:

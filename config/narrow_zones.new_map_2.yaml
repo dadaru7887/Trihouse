@@ -63,7 +63,7 @@ zones:
       - [straight, 0.680]
       - [rotate, -1.276]
       - [straight, 0.345]
-    exit_target: { x: 0.841, y: -0.111, yaw: -1.276 }
+    exit_target: { x: 0.7992961442, y: 0.0854053105, yaw: 0.0923642279 }
     measured:
       date: 2026-08-21
       source: waypoint.md_pk02_amcl
@@ -81,7 +81,7 @@ zones:
       - [straight, 0.650]
       - [rotate, -1.083]
       - [straight, 0.333]
-    exit_target: { x: 0.841, y: -0.111, yaw: -1.083 }
+    exit_target: { x: 0.7992961442, y: 0.0854053105, yaw: 0.0923642279 }
     measured:
       date: 2026-08-21
       source: waypoint.md_pk02_amcl
