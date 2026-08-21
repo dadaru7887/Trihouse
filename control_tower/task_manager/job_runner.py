@@ -323,7 +323,20 @@ class JobRunner:
         reserved: "_Reserved",
     ) -> JobAssignmentRequest | None:
         mobile = _first_free(devices, "mobile", reserved.mobiles)
-        arm = _first_free(devices, "arm", reserved.arms)
+        required_arms = {
+            str(step.input["omx_id"])
+            for step in detail.steps
+            if step.executor_type == "arm" and step.input.get("omx_id")
+        }
+        # The current assignment schema reserves one arm per Job. A multi-workcell
+        # order must not silently reserve the wrong one until that schema expands.
+        if len(required_arms) > 1:
+            return None
+        arm = (
+            _specific_free(devices, next(iter(required_arms)), "arm", reserved.arms)
+            if required_arms
+            else _first_free(devices, "arm", reserved.arms)
+        )
         if mobile is None or arm is None:
             return None
         charger = CHARGER_BY_MOBILE.get(mobile)
@@ -413,6 +426,25 @@ def _first_free(
         and device.device_id not in reserved
     )
     return candidates[0] if candidates else None
+
+
+def _specific_free(
+    devices: tuple[DeviceSummary, ...],
+    device_id: str,
+    device_type: str,
+    reserved: set[str],
+) -> str | None:
+    return next(
+        (
+            device.device_id
+            for device in devices
+            if device.device_id == device_id
+            and device.device_type == device_type
+            and device.assignable
+            and device.device_id not in reserved
+        ),
+        None,
+    )
 
 
 def _step_device(step: JobStepDetail, assignment: object) -> str | None:

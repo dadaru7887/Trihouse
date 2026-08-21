@@ -3,7 +3,7 @@
 <package format="3">
   <name>trihouse_omx_adapter</name>
   <version>0.1.0</version>
-  <description>Trihouse OMX Gazebo and hardware adapter boundary</description>
+  <description>Trihouse OMX ROS Action and local worker bridge</description>
 
   <maintainer email="tpgys24@gmail.com">Trihouse</maintainer>
   <license>Apache-2.0</license>

@@ -110,7 +110,7 @@ class FakeGateway:
 def _worker(gateway, simulators=None, **kwargs):
     return ExecutorWorker(
         gateway,
-        simulators=simulators if simulators is not None else {"OMX_01": FakeSimulator()},
+        omx_executors=simulators if simulators is not None else {"OMX_01": FakeSimulator()},
         **kwargs,
     )
 

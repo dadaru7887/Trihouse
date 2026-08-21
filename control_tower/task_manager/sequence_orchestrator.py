@@ -49,6 +49,7 @@ class SequenceOrchestrator:
     @staticmethod
     def planned_step_requests(
         plan: OutboundPlan,
+        omx_by_temperature_zone: Mapping[str, str],
     ) -> tuple[JobStepCreateRequest, ...]:
         """Translate a product plan without assigning Pinky or OMX hardware."""
         return tuple(
@@ -59,7 +60,7 @@ class SequenceOrchestrator:
                 target_location_id=step.target_location_id,
                 input=dict(step.input),
             )
-            for step in planned_outbound_steps(plan)
+            for step in planned_outbound_steps(plan, omx_by_temperature_zone)
         )
 
     @property

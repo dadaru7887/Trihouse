@@ -3366,9 +3366,31 @@ class MySqlFmsRepository:
                             ),
                         )
 
+                cursor.execute(
+                    """
+                    SELECT device_id, capabilities
+                    FROM devices
+                    WHERE device_type = 'arm' AND active = 1
+                    ORDER BY device_id
+                    FOR UPDATE
+                    """
+                )
+                omx_by_temperature_zone: dict[str, str] = {}
+                for device in cursor.fetchall():
+                    capabilities = _json(device.get("capabilities")) or {}
+                    zones = capabilities.get("temperature_zones", [])
+                    if not isinstance(zones, list):
+                        continue
+                    for zone in zones:
+                        if zone in omx_by_temperature_zone:
+                            raise OutboundOrderActiveMapUnavailable(
+                                f"multiple OMX devices claim temperature zone {zone}"
+                            )
+                        omx_by_temperature_zone[str(zone)] = str(device["device_id"])
+
                 # 온도 구역 하나면 10~70의 7단계가 만들어진다. 구역이 늘면
                 # pick/navigate/load 3단계씩 추가되고 마지막 4단계는 공통이다.
-                for step in planned_outbound_steps(plan):
+                for step in planned_outbound_steps(plan, omx_by_temperature_zone):
                     cursor.execute(
                         """
                         INSERT INTO job_steps

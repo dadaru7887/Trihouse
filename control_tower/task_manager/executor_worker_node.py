@@ -74,20 +74,6 @@ def run_poll_loop(
         sleep(poll_interval_s)
 
 
-def _build_simulators(omx_ids: Sequence[str], act_config: str | None):
-    """Load the arm contract simulators, refusing anything that moves hardware."""
-    from trihouse_omx_adapter.act_policy import ActPolicyLoader
-    from trihouse_omx_adapter.protocol_simulator import OmxProtocolSimulator
-
-    if act_config:
-        policy = ActPolicyLoader().load_file(act_config)
-        if policy.real_motion_enabled:
-            raise SystemExit(
-                "P0 simulation must never load a policy that enables real OMX motion"
-            )
-    return {omx_id: OmxProtocolSimulator(omx_id=omx_id) for omx_id in omx_ids}
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -99,12 +85,7 @@ def _parser() -> argparse.ArgumentParser:
         "--omx-id",
         action="append",
         dest="omx_ids",
-        help=f"arm to simulate; repeatable. Defaults to {' and '.join(DEFAULT_OMX_IDS)}.",
-    )
-    parser.add_argument(
-        "--act-config",
-        default=os.environ.get("TRIHOUSE_ACT_CONFIG", ""),
-        help="ACT policy file; refuses to start if it enables real motion",
+        help=f"arm Action endpoint to route; repeatable. Defaults to {' and '.join(DEFAULT_OMX_IDS)}.",
     )
     parser.add_argument(
         "--environment",
@@ -133,11 +114,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     node = rclpy.create_node("trihouse_executor_worker")
     try:
         gateway = FMSGatewayHttpClient(args.fms_base_url, timeout=args.timeout_s)
+        from trihouse_omx_adapter.action_client import RosOmxActionExecutor
+
         worker = ExecutorWorker(
             gateway,
-            simulators=_build_simulators(
-                tuple(args.omx_ids or DEFAULT_OMX_IDS), args.act_config or None
-            ),
+            omx_executors={
+                omx_id: RosOmxActionExecutor(
+                    node, device_id=omx_id, timeout_s=args.timeout_s
+                )
+                for omx_id in tuple(args.omx_ids or DEFAULT_OMX_IDS)
+            },
             worker_id=args.worker_id,
             environment=args.environment,
         )

@@ -1,19 +1,9 @@
 """Pure templates for persisted outbound work."""
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 from .outbound_planner import OutboundPlan
-
-
-# 물리 작업셀 배정: 상온·냉장은 OMX_01, 냉동은 OMX_02에서만 적재한다.
-# Job이 여러 온도 구역을 포함할 수 있으므로 이 값은 Job 전역 assignment가 아니라
-# ZoneBundle별 step input에 기록한다.
-OMX_BY_TEMPERATURE_ZONE = {
-    "ambient": "OMX_01",
-    "chilled": "OMX_01",
-    "frozen": "OMX_02",
-}
 
 
 @dataclass(frozen=True)
@@ -83,7 +73,10 @@ class PlannedOutboundStep:
     input: dict[str, Any]
 
 
-def planned_outbound_steps(plan: OutboundPlan) -> tuple[PlannedOutboundStep, ...]:
+def planned_outbound_steps(
+    plan: OutboundPlan,
+    omx_by_temperature_zone: Mapping[str, str],
+) -> tuple[PlannedOutboundStep, ...]:
     """계획된 온도 구역 방문을 DB에 저장할 step_no 10, 20, 30...으로 바꾼다.
 
     구역마다 ``arm/prepare + mobile/navigate → fms/load`` 세 단계가 생긴다.
@@ -99,7 +92,7 @@ def planned_outbound_steps(plan: OutboundPlan) -> tuple[PlannedOutboundStep, ...
     # 온도 구역별 반복 구간: 물건 준비와 로봇 도착이 끝나야 load gate를 통과한다.
     for bundle in plan.bundles:
         try:
-            omx_id = OMX_BY_TEMPERATURE_ZONE[bundle.temperature_zone]
+            omx_id = omx_by_temperature_zone[bundle.temperature_zone]
         except KeyError as error:
             raise ValueError(
                 f"no OMX workcell is configured for {bundle.temperature_zone!r}"

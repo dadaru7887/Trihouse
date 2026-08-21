@@ -49,8 +49,8 @@ EXECUTOR_CHANNELS = ("omx", "pinky")
 WORKER_CONFIRMED_ACTIONS = frozenset({"wait"})
 
 
-class OmxSimulator(Protocol):
-    """Temporary structural type implemented by the ROS Action client."""
+class OmxExecutor(Protocol):
+    """Device-routed execution boundary implemented by the ROS Action client."""
 
     @property
     def state(self) -> str: ...
@@ -96,13 +96,13 @@ class ExecutorWorker:
         self,
         gateway: ExecutorGatewayClient,
         *,
-        simulators: dict[str, OmxSimulator],
+        omx_executors: dict[str, OmxExecutor],
         worker_id: str = "control-tower-executor",
         environment: str = "simulation",
         clock_ms: Callable[[], int] | None = None,
     ) -> None:
         self._gateway = gateway
-        self._simulators = dict(simulators)
+        self._omx_executors = dict(omx_executors)
         self._worker_id = worker_id
         self._environment = environment
         self._clock_ms = clock_ms or _monotonic_ms
@@ -164,11 +164,11 @@ class ExecutorWorker:
     def _run_arm(self, dispatch: ExecutorDispatch) -> dict[str, int]:
         """Drive the arm through its own contract rather than faking a result."""
         omx_id = self._actor_device(dispatch)
-        simulator = self._simulators.get(omx_id or "")
-        if simulator is None:
-            raise LookupError(f"no simulator is configured for {omx_id!r}")
+        executor = self._omx_executors.get(omx_id or "")
+        if executor is None:
+            raise LookupError(f"no OMX Action executor is configured for {omx_id!r}")
         started_ms = self._clock_ms()
-        result = simulator.execute(_omx_command(dispatch, "prepare", self._job_items(dispatch)))
+        result = executor.execute(_omx_command(dispatch, "prepare", self._job_items(dispatch)))
         if result.get("success") is not True or result.get("policy_completed") is not True:
             raise RuntimeError("OMX prepare did not return completed policy evidence")
         return {"grasp_ms": max(self._clock_ms() - started_ms, 0)}
@@ -203,10 +203,10 @@ class ExecutorWorker:
         omx_id = _omx_id_for_dispatch(dispatch)
         if omx_id is None:
             raise LookupError(f"load step {dispatch.job_step_id} is missing OMX identity")
-        simulator = self._simulators.get(omx_id)
-        if simulator is None:
-            raise LookupError(f"no simulator is configured for {omx_id!r}")
-        return simulator.execute(_omx_command(dispatch, "load", self._job_items(dispatch)))
+        executor = self._omx_executors.get(omx_id)
+        if executor is None:
+            raise LookupError(f"no OMX Action executor is configured for {omx_id!r}")
+        return executor.execute(_omx_command(dispatch, "load", self._job_items(dispatch)))
 
     def _confirm_load(self, dispatch: ExecutorDispatch, result: dict[str, Any]) -> None:
         """Record complete per-item OMX observations as load evidence."""

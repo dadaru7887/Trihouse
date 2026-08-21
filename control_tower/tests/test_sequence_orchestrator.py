@@ -274,7 +274,9 @@ def test_planned_order_requests_preserve_parallel_dependencies_without_devices()
         charger_location_ids=(30, 31),
     )
 
-    requests = SequenceOrchestrator.planned_step_requests(plan)
+    requests = SequenceOrchestrator.planned_step_requests(
+        plan, {"chilled": "OMX_01"}
+    )
 
     assert requests[0].action_type == "prepare"
     assert requests[0].input["branch"] == "omx_prepare"

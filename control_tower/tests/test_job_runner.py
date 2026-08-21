@@ -163,6 +163,24 @@ def test_two_concurrent_orders_take_different_robots_arms_and_docks() -> None:
     }
 
 
+def test_order_uses_the_arm_pinned_by_database_capability_planning() -> None:
+    steps = (
+        JobStepDetail(
+            100,
+            10,
+            "prepare",
+            "arm",
+            "pending",
+            input={"dependencies": [], "omx_id": "OMX_02"},
+        ),
+    )
+    gateway = FakeGateway([_order_job(1, steps=steps)])
+
+    JobRunner(gateway).run_once()
+
+    assert gateway.assignments[0][1].omx_id == "OMX_02"
+
+
 def test_a_third_order_waits_because_no_robot_is_free() -> None:
     """Exhausted resources must block, not raise and not steal a busy robot."""
     gateway = FakeGateway([_order_job(1), _order_job(2), _order_job(3)])
