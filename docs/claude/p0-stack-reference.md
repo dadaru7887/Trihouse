@@ -215,7 +215,7 @@ Docker 가 귀를 여는 쪽은 이 노트북이고, 그러려면 그 IP 가 **�
 
 **"claude 폴더만 읽으면 된다"는 뜻이면 아니다.** `START-HERE.md` 2절이 바깥 정본
 20여 개를 가리키며 "내용이 어긋나면 바깥이 정본"이라고 못박았다. 특히 성공 기준의
-상태 문자열은 `db/schema_mysql.sql` 의 `CHECK` 에서 온다.
+상태 문자열은 `db/migrations/001_physical_v1_baseline.sql` 의 `CHECK` 에서 온다.
 
 **"이 PC 에서 START-HERE.md 부터 시작하면 되는가"라면 그렇다.** 가리키는 바깥 경로
 40개를 확인했고 파일은 전부 존재한다. 끊긴 링크는 없다.

@@ -17,8 +17,9 @@ services:
       - 127.0.0.1:${FMS_DB_PORT:-3306}:3306
     volumes:
       - trihouse_mysql_data:/var/lib/mysql
-      - ./db/schema_mysql.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
-      - ./db/seed_dev.sql:/docker-entrypoint-initdb.d/002-seed.sql:ro
+      - ./db/migrations/001_physical_v1_baseline.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+      - ./db/init/002_record_physical_baseline.sh:/docker-entrypoint-initdb.d/002_record_physical_baseline.sh:ro
+      - ./db/seeds/seed_hardware.sql:/docker-entrypoint-initdb.d/003_seed.sql:ro
     # compose.control.yaml 이 만드는 격리 네트워크. Gateway만 함께 붙는다.
     networks:
       - db_internal

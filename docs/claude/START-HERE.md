@@ -47,7 +47,7 @@
 | [../architecture/system_overview.md](../architecture/system_overview.md) | 41 | 전체 흐름과 **금지 연결** |
 | [../architecture/control_tower_boundary.md](../architecture/control_tower_boundary.md) | 35 | "DB transaction: FMS Gateway만 수행", "상태 전이: Task Manager만 확정" |
 | [../development/code_guide.md](../development/code_guide.md) | 163 | 코드 관례 |
-| `db/schema_mysql.sql` | 1076 | **스키마 정본.** 성공 기준의 상태 문자열은 전부 여기 `CHECK` 에서 온다 |
+| `db/migrations/001_physical_v1_baseline.sql` | 1076 | **스키마 정본.** 성공 기준의 상태 문자열은 전부 여기 `CHECK` 에서 온다 |
 | `scripts/control_stack` | — | 스택 lifecycle CLI |
 
 ### 2.2 검증(설계 1)에 필요한 것

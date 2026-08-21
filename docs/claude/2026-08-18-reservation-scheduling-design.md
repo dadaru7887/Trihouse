@@ -125,7 +125,7 @@ PK_01·PK_02·OMX_01·OMX_02 와 Dock 두 곳을 붙잡고 있었다. 그래서 
 
 | 있는 것 | 어디 | 무엇을 해 주는가 |
 |---|---|---|
-| 자원 배타성 | `db/schema_mysql.sql:604` `active_resource_key` + `UNIQUE KEY` | 같은 자원에 활성 예약이 둘 생기는 것을 **DB가** 막는다. 경쟁 상태에서도 안전하다 |
+| 자원 배타성 | `db/migrations/001_physical_v1_baseline.sql:604` `active_resource_key` + `UNIQUE KEY` | 같은 자원에 활성 예약이 둘 생기는 것을 **DB가** 막는다. 경쟁 상태에서도 안전하다 |
 | 시간창 예약 정책 | `control_tower/rmf_adapter/traffic_reservation.py` | 단일 용량 통로에 대해 `start_s`~`end_s` 창을 앞으로 밀어 빈 자리를 찾는다 |
 | 시간이 붙은 경로 | `control_tower/rmf_adapter/path_schedule.py` | Nav2 `ComputePathToPose` 로 **움직이기 전에** 경로를 계산해 시간이 붙은 itinerary 로 바꾼다 |
 | 병목 lease | `control_tower/rmf_adapter/bottleneck.py` | 먼저 도착한 로봇이 통과권을 갖는다 |

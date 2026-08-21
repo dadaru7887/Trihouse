@@ -4,8 +4,8 @@ import re
 from pathlib import Path
 
 
-SCHEMA_PATH = Path(__file__).resolve().parents[2] / "db" / "schema_mysql.sql"
-SEED_PATH = Path(__file__).resolve().parents[2] / "db" / "seed_dev.sql"
+SCHEMA_PATH = Path(__file__).resolve().parents[2] / "db" / "migrations" / "001_physical_v1_baseline.sql"
+SEED_PATH = Path(__file__).resolve().parents[2] / "db" / "seeds" / "seed_dev.sql"
 
 
 def _table(schema: str, name: str) -> str:

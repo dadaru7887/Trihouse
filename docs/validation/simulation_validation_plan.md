@@ -148,7 +148,7 @@ flowchart TB
 
 - **목표:** simulator/UI보다 먼저 v3 운영 schema와 Gateway를 증명한다.
 - **요구사항:** R2, R9. **의존성:** U1.
-- **파일:** `compose.db_test.yaml`, `db/schema_mysql.sql`, `db/seed_dev.sql`,
+- **파일:** `compose.db_test.yaml`, `db/migrations/001_physical_v1_baseline.sql`, `db/seeds/seed_dev.sql`,
   `fms_gateway/app/main.py`, `fms_gateway/app/repositories.py`,
   `fms_gateway/tests/integration/`, `docs/deployment/database_demo.md`.
 - **테스트:** 빈 DB schema/seed/read, 같은 idempotency key의 단일 재고 변경/audit,

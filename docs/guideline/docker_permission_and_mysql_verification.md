@@ -162,8 +162,8 @@ docker compose -f compose.db_test.yaml config
 | 호스트 포트 | `127.0.0.1:3307` |
 | 컨테이너 포트 | `3306` |
 | 데이터 저장 | `/var/lib/mysql` tmpfs |
-| 초기화 스키마 | `db/schema_mysql.sql` |
-| 개발 seed | `db/seed_dev.sql` |
+| 초기화 스키마 | `db/migrations/001_physical_v1_baseline.sql` |
+| 개발 seed | `db/seeds/seed_dev.sql` |
 
 `config` 명령에서 파일 누락이나 YAML 오류가 나오면 컨테이너를 실행하지 말고 해당 오류부터 확인한다.
 
@@ -197,8 +197,8 @@ docker compose -f compose.db_test.yaml logs --no-color mysql_test
 다음 항목을 확인한다.
 
 - MySQL server가 ready 상태가 되었는가
-- `db/schema_mysql.sql` 실행 중 SQL syntax error가 없는가
-- `db/seed_dev.sql` 실행 중 CHECK 또는 FK 위반이 없는가
+- `db/migrations/001_physical_v1_baseline.sql` 실행 중 SQL syntax error가 없는가
+- `db/seeds/seed_dev.sql` 실행 중 CHECK 또는 FK 위반이 없는가
 - 컨테이너가 반복 재시작하거나 `unhealthy` 상태가 아닌가
 
 ## 8. 스키마와 seed 직접 확인

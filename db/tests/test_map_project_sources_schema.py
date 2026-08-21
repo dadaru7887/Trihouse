@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_PATH = ROOT / "db" / "schema_mysql.sql"
+SCHEMA_PATH = ROOT / "db" / "migrations" / "001_physical_v1_baseline.sql"
 
 
 def _table(schema: str, name: str) -> str:

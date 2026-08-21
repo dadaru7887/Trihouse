@@ -17,8 +17,8 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_PATH = ROOT / "db" / "schema_mysql.sql"
-MIGRATION_PATH = ROOT / "db" / "migrations" / "004_add_korean_comments.sql"
+SCHEMA_PATH = ROOT / "db" / "migrations" / "001_physical_v1_baseline.sql"
+MIGRATION_PATH = ROOT / "db" / "archive" / "pre_physical_v1" / "004_add_korean_comments.sql"
 DICTIONARY_PATH = ROOT / "docs" / "database" / "data_dictionary.xlsx"
 DIAGRAM_PATH = ROOT / "docs" / "database" / "schema_diagram.drawio"
 
@@ -703,7 +703,7 @@ def update_diagram(*, check: bool) -> None:
         cell = root.find(f".//mxCell[@id='{cell_id}']")
         if cell is None:
             # The v4 diagram is retained as a legacy overview. New v5 tables
-            # are documented in schema_mysql.sql and database_guide.md.
+            # are documented in 001_physical_v1_baseline.sql and database_guide.md.
             continue
         value = cell.attrib["value"]
         header = f"<b>{database}.{table}</b>"
@@ -739,7 +739,7 @@ def main() -> None:
     rendered_schema, _columns = render_schema(source)
     if args.check:
         if source != rendered_schema:
-            raise ValueError("schema_mysql.sql comments are not synchronized")
+            raise ValueError("001_physical_v1_baseline.sql comments are not synchronized")
         update_dictionary(check=True)
         update_diagram(check=True)
         print(

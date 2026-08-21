@@ -391,4 +391,4 @@ Step 20은 Pinky가 실제로 움직이는 단계이므로, 아래를 모두 통
 - lot 선택·예약·작업 저장 트랜잭션: `fms_gateway/app/repositories.py`의 `create_outbound_order`
 - Step 10~70 템플릿: `control_tower/task_manager/outbound_sequence.py`
 - 자원 할당·예약 트랜잭션: `fms_gateway/app/repositories.py`의 `assign_job_resources`
-- 재고·Job·Step·예약 컬럼 정본: `db/schema_mysql.sql`
+- 재고·Job·Step·예약 컬럼 정본: `db/migrations/001_physical_v1_baseline.sql`

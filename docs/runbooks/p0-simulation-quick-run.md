@@ -245,7 +245,7 @@ scripts/p0_up.sh
 | 실패한 step 을 가진 job 이 `assigned` 로 남음 | 로봇을 쥔 채라 다음 job 이 `no free robot` 으로 막힌다 |
 | RMF dispatcher 에 살아 있는 task | FMS job 을 취소해도 남아 `claim 409` 무한 루프를 만든다 |
 
-`scripts/p0_reset.sh` 가 DB 를 `db/schema_mysql.sql` + `db/seed_dev.sql` 로 되돌리고
+`scripts/p0_reset.sh` 가 DB 를 `db/migrations/001_physical_v1_baseline.sql` + `db/seeds/seed_dev.sql` 로 되돌리고
 지도를 다시 발행해 이 셋을 한 번에 없앤다.
 
 지도 revision 은 **`scripts/p0_up.sh` 가 원장(`map_revisions` 테이블)에서 직접

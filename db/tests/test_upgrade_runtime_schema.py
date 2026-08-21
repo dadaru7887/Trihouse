@@ -8,7 +8,7 @@ import mysql.connector
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_PATH = (
-    REPOSITORY_ROOT / "db" / "migrations" / "007_upgrade_runtime_state_model.sql"
+    REPOSITORY_ROOT / "db" / "archive" / "pre_physical_v1" / "007_upgrade_runtime_state_model.sql"
 )
 TEST_DATABASE = "trihouse_runtime_upgrade_test"
 

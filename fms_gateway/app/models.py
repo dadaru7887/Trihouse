@@ -520,7 +520,7 @@ class StepOutcome(BaseModel):
     method_code: str = Field(min_length=1, max_length=96)
     actor_device_id: str | None = Field(default=None, max_length=64)
     reason_code: str | None = Field(default=None, max_length=96)
-    # `db/schema_mysql.sql` 의 chk_attempts_failure_domain 과 같은 집합이다.
+    # `db/migrations/001_physical_v1_baseline.sql` 의 chk_attempts_failure_domain 과 같은 집합이다.
     failure_domain: Literal[
         "none", "robot", "perception", "navigation", "manipulation",
         "safety", "integration", "operator", "unknown",

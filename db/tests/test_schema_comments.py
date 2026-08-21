@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 
 
-SCHEMA_PATH = Path(__file__).resolve().parents[2] / "db" / "schema_mysql.sql"
+SCHEMA_PATH = Path(__file__).resolve().parents[2] / "db" / "migrations" / "001_physical_v1_baseline.sql"
 KOREAN_TEXT = re.compile(r"[가-힣]")
 TABLE_COMMENT = re.compile(r"ENGINE=InnoDB COMMENT='([^']+)';")
 COLUMN_COMMENT = re.compile(r"\bCOMMENT '([^']+)'", re.IGNORECASE)

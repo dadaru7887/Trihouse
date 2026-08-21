@@ -1,5 +1,5 @@
 -- ============================================================================
--- FMS MySQL 스키마 v5
+-- FMS MySQL physical v1 baseline
 --
 -- 목적
 --   Pinky-pro 주행로봇 2대와 OMX-AI 로봇팔 2대를 함께 운영한다.
@@ -20,6 +20,18 @@ CREATE DATABASE IF NOT EXISTS `trihouse_fms`
   DEFAULT COLLATE utf8mb4_unicode_ci;
 
 USE `trihouse_fms`;
+
+-- EN: The runner records each applied file and digest here so an edited migration cannot run unnoticed.
+-- KO: 실행기는 적용 파일과 해시를 기록하여 변경된 migration이 모르게 재실행되는 것을 막는다.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version       INT UNSIGNED NOT NULL COMMENT 'Monotonically increasing migration version.',
+  filename      VARCHAR(255) NOT NULL COMMENT 'Applied migration file name.',
+  sha256        CHAR(64) NOT NULL COMMENT 'Lowercase SHA-256 digest of the applied file.',
+  applied_at    DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'Timestamp when the migration was applied.',
+  PRIMARY KEY (version),
+  UNIQUE KEY uq_schema_migrations_filename (filename),
+  CONSTRAINT chk_schema_migrations_sha256 CHECK (sha256 REGEXP '^[0-9a-f]{64}$')
+) ENGINE=InnoDB COMMENT='Records applied database migrations and their immutable content digests.';
 
 -- [지도 편집 원본] Control System UI의 draft 프로젝트를 보관한다.
 CREATE TABLE IF NOT EXISTS map_projects (
@@ -299,7 +311,7 @@ CREATE TABLE IF NOT EXISTS workers (
 CREATE TABLE IF NOT EXISTS devices (
   device_id            VARCHAR(64) NOT NULL COMMENT 'Identifier of the related device.',
   device_type          VARCHAR(16) NOT NULL COMMENT 'Code identifying the device type.',
-  name                 VARCHAR(128) NOT NULL COMMENT 'Device name displayed in operator interfaces.',
+  name                 VARCHAR(128) NOT NULL COMMENT 'Canonical device command identifier displayed in operator interfaces.',
   model                VARCHAR(96) NOT NULL COMMENT 'Model for this record.',
   fleet_name           VARCHAR(96) NULL COMMENT 'Name of the fleet.',
   home_location_id     BIGINT UNSIGNED NULL COMMENT 'Identifier of the related home location.',
@@ -316,7 +328,10 @@ CREATE TABLE IF NOT EXISTS devices (
     REFERENCES locations (location_id),
   CONSTRAINT fk_devices_current FOREIGN KEY (current_location_id)
     REFERENCES locations (location_id),
+  CONSTRAINT chk_devices_command_id CHECK (device_id IN
+    ('PK_01','PK_02','OMX_01','OMX_02')),
   CONSTRAINT chk_devices_type CHECK (device_type IN ('mobile','arm')),
+  CONSTRAINT chk_devices_name_matches_device_id CHECK (name = device_id),
   CONSTRAINT chk_devices_mode CHECK (control_mode IN
     ('automatic','manual','offline','maintenance','safety_hold'))
 ) ENGINE=InnoDB COMMENT='Manages models, fleets, locations, control modes, and capabilities for Pinky mobile robots and OMX robot arms.';

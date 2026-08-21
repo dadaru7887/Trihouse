@@ -1,5 +1,5 @@
 -- Upgrade an existing Trihouse development volume to the runtime state and
--- execution-lineage contract defined by db/schema_mysql.sql.
+-- execution-lineage contract defined by db/migrations/001_physical_v1_baseline.sql.
 --
 -- This migration preserves rows. DDL in MySQL commits implicitly, so take a
 -- backup before applying it and run the file exactly once.

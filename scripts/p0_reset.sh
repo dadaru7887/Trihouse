@@ -96,9 +96,9 @@ docker exec -i trihouse-mysql mysql -uroot -p"$MYSQL_PW" \
   -e "DROP DATABASE IF EXISTS trihouse_fms; CREATE DATABASE trihouse_fms
       CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null
 docker exec -i trihouse-mysql mysql -uroot -p"$MYSQL_PW" trihouse_fms \
-  < db/schema_mysql.sql 2>/dev/null
+  < db/migrations/001_physical_v1_baseline.sql 2>/dev/null
 docker exec -i trihouse-mysql mysql -uroot -p"$MYSQL_PW" trihouse_fms \
-  < db/seed_dev.sql 2>/dev/null
+  < db/seeds/seed_dev.sql 2>/dev/null
 
 # Gateway 는 기동 때 스키마를 확인하고 연결 풀을 잡는다. DB 를 갈아 끼웠으므로
 # 다시 띄워 예전 연결을 버리게 한다.

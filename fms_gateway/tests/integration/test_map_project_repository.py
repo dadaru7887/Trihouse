@@ -144,9 +144,10 @@ def test_mysql_project_publish_updates_authoring_and_operational_projection(
     assert charger["pose_y"] == -2.0
 
     robot = mysql_db.one(
-        "SELECT fleet_name, home_location_id, current_location_id, control_mode "
+        "SELECT name, fleet_name, home_location_id, current_location_id, control_mode "
         "FROM devices WHERE device_id = 'PK_01'"
     )
+    assert robot["name"] == "PK_01"
     assert robot["fleet_name"] == "project1_pinky"
     assert robot["home_location_id"] == mysql_db.one(
         "SELECT location_id FROM locations WHERE location_code = 'CHG-01'"

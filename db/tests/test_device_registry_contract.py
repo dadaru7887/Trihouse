@@ -5,9 +5,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_PATH = ROOT / "db" / "schema_mysql.sql"
-SEED_PATH = ROOT / "db" / "seed_dev.sql"
-MIGRATION_PATH = ROOT / "db" / "migrations" / "005_normalize_device_registry.sql"
+SCHEMA_PATH = ROOT / "db" / "migrations" / "001_physical_v1_baseline.sql"
+SEED_PATH = ROOT / "db" / "seeds" / "seed_dev.sql"
+MIGRATION_PATH = ROOT / "db" / "archive" / "pre_physical_v1" / "005_normalize_device_registry.sql"
 
 CANONICAL_IDS = {"PK_01", "PK_02", "OMX_01", "OMX_02"}
 LEGACY_IDS = {"PINKY-01", "PINKY-02", "PK-01", "PK-02", "OMX-01", "OMX-02"}

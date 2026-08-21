@@ -5,8 +5,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_PATH = ROOT / "db" / "schema_mysql.sql"
-MIGRATION_PATH = ROOT / "db" / "migrations" / "006_add_map_authoring_and_publication.sql"
+SCHEMA_PATH = ROOT / "db" / "migrations" / "001_physical_v1_baseline.sql"
+MIGRATION_PATH = ROOT / "db" / "archive" / "pre_physical_v1" / "006_add_map_authoring_and_publication.sql"
 
 
 def _table(sql: str, name: str) -> str:

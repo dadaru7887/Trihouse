@@ -6,8 +6,8 @@ import pytest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_PATH = REPOSITORY_ROOT / "db" / "schema_mysql.sql"
-SEED_PATH = REPOSITORY_ROOT / "db" / "seed_dev.sql"
+SCHEMA_PATH = REPOSITORY_ROOT / "db" / "migrations" / "001_physical_v1_baseline.sql"
+SEED_PATH = REPOSITORY_ROOT / "db" / "seeds" / "seed_dev.sql"
 QR_PAYLOAD_PATH = REPOSITORY_ROOT / "docs" / "database" / "item_qr_payloads.json"
 
 

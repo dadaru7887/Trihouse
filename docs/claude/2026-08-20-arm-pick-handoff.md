@@ -78,8 +78,8 @@ step 10 의 의미를 거의 다 만든다.**
 
 | 작업 | 새로 만든다 | 고친다 |
 |---|---|---|
-| **W1** 품목 전달 | — | [executor_worker.py:325-343](../../control_tower/task_manager/executor_worker.py#L325-L343)<br>[outbound_sequence.py:104](../../control_tower/task_manager/outbound_sequence.py#L104)<br>[omx_protocol.py:96](../../control_tower/gateway/omx_protocol.py#L96)<br>[protocol_simulator.py:19-37](../../trihouse_omx_adapter/trihouse_omx_adapter/protocol_simulator.py#L19-L37)<br>[db/seed_dev.sql:56](../../db/seed_dev.sql#L56) (slot 에 `aruco_marker_id`) |
-| **W2** 팔 선택 | `control_tower/task_manager/`<br>**`arm_selection.py`** | [job_runner.py:264](../../control_tower/task_manager/job_runner.py#L264)<br>[fms_client.py:96](../../control_tower/gateway/fms_client.py#L96), [:146](../../control_tower/gateway/fms_client.py#L146)<br>[repositories.py:1280](../../fms_gateway/app/repositories.py#L1280)<br>[db/seed_dev.sql:129](../../db/seed_dev.sql#L129) (`capabilities`) |
+| **W1** 품목 전달 | — | [executor_worker.py:325-343](../../control_tower/task_manager/executor_worker.py#L325-L343)<br>[outbound_sequence.py:104](../../control_tower/task_manager/outbound_sequence.py#L104)<br>[omx_protocol.py:96](../../control_tower/gateway/omx_protocol.py#L96)<br>[protocol_simulator.py:19-37](../../trihouse_omx_adapter/trihouse_omx_adapter/protocol_simulator.py#L19-L37)<br>[db/seeds/seed_dev.sql:56](../../db/seeds/seed_dev.sql#L56) (slot 에 `aruco_marker_id`) |
+| **W2** 팔 선택 | `control_tower/task_manager/`<br>**`arm_selection.py`** | [job_runner.py:264](../../control_tower/task_manager/job_runner.py#L264)<br>[fms_client.py:96](../../control_tower/gateway/fms_client.py#L96), [:146](../../control_tower/gateway/fms_client.py#L146)<br>[repositories.py:1280](../../fms_gateway/app/repositories.py#L1280)<br>[db/seeds/seed_dev.sql:129](../../db/seeds/seed_dev.sql#L129) (`capabilities`) |
 | **W3** 증거·게이트 | — | [main.py:1070](../../fms_gateway/app/main.py#L1070) 을 본뜬 새 라우트<br>[repositories.py:5812](../../fms_gateway/app/repositories.py#L5812), [:5868](../../fms_gateway/app/repositories.py#L5868)<br>[models.py](../../fms_gateway/app/models.py) (요청 스키마)<br>[fms_client.py](../../control_tower/gateway/fms_client.py) (클라이언트 메서드) |
 | **W4** 정책 적재 | `trihouse_omx_adapter/trihouse_omx_adapter/`<br>**`act_runner.py`**<br>`config/`**`act.hardware.yaml`** | [act_policy.py:88](../../trihouse_omx_adapter/trihouse_omx_adapter/act_policy.py#L88) (`select_policy`)<br>[executor_worker_node.py:77](../../control_tower/task_manager/executor_worker_node.py#L77)<br>[config/act.simulation.yaml](../../config/act.simulation.yaml) |
 | **W5** 상태 기계 | `trihouse_omx_adapter/trihouse_omx_adapter/`<br>**`pick_sequence.py`**<br>**`arm_backend.py`** | [executor_worker.py:181](../../control_tower/task_manager/executor_worker.py#L181)<br>[setup.py](../../trihouse_omx_adapter/setup.py) (진입점) |
@@ -258,7 +258,7 @@ JSON 으로 있다), **값 없는 slot 은 후보에서 뺀다.** 0 을 지어�
 
 | | |
 |---|---|
-| 고칠 파일 | [job_runner.py:264](../../control_tower/task_manager/job_runner.py#L264) · [fms_client.py:96](../../control_tower/gateway/fms_client.py#L96), [:146](../../control_tower/gateway/fms_client.py#L146) · [repositories.py:1280](../../fms_gateway/app/repositories.py#L1280) · [seed_dev.sql:129](../../db/seed_dev.sql#L129) |
+| 고칠 파일 | [job_runner.py:264](../../control_tower/task_manager/job_runner.py#L264) · [fms_client.py:96](../../control_tower/gateway/fms_client.py#L96), [:146](../../control_tower/gateway/fms_client.py#L146) · [repositories.py:1280](../../fms_gateway/app/repositories.py#L1280) · [seed_dev.sql:129](../../db/seeds/seed_dev.sql#L129) |
 | 새 파일 | `control_tower/task_manager/arm_selection.py` |
 
 온도대는 **이미 두 곳에 있다.** 새로 조회하지 않는다.
@@ -307,7 +307,7 @@ def choose_arm(candidates, *, temperature_zones, dock_location_codes,
 원장은 **이미 받을 준비가 되어 있다.** `job_step_attempts` 에 `criteria`,
 `before/after_observation`, `evidence_refs`, `policy_source`(`rl` 허용),
 `policy_name/version`, `model_name/version` 칸이 전부 있다
-([schema_mysql.sql:496](../../db/schema_mysql.sql#L496)). 비어 있을 뿐이다.
+([schema_mysql.sql:496](../../db/migrations/001_physical_v1_baseline.sql#L496)). 비어 있을 뿐이다.
 
 `load` 가 이미 같은 길을 걸었다. 그대로 본뜬다.
 

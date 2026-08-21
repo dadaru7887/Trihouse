@@ -55,7 +55,7 @@ P0 이전부터 있던 조건이며 본 계획으로 바뀌지 않았다.
 ### 2.3 신선 seed 여섯 주문 (A–F)
 
 `tests/e2e/test_trihouse_test_01_orders.py`가 A–F 각각에 대해
-`db/schema_mysql.sql` + `db/seed_dev.sql`을 다시 만들고, UI가 쓰는 것과 같은
+`db/migrations/001_physical_v1_baseline.sql` + `db/seeds/seed_dev.sql`을 다시 만들고, UI가 쓰는 것과 같은
 공개 `POST /api/v1/orders`로 제출한 결과다.
 
 | 예시 | 요청 | HTTP | 구역 순서 | 요청/가능/미충족 |

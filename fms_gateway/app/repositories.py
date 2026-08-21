@@ -2265,10 +2265,10 @@ class MySqlFmsRepository:
                             COALESCE(capabilities, JSON_OBJECT()), %s)
                         """,
                         (
-                            robot["robot_id"], device_type, robot["display_name"],
+                            robot["robot_id"], device_type, robot["robot_id"],
                             robot["model"], fleet_name, home_location_id,
                             json.dumps(capabilities, ensure_ascii=False),
-                            device_type, robot["display_name"], robot["model"],
+                            device_type, robot["robot_id"], robot["model"],
                             fleet_name, home_location_id,
                             json.dumps(
                                 {"rmf_robot_name": robot["robot_id"]} if mobile else {},

@@ -79,4 +79,4 @@ ros2 launch trihouse_pinky_bringup trihouse_gazebo_demo.launch.py \
 
 [DB 시연 가이드](database_demo.md)에 따라 두 database, recovery 관계,
 창고·선반·QR 재고 매핑을 보여준다. 신규 설치의 유일한 기준은
-`db/schema_mysql.sql`이며, 이전 스키마는 Git 이력으로만 참조한다.
+`db/migrations/001_physical_v1_baseline.sql`이며, 이전 스키마는 Git 이력으로만 참조한다.

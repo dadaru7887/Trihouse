@@ -20,9 +20,9 @@ DUPLICATE_KEY = 1062
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_PATH = REPOSITORY_ROOT / "db" / "schema_mysql.sql"
+SCHEMA_PATH = REPOSITORY_ROOT / "db" / "migrations" / "001_physical_v1_baseline.sql"
 MIGRATION_PATH = (
-    REPOSITORY_ROOT / "db" / "migrations"
+    REPOSITORY_ROOT / "db" / "archive" / "pre_physical_v1"
     / "012_add_duration_prediction_and_baselines.sql"
 )
 TEST_DATABASE = "trihouse_duration_baseline_test"

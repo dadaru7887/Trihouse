@@ -237,7 +237,7 @@ fleet_states   robot=PK_01  task_id='compose.dispatch-75bb442d4a'  mode=0
 
 | 있는 것 | 없는 것 |
 |---|---|
-| 스키마: `chk_jobs_type CHECK (operation_type IN ('inbound','outbound',...))` (`db/schema_mysql.sql:407`) | **주문 API가 outbound 전용.** `models.py:160` 이 `Literal["outbound"] = "outbound"` |
+| 스키마: `chk_jobs_type CHECK (operation_type IN ('inbound','outbound',...))` (`db/migrations/001_physical_v1_baseline.sql:407`) | **주문 API가 outbound 전용.** `models.py:160` 이 `Literal["outbound"] = "outbound"` |
 | `inventory_lots.state` 에 `pending_inbound` (`:353`) | **입고 step 시퀀스가 없다.** `planned_outbound_steps()` 만 있다 |
 | `inventory_workflow.py:58,112` — `reserve_inbound_slot`, `finalize_inbound` | 그 두 함수를 **부르는 곳이 없다** (테스트 제외) |
 | `locations` 에 온도 구역별 slot 12개 (ambient/chilled/frozen 각 4) | 입고품을 **어느 구역에 넣을지 정하는 정책**이 실행 경로에 없다 |

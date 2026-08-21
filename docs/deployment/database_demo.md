@@ -34,7 +34,7 @@ docker compose -p trihouse_db -f compose.db.yaml exec mysql \
 ```
 
 비밀번호는 명령행에 직접 쓰지 않고 prompt에 입력한다. FMS 테이블은
-`db/schema_mysql.sql`의 테이블 이름 집합을 기준으로 검증한다. recovery는
+`db/migrations/001_physical_v1_baseline.sql`의 테이블 이름 집합을 기준으로 검증한다. recovery는
 `recovery_episodes`, `recovery_steps` 두 테이블이다.
 
 ## recovery 관계 확인
@@ -75,7 +75,7 @@ docker compose -f compose.db.yaml exec mysql \
   "'
 ```
 
-개수를 고정값으로 비교하지 않고, `db/schema_mysql.sql`에 선언된 모든
+개수를 고정값으로 비교하지 않고, `db/migrations/001_physical_v1_baseline.sql`에 선언된 모든
 테이블·컬럼에 빈 설명이 없고 ASCII 영문으로 작성됐는지 통합 테스트로
 검증한다.
 
@@ -89,7 +89,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
 
 ## 창고·선반·QR 재고 확인
 
-`db/seed_dev.sql`을 적용하면 3개 창고의 L1/L2·S01/S02 선반과
+`db/seeds/seed_dev.sql`을 적용하면 3개 창고의 L1/L2·S01/S02 선반과
 11개 QR 재고 lot이 생성된다. 상온 창고의 `AMB-L1-S02`는 빈 선반으로
 남는다. 다음 조회의 11개 lot이
 `docs/database/item_qr_payloads.json`과 일치해야 한다.

@@ -120,7 +120,7 @@ approved" 인 진단 전용 skeleton 이다. **실기 완주에서도 팔은 정
 2. **완주 중 arm step** — B절에서 `pick` step 이 실제로 닫히는 것. 시뮬과 실기 공통이며
    **실기 L5 판정은 이것뿐이다.**
 
-### 3.3 스키마 대조 — `db/schema_mysql.sql` 을 정본으로 확인한 것
+### 3.3 스키마 대조 — `db/migrations/001_physical_v1_baseline.sql` 을 정본으로 확인한 것
 
 성공 기준에 쓰는 상태 문자열은 전부 스키마의 `CHECK` 제약에서 가져왔다. 코드가
 아니라 스키마가 정본이다.
@@ -196,7 +196,7 @@ step 60 도 `fms` 이므로 `pinky` 채널로 나가지만, `executor_worker` �
 
 **MySQL 3308 에는 데이터베이스가 두 개다.** `schema_mysql.sql` 은 중간에
 `USE \`trihouse_recovery\`` 로 대상을 바꾸고 거기에 테이블 두 개를 만든다
-([schema_mysql.sql:979-1076](../../db/schema_mysql.sql#L979-L1076)). VLM+RL 회복
+([schema_mysql.sql:979-1076](../../db/migrations/001_physical_v1_baseline.sql#L979-L1076)). VLM+RL 회복
 데이터셋의 그릇이다. 이 문서는 **그릇이 제대로 있는지만** 판정한다 — 왜 그것뿐인지는
 11.8 에 적었다.
 
@@ -467,7 +467,7 @@ Gazebo + Open-RMF 는 load average 60~90 까지 가고, 그 상태에서 Nav2 li
 `reservations` 는 병목 배타성을 제대로 갖추고 있다. `reservation_mode='bottleneck_lock'`
 이고 `state IN ('reserved','in_use')` 이면 생성 열 `active_resource_key` 가
 `feature:<map_feature_id>` 가 되고, 그 열에 `UNIQUE KEY uq_reservations_active_resource`
-가 걸려 있다([schema_mysql.sql:606-625](../../db/schema_mysql.sql#L606-L625)). 즉 같은
+가 걸려 있다([schema_mysql.sql:606-625](../../db/migrations/001_physical_v1_baseline.sql#L606-L625)). 즉 같은
 병목을 두 job 이 동시에 쥐는 것은 **DB 가 막는다.**
 
 문제는 그 행을 만드는 코드가 없다는 것이다. `fms_gateway/` 와 `control_tower/`
@@ -513,7 +513,7 @@ reservations(로봇/팔/Dock)뿐이다. 주문 수락은 `available_qty - reserv
 
 스키마가 `chk_lots_qty CHECK (available_qty >= 0 AND reserved_qty >= 0 AND
 reserved_qty <= available_qty)` 로 두 값을 묶어 두었으므로
-([schema_mysql.sql:349-351](../../db/schema_mysql.sql#L349-L351)), 취소로 남은
+([schema_mysql.sql:349-351](../../db/migrations/001_physical_v1_baseline.sql#L349-L351)), 취소로 남은
 `reserved_qty` 는 그만큼의 `available_qty` 를 **영구히 주문 불가로 만든다.**
 `available_qty = reserved_qty` 가 된 lot 은 재고가 있는데도 주문할 수 없다.
 

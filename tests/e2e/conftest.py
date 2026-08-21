@@ -1,6 +1,6 @@
 """P0 인수 e2e가 쓰는 공용 fixture.
 
-e2e는 `db/schema_mysql.sql` + `db/seed_dev.sql`을 매번 다시 만들고, UI가 쓰는
+e2e는 `db/migrations/001_physical_v1_baseline.sql` + `db/seeds/seed_dev.sql`을 매번 다시 만들고, UI가 쓰는
 것과 **같은** 공개 API로 주문을 넣는다. 실제 MySQL이 없으면 조용히 통과하지
 않고 건너뛴다.
 """

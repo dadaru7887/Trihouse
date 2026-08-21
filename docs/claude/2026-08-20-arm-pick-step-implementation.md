@@ -660,7 +660,7 @@ class WristCamera:
 ### 5.1 원장은 이미 받을 준비가 되어 있다
 
 `job_step_attempts` 에 칸이 전부 있다
-([schema_mysql.sql:497-585](../../db/schema_mysql.sql#L497-L585)):
+([schema_mysql.sql:497-585](../../db/migrations/001_physical_v1_baseline.sql#L497-L585)):
 `criteria`, `before_observation`, `after_observation`, `evidence_refs`,
 `policy_source`(`rl` 허용), `policy_name`/`policy_version`,
 `model_name`/`model_version`. **비어 있을 뿐이다.**
@@ -866,7 +866,7 @@ for r in json.load(sys.stdin):
 ```
 
 세 온도대가 실재한다(`ambient`/`chilled`/`frozen`). `SKU-PORKBELLY` 는 **냉동**이다.
-→ [seed_dev.sql:44-118](../../db/seed_dev.sql#L44-L118)
+→ [seed_dev.sql:44-118](../../db/seeds/seed_dev.sql#L44-L118)
 
 step `input` 이 러너까지 오는지는 job 상세로 본다(job 이 있을 때).
 
@@ -978,11 +978,11 @@ POST /internal/v1/job-steps/{id}/pick-recovery     ← 실패 처리만 있다
 원장 쪽은 이미 받을 준비가 되어 있다.
 
 ```bash
-sed -n '528,533p' db/schema_mysql.sql
+sed -n '528,533p' db/migrations/001_physical_v1_baseline.sql
 ```
 
 `policy_name`/`policy_version`/`model_name`/`model_version` 칸이 비어 있을 뿐이다.
-→ [schema_mysql.sql:496](../../db/schema_mysql.sql#L496) ·
+→ [schema_mysql.sql:496](../../db/migrations/001_physical_v1_baseline.sql#L496) ·
 [repositories.py:5868](../../fms_gateway/app/repositories.py#L5868)
 
 ### ⑨ 지금 테스트는 어디까지 지키는가

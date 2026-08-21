@@ -17,9 +17,9 @@ class FakeRepository:
     def list_devices(self):
         return [
             {
-                "device_id": "PINKY-01",
+                "device_id": "PK_01",
                 "device_type": "mobile",
-                "name": "Pinky-Pro #1",
+                "name": "PK_01",
                 "control_mode": "automatic",
                 "state": "idle",
                 "health": "ok",
@@ -53,7 +53,7 @@ class FakeRepository:
                 "priority": "normal",
                 "state": "pending",
                 "due_at": datetime(2026, 8, 3, 10, tzinfo=SEOUL),
-                "assigned_mobile_id": "PINKY-01",
+                "assigned_mobile_id": "PK_01",
                 "item_count": 1,
                 "step_count": 1,
             }
@@ -75,7 +75,7 @@ def test_devices_inventory_and_jobs_contracts():
     jobs = client.get("/api/v1/jobs")
 
     assert devices.status_code == 200
-    assert devices.json()[0]["device_id"] == "PINKY-01"
+    assert devices.json()[0]["device_id"] == "PK_01"
     assert devices.json()[0]["observed_at"] == "2026-08-03T09:00:00+09:00"
     assert inventory.status_code == 200
     assert inventory.json()[0]["lot_code"] == "LOT-DEV-001"

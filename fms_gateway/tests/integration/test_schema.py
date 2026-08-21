@@ -243,7 +243,7 @@ def test_recovery_episode_requires_consistent_model_lineage(recovery_mysql_db):
                vlm_model_name, recovery_policy_name, recovery_policy_version,
                started_at, final_status)
             VALUES
-              ('00000000-0000-0000-0000-000000000201', 'PINKY-01', 'warehouse',
+              ('00000000-0000-0000-0000-000000000201', 'PK_01', 'warehouse',
                'warehouse-v1', 'blocked', 'vlm-a', 'policy-a', '1.0',
                '2026-08-09 12:00:00.000000', 'running')
             """
@@ -259,7 +259,7 @@ def test_recovery_step_requires_observation_uri_and_hash_pair(recovery_mysql_db)
           (recovery_episode_uuid, device_id, map_name, map_revision, trigger_type,
            recovery_policy_name, recovery_policy_version, started_at, final_status)
         VALUES
-          ('00000000-0000-0000-0000-000000000301', 'PINKY-01', 'warehouse',
+          ('00000000-0000-0000-0000-000000000301', 'PK_01', 'warehouse',
            'warehouse-v1', 'blocked', 'policy-a', '1.0',
            '2026-08-09 12:00:00.000000', 'running')
         """

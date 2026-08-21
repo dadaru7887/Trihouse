@@ -15,7 +15,7 @@ Control System UI
   → Nav2 physical movement
 ```
 
-- 기준 스키마: `/home/syw/Trihouse/db/schema_mysql.sql`
+- 기준 스키마: `/home/syw/Trihouse/db/migrations/001_physical_v1_baseline.sql`
 - 기준 DB: `trihouse_fms`
 - UI는 MySQL에 직접 연결하지 않고 `FMS_GATEWAY_URL`만 사용한다.
 - `control_system_test/db`는 upstream 참고 자료이며 실행 DB가 아니다.
@@ -176,11 +176,11 @@ cd /home/syw/Trihouse
 
 docker compose -f compose.db.yaml exec -T mysql \
   sh -lc 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" trihouse_fms' \
-  < db/migrations/008_add_waypoint_operational_roles.sql
+  < db/archive/pre_physical_v1/008_add_waypoint_operational_roles.sql
 
 docker compose -f compose.db.yaml exec -T mysql \
   sh -lc 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" trihouse_fms' \
-  < db/migrations/011_unify_loading_dock_and_waiting_point.sql
+  < db/archive/pre_physical_v1/011_unify_loading_dock_and_waiting_point.sql
 ```
 
 Migration `011`을 먼저 실행해 중간에 실패했더라도 `008`을 적용한 뒤 `011`을

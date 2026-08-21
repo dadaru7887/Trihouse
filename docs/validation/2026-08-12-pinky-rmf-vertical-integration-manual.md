@@ -60,7 +60,7 @@ Trihouse EasyFullControl adapter
 | 전체 launch | \`trihouse_rmf_bridge/launch/control_system_rmf.launch.py\` |
 | Pinky 상태/TCP | \`trihouse_pinky/trihouse_pinky_fleet/trihouse_pinky_fleet/status_node.py\`, \`gateway_node.py\` |
 | 배터리 정책 | \`trihouse_pinky/trihouse_pinky_fleet/trihouse_pinky_fleet/battery_policy.py\` |
-| DB registry | \`db/seed_dev.sql\`, \`db/migrations/005_normalize_device_registry.sql\` |
+| DB registry | \`db/seeds/seed_dev.sql\`, \`db/archive/pre_physical_v1/005_normalize_device_registry.sql\` |
 
 출고 sequence는 다음처럼 고정된다.
 
@@ -391,15 +391,15 @@ nc -zv 127.0.0.1 8788
 cd /home/syw/Trihouse
 docker compose -f compose.db.yaml exec -T mysql \
   mysql -uroot -p"$MYSQL_ROOT_PASSWORD" trihouse_fms \
-  < db/migrations/005_normalize_device_registry.sql
+  < db/archive/pre_physical_v1/005_normalize_device_registry.sql
 
 docker compose -f compose.db.yaml exec -T mysql \
   mysql -uroot -p"$MYSQL_ROOT_PASSWORD" trihouse_fms \
-  < db/migrations/006_add_map_authoring_and_publication.sql
+  < db/archive/pre_physical_v1/006_add_map_authoring_and_publication.sql
 ~~~
 
 `control_system_test/db`의 SQL은 upstream UI 참고 자료일 뿐 실행하지 않는다. 신규
-volume의 전체 기준은 `db/schema_mysql.sql`, 기존 volume의 증분 기준은 `db/migrations`
+volume의 전체 기준은 `db/migrations/001_physical_v1_baseline.sql`, 기존 volume의 증분 기준은 `db/migrations`
 뿐이다.
 
 #### 4.5.1 기존 project1을 canonical DB에 가져오기

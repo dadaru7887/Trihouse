@@ -5,11 +5,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCHEMA = (ROOT / "db" / "schema_mysql.sql").read_text(encoding="utf-8")
-SEED = (ROOT / "db" / "seed_dev.sql").read_text(encoding="utf-8")
-MIGRATION_PATH = ROOT / "db" / "migrations" / "008_add_waypoint_operational_roles.sql"
+SCHEMA = (ROOT / "db" / "migrations" / "001_physical_v1_baseline.sql").read_text(encoding="utf-8")
+SEED = (ROOT / "db" / "seeds" / "seed_dev.sql").read_text(encoding="utf-8")
+MIGRATION_PATH = ROOT / "db" / "archive" / "pre_physical_v1" / "008_add_waypoint_operational_roles.sql"
 LOADING_DOCK_MIGRATION_PATH = (
-    ROOT / "db" / "migrations" / "011_unify_loading_dock_and_waiting_point.sql"
+    ROOT / "db" / "archive" / "pre_physical_v1" / "011_unify_loading_dock_and_waiting_point.sql"
 )
 ROLE_GUIDE = (
     ROOT / "docs" / "architecture" / "waypoint-operational-roles.md"
@@ -113,7 +113,7 @@ def test_gazebo_namespace_is_unique_per_project() -> None:
     robots = _table("map_project_robots")
     assert "UNIQUE KEY uq_map_robots_gz_name (project_id, gz_name)" in robots
     migration = (
-        ROOT / "db" / "migrations" / "009_unique_project_robot_gz_name.sql"
+        ROOT / "db" / "archive" / "pre_physical_v1" / "009_unique_project_robot_gz_name.sql"
     ).read_text(encoding="utf-8")
     assert "uq_map_robots_gz_name" in migration
 
@@ -123,7 +123,7 @@ def test_map_name_is_a_single_safe_identity_in_schema_and_migration() -> None:
     assert "chk_map_projects_name" in projects
     assert "^[A-Za-z0-9_][A-Za-z0-9_-]{0,94}$" in projects
     migration = (
-        ROOT / "db" / "migrations" / "010_enforce_canonical_map_name.sql"
+        ROOT / "db" / "archive" / "pre_physical_v1" / "010_enforce_canonical_map_name.sql"
     ).read_text(encoding="utf-8")
     assert "chk_map_projects_name" in migration
     assert "REGEXP" in migration
@@ -134,7 +134,7 @@ def test_loading_dock_is_direction_neutral_and_waiting_point_is_supported() -> N
     locations = _table("locations")
     waypoints = _table("map_project_waypoints")
     migration = (
-        ROOT / "db" / "migrations" / "011_unify_loading_dock_and_waiting_point.sql"
+        ROOT / "db" / "archive" / "pre_physical_v1" / "011_unify_loading_dock_and_waiting_point.sql"
     ).read_text(encoding="utf-8")
 
     assert "'loading_dock'" in locations
@@ -150,10 +150,10 @@ def test_existing_volume_guide_applies_role_schema_before_loading_dock_data() ->
     """011 reads operational_role, so the documented command must run 008 first."""
 
     role_position = ROLE_GUIDE.index(
-        "db/migrations/008_add_waypoint_operational_roles.sql"
+        "db/archive/pre_physical_v1/008_add_waypoint_operational_roles.sql"
     )
     loading_dock_position = ROLE_GUIDE.index(
-        "db/migrations/011_unify_loading_dock_and_waiting_point.sql"
+        "db/archive/pre_physical_v1/011_unify_loading_dock_and_waiting_point.sql"
     )
 
     assert role_position < loading_dock_position

@@ -1,6 +1,6 @@
 # Trihouse FMS 데이터베이스 가이드라인
 
-기준 스키마: [db/schema_mysql.sql](../../db/schema_mysql.sql) (FMS + recovery 전체 계약)
+기준 스키마: [db/migrations/001_physical_v1_baseline.sql](../../db/migrations/001_physical_v1_baseline.sql) (FMS + recovery 전체 계약)
 관련 문서: [환경 구성](../deployment/environment_overview.md) · [DB 시연](../deployment/database_demo.md) · [Recovery Memory](../architecture/recovery_memory.md)
 
 이 문서는 `trihouse_fms` 스키마를 읽고 쓰는 모든 코드가 지켜야 할 규약을 정리한다. 스키마 자체의 정의는 SQL 파일이 기준이며, 이 문서는 **왜 그렇게 설계했고 어떻게 써야 하는가**를 설명한다.
@@ -1475,14 +1475,16 @@ job은 `completed`, step은 `succeeded`다. 공용 상태 매핑 함수를 만�
 
 ### 12.1 원칙
 
-- **현재 `schema_mysql.sql`의 운영 도메인 테이블을 기준으로 유지한다.** 입고·출고·재고·예약·관제의
+- **현재 `001_physical_v1_baseline.sql`의 운영 도메인 테이블을 기준으로 검토한다.** 입고·출고·재고·예약·관제의
   새 요구는 먼저 기존 테이블의 컬럼·JSON·열거값으로 표현할 수 있는지 검토한다.
   정상 작업의 세밀한 실행 이력은 `job_step_attempts`, 원본 파일은 `artifacts`로 해결한다 (10.4).
 - VLM/RL 복구 데이터는 v4의 세 테이블로 역할을 분리한다.
   `location_recovery_profiles`는 Reference Memory이고,
   `recovery_episodes`와 `recovery_steps`는 Episodic Memory다. replay buffer는
   이 데이터를 export해 만든 임시 학습 메모리이며 DB 테이블로 추가하지 않는다.
-- 기준 스키마 파일은 [db/schema_mysql.sql](../../db/schema_mysql.sql) 하나다.
+- 기준 스키마 파일은 [db/migrations/001_physical_v1_baseline.sql](../../db/migrations/001_physical_v1_baseline.sql) 하나이며 첫 실물 테스트 이후 수정하지 않는다.
+- 이후 변경은 `002_<purpose>.sql`, `003_<purpose>.sql` 순서로 추가하고 적용 파일의 SHA-256을 `schema_migrations`에 기록한다.
+- `db/archive/pre_physical_v1/`의 `004`~`012`는 `001`에 합쳐진 과거 개발 DB 업그레이드 이력이므로 신규 DB에 실행하지 않는다.
 - [control_system/db/schema.sql](../../control_system/db/schema.sql)은 기존 SQLite v2에 대응하는 **별도 스키마**다. 새 연동에 사용하지 않는다.
 - [control_system/db/migrate_sqlite_to_mysql.py](../../control_system/db/migrate_sqlite_to_mysql.py)는 `robosapiens` 스키마 전용이다. `trihouse_fms`에 실행하지 않는다.
 
@@ -1508,9 +1510,9 @@ ALTER TABLE jobs ADD CONSTRAINT chk_jobs_state CHECK (state IN
 
 | 대상 | 내용 |
 | --- | --- |
-| [db/schema_mysql.sql](../../db/schema_mysql.sql) | DDL 갱신 + 주석 갱신 |
-| `db/migrations/` | 이미 데이터가 있는 DB에 적용할 비파괴 변경 SQL 추가 |
-| [db/seed_dev.sql](../../db/seed_dev.sql) | 개발 시드 데이터 정합성 확인 |
+| [db/migrations/001_physical_v1_baseline.sql](../../db/migrations/001_physical_v1_baseline.sql) | 불변 기준선. 이후 변경 금지 |
+| `db/migrations/` | 다음 연속 번호의 비파괴 변경 SQL 추가 |
+| [db/seeds/seed_dev.sql](../../db/seeds/seed_dev.sql) | 개발 시드 데이터 정합성 확인 |
 | [data_dictionary.xlsx](data_dictionary.xlsx) | 컬럼·테이블 영문 설명 동기화 |
 | [schema_diagram.drawio](schema_diagram.drawio) | 영문 물리명과 영문 논리명 동기화 |
 | 이 문서 | 열거값 표, 테이블 가이드, 안티패턴 갱신 |
@@ -1714,7 +1716,7 @@ MySQL 정의는 사실 넷이었다. 네 번째인 `compose.test.yaml` 을 지�
    `compose.db_test.yaml` 은 그 뒤로 계속 손질됐다.
 3. **띄우면 조용히 잘못된 테스트 DB 가 된다.** 같은 3307 을 쓰므로 진짜 테스트 DB 와
    포트가 부딪히고, `db/init/003_grant_gateway_recovery.sh` 를 마운트하지 않는다.
-   `db/schema_mysql.sql` 은 `trihouse_recovery` 를 만들 뿐 **GRANT 를 하지 않으므로**
+   `db/migrations/001_physical_v1_baseline.sql` 은 `trihouse_recovery` 를 만들 뿐 **GRANT 를 하지 않으므로**
    그 스크립트가 유일한 권한 경로다. 실행 중인 3307 에서 확인했다.
 
    ```
