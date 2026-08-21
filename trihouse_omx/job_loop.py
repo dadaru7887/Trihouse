@@ -63,6 +63,18 @@ RobotSession의 "로봇·카메라를 한 번만 연결" 이점을 잃지 않기
 
 from __future__ import annotations
 
+import os
+
+# 상시 무인 운영 중에는 정책 로딩이 HuggingFace 서버 접속에 의존하면 안 된다
+# (실측 확인: 와이파이가 잠깐 끊기면 policy_runtime.load_policy()가 최대
+# 30초 넘게 재시도하다 예외를 던지는데, 이 시점은 outcome_report.report_outcome()
+# 호출 *전*이라 완료 보고조차 안 나간 채로 job_step이 Gateway에 붕 뜬다).
+# import 시점에 huggingface_hub가 이 값을 읽어가므로, deliver/policy_runtime을
+# import하기 전에 반드시 먼저 설정해야 한다. --order로 CLI를 직접 돌리는
+# deliver.py/store.py는 이 파일을 안 거치므로 영향받지 않는다 — 이 프로세스
+# 안에서만 적용된다.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+
 import argparse
 import sys
 import time
