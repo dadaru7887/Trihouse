@@ -205,11 +205,12 @@ def test_each_zone_has_parallel_branches_that_converge_before_loading() -> None:
 
     steps = planned_outbound_steps(plan)
 
-    pick, navigate, load = steps[:3]
-    assert pick.input["branch"] == "omx_prepare_pick"
+    prepare, navigate, load = steps[:3]
+    assert prepare.action_type == "prepare"
+    assert prepare.input["branch"] == "omx_prepare"
     assert navigate.input["branch"] == "pinky_navigate"
-    assert pick.input["handover_group_id"] == navigate.input["handover_group_id"]
-    assert load.input["dependencies"] == [pick.step_no, navigate.step_no]
+    assert prepare.input["handover_group_id"] == navigate.input["handover_group_id"]
+    assert load.input["dependencies"] == [prepare.step_no, navigate.step_no]
     assert load.input["gate"] == "PINKY_READY+OMX_READY"
     assert [(step.action_type, step.executor_type) for step in steps[-4:]] == [
         ("navigate", "mobile"),
@@ -233,7 +234,7 @@ def test_mixed_temperature_bundles_pin_each_transfer_to_its_workcell_arm() -> No
         LOCATIONS,
     )
 
-    transfers = [step for step in planned_outbound_steps(plan) if step.action_type in {"pick", "load"}]
+    transfers = [step for step in planned_outbound_steps(plan) if step.action_type in {"prepare", "load"}]
 
     assert [step.input["temperature_zone"] for step in transfers] == [
         "ambient", "ambient", "chilled", "chilled", "frozen", "frozen",

@@ -276,7 +276,8 @@ def test_planned_order_requests_preserve_parallel_dependencies_without_devices()
 
     requests = SequenceOrchestrator.planned_step_requests(plan)
 
-    assert requests[0].input["branch"] == "omx_prepare_pick"
+    assert requests[0].action_type == "prepare"
+    assert requests[0].input["branch"] == "omx_prepare"
     assert requests[1].input["branch"] == "pinky_navigate"
     assert requests[2].input["dependencies"] == [10, 20]
     assert all("assigned_device_id" not in request.input for request in requests)

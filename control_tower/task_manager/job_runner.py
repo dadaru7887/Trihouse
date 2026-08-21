@@ -118,6 +118,36 @@ def current_step(steps: tuple[JobStepDetail, ...]) -> JobStepDetail | None:
     return None
 
 
+def ready_steps(steps: tuple[JobStepDetail, ...]) -> tuple[JobStepDetail, ...]:
+    """Return every pending step whose declared dependencies succeeded.
+
+    EN: Dependencies use stable ``step_no`` values, not database row IDs. Every
+    step must declare the field, including root steps with an empty list.
+    KO: 의존성은 DB 행 ID가 아니라 안정적인 ``step_no``를 사용한다. 시작
+    step도 빈 목록을 명시해야 하며, 누락된 정의를 임의의 순차 실행으로 해석하지 않는다.
+    """
+    by_number = {step.step_no: step for step in steps}
+    ready: list[JobStepDetail] = []
+    for step in sorted(steps, key=lambda candidate: candidate.step_no):
+        dependencies = step.input.get("dependencies")
+        if not isinstance(dependencies, list):
+            raise ValueError(f"step {step.step_no}: input.dependencies must be a list")
+        if any(isinstance(value, bool) or not isinstance(value, int) for value in dependencies):
+            raise ValueError(f"step {step.step_no}: dependencies must contain step numbers")
+        if len(dependencies) != len(set(dependencies)):
+            raise ValueError(f"step {step.step_no}: dependencies must be unique")
+        if step.step_no in dependencies:
+            raise ValueError(f"step {step.step_no}: a step cannot depend on itself")
+        missing = [number for number in dependencies if number not in by_number]
+        if missing:
+            raise ValueError(f"step {step.step_no}: unknown dependencies {missing}")
+        if step.state == "pending" and all(
+            by_number[number].state == "succeeded" for number in dependencies
+        ):
+            ready.append(step)
+    return tuple(ready)
+
+
 class JobRunner:
     """Assign resources to queued orders and dispatch their current step."""
 
@@ -242,31 +272,48 @@ class JobRunner:
             cycle.assigned.append(detail.job_id)
             assignment = {"mobile_id": request.mobile_id}
 
-        # 10, 20, ... 순으로 아직 성공하지 않은 첫 step 하나만 선택한다.
-        step = current_step(detail.steps)
-        if step is None:
+        if all(step.state == "succeeded" for step in detail.steps):
             # Every step succeeded; the Gateway closes the Job on the final
             # outcome, so there is nothing left for the runner to do.
             return
-        if step.state == "running":
-            cycle.awaiting.append(detail.job_id)
-            return
-        if step.state != "pending":
+        failed = next(
+            (step for step in detail.steps if step.state in {"failed", "cancelled"}),
+            None,
+        )
+        if failed is not None:
             cycle.blocked.append(
-                f"job {detail.job_id}: step {step.job_step_id} is {step.state}"
+                f"job {detail.job_id}: step {failed.job_step_id} is {failed.state}"
             )
             return
 
-        # 이 호출이 성공하면 Gateway가 executor_type에 따라 rmf/omx/pinky 채널의
-        # integration_messages 행을 만든다. 실제 RMF·설비 worker는 그 행을 claim한다.
-        self._gateway.dispatch_step(
-            step.job_step_id,
-            StepDispatchRequest(
-                idempotency_key=_dispatch_key(detail.job_id, step.job_step_id),
-                actor=self._actor,
-                assigned_device_id=_step_device(step, assignment),
-            ),
-        )
+        try:
+            dispatchable = ready_steps(detail.steps)
+        except ValueError as error:
+            cycle.blocked.append(f"job {detail.job_id}: {error}")
+            return
+
+        if not dispatchable:
+            if any(step.state == "running" for step in detail.steps):
+                cycle.awaiting.append(detail.job_id)
+            else:
+                cycle.blocked.append(
+                    f"job {detail.job_id}: no pending step has satisfied dependencies"
+                )
+            return
+
+        # EN: Dispatch every ready branch in one poll so OMX preparation and
+        # Pinky navigation start independently and converge at the load gate.
+        # KO: 같은 주기에 준비된 분기를 모두 보내 OMX 준비와 Pinky 이동을 병렬로
+        # 시작하고, 적재 step의 dependencies에서 두 결과를 합류시킨다.
+        for step in dispatchable:
+            self._gateway.dispatch_step(
+                step.job_step_id,
+                StepDispatchRequest(
+                    idempotency_key=_dispatch_key(detail.job_id, step.job_step_id),
+                    actor=self._actor,
+                    assigned_device_id=_step_device(step, assignment),
+                ),
+            )
         cycle.dispatched.append(detail.job_id)
 
     def _select_assignment(

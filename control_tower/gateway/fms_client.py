@@ -153,6 +153,7 @@ class JobStepDetail:
     state: str
     target_location_id: int | None = None
     assigned_device_id: str | None = None
+    input: JsonObject = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "JobStepDetail":

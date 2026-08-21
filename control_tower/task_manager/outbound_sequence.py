@@ -86,7 +86,7 @@ class PlannedOutboundStep:
 def planned_outbound_steps(plan: OutboundPlan) -> tuple[PlannedOutboundStep, ...]:
     """계획된 온도 구역 방문을 DB에 저장할 step_no 10, 20, 30...으로 바꾼다.
 
-    구역마다 ``arm/pick → mobile/navigate → fms/load`` 세 단계가 생긴다.
+    구역마다 ``arm/prepare + mobile/navigate → fms/load`` 세 단계가 생긴다.
     모든 구역 적재가 끝나면 포장 도크 이동 → 인계 → 작업자 확인 → 충전 복귀
     네 단계가 붙는다. 단일 구역 주문은 결과적으로 10~70의 7단계다.
     """
@@ -115,16 +115,16 @@ def planned_outbound_steps(plan: OutboundPlan) -> tuple[PlannedOutboundStep, ...
         }
         # Step 10 계열: OMX가 해당 구역 상품을 준비한다. P0 실물에서는 사람이
         # 물건을 올리는 절차가 이 구간을 보완한다.
-        pick_no = step_no
+        prepare_no = step_no
         steps.append(
             PlannedOutboundStep(
-                pick_no,
+                prepare_no,
                 "arm",
-                "pick",
+                "prepare",
                 bundle.dock_location_id,
                 {
                     **common,
-                    "branch": "omx_prepare_pick",
+                    "branch": "omx_prepare",
                     "dependencies": inherited_dependencies,
                     "items": [
                         {
@@ -167,7 +167,7 @@ def planned_outbound_steps(plan: OutboundPlan) -> tuple[PlannedOutboundStep, ...
                 {
                     **common,
                     "branch": "readiness_load_gate",
-                    "dependencies": [pick_no, navigate_no],
+                    "dependencies": [prepare_no, navigate_no],
                     "gate": "PINKY_READY+OMX_READY",
                 },
             )

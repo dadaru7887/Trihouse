@@ -17,14 +17,14 @@ def outbound_job() -> dict[str, object]:
                 "action_type": "navigate",
                 "executor_type": "mobile",
                 "target_location_id": 12,
-                "input": {"waypoint": "PACK-01"},
+                "input": {"dependencies": [], "waypoint": "PACK-01"},
             },
             {
                 "step_no": 2,
                 "action_type": "load",
                 "executor_type": "arm",
                 "target_location_id": 12,
-                "input": {"sku": "SKU-1"},
+                "input": {"dependencies": [1], "sku": "SKU-1"},
             },
         ],
     }
@@ -110,6 +110,75 @@ def test_dispatch_is_idempotent_and_rejects_a_non_current_step():
     assert first.json()["state"] == "pending"
     assert blocked.status_code == 409
     assert blocked.json()["detail"] == "job step is not the current pending step"
+
+
+def test_dispatch_allows_two_independent_root_steps_before_either_completes():
+    client = TestClient(create_app(InMemoryFmsRepository()))
+    body = outbound_job()
+    body["steps"] = [
+        {
+            "step_no": 10,
+            "action_type": "prepare",
+            "executor_type": "arm",
+            "input": {"dependencies": []},
+        },
+        {
+            "step_no": 20,
+            "action_type": "navigate",
+            "executor_type": "mobile",
+            "input": {"dependencies": []},
+        },
+        {
+            "step_no": 30,
+            "action_type": "load",
+            "executor_type": "fms",
+            "input": {"dependencies": [10, 20]},
+        },
+    ]
+    steps = client.post("/internal/v1/jobs", json=body).json()["steps"]
+
+    arm = client.post(
+        f"/internal/v1/job-steps/{steps[0]['job_step_id']}/dispatch",
+        headers={"Idempotency-Key": "dispatch-parallel-arm"},
+        json={"actor": "control-tower"},
+    )
+    mobile = client.post(
+        f"/internal/v1/job-steps/{steps[1]['job_step_id']}/dispatch",
+        headers={"Idempotency-Key": "dispatch-parallel-mobile"},
+        json={"actor": "control-tower", "assigned_device_id": "PK_01"},
+    )
+    join = client.post(
+        f"/internal/v1/job-steps/{steps[2]['job_step_id']}/dispatch",
+        headers={"Idempotency-Key": "dispatch-parallel-join"},
+        json={"actor": "control-tower"},
+    )
+
+    assert arm.status_code == mobile.status_code == 200
+    assert join.status_code == 409
+
+
+def test_dispatch_rejects_a_step_without_explicit_dependencies():
+    client = TestClient(create_app(InMemoryFmsRepository()))
+    body = outbound_job()
+    body["steps"] = [
+        {
+            "step_no": 10,
+            "action_type": "prepare",
+            "executor_type": "arm",
+            "input": {},
+        }
+    ]
+    step_id = client.post("/internal/v1/jobs", json=body).json()["steps"][0][
+        "job_step_id"
+    ]
+
+    response = client.post(
+        f"/internal/v1/job-steps/{step_id}/dispatch",
+        headers={"Idempotency-Key": "dispatch-missing-dependencies"},
+        json={"actor": "control-tower"},
+    )
+
+    assert response.status_code == 409
 
 
 def test_dispatch_rejects_reusing_key_for_different_request():

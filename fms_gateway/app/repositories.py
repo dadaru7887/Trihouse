@@ -286,6 +286,22 @@ class JobStepNotDispatchable(Exception):
     pass
 
 
+def _declared_dependency_numbers(step: dict[str, Any]) -> tuple[int, ...]:
+    """Validate and return the explicit step-number dependency contract."""
+    step_input = _json(step.get("input")) or {}
+    dependencies = step_input.get("dependencies")
+    if not isinstance(dependencies, list):
+        raise JobStepNotDispatchable
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in dependencies):
+        raise JobStepNotDispatchable
+    if len(dependencies) != len(set(dependencies)):
+        raise JobStepNotDispatchable
+    step_no = int(step["step_no"])
+    if any(value >= step_no for value in dependencies):
+        raise JobStepNotDispatchable
+    return tuple(dependencies)
+
+
 class StepOutcomeConflict(Exception):
     """The reported outcome does not match what the step can accept."""
 
@@ -5557,16 +5573,25 @@ class MySqlFmsRepository:
                     retry and step["state"] != "failed"
                 ):
                     raise JobStepNotDispatchable
-                cursor.execute(
-                    """
-                    SELECT COUNT(*) AS blocked
-                    FROM job_steps
-                    WHERE job_id = %s AND step_no < %s AND state <> 'succeeded'
-                    """,
-                    (step["job_id"], step["step_no"]),
-                )
-                if int(cursor.fetchone()["blocked"]):
-                    raise JobStepNotDispatchable
+                dependency_numbers = _declared_dependency_numbers(step)
+                if dependency_numbers:
+                    placeholders = ", ".join(["%s"] * len(dependency_numbers))
+                    cursor.execute(
+                        f"""
+                        SELECT step_no, state
+                        FROM job_steps
+                        WHERE job_id = %s AND step_no IN ({placeholders})
+                        FOR UPDATE
+                        """,
+                        (step["job_id"], *dependency_numbers),
+                    )
+                    dependency_states = {
+                        int(row["step_no"]): row["state"] for row in cursor.fetchall()
+                    }
+                    if set(dependency_states) != set(dependency_numbers) or any(
+                        state != "succeeded" for state in dependency_states.values()
+                    ):
+                        raise JobStepNotDispatchable
                 cursor.execute(
                     """
                     SELECT 1 FROM integration_messages
@@ -7552,11 +7577,17 @@ class InMemoryFmsRepository:
         invalid_state = (not retry and step["state"] != "pending") or (
             retry and step["state"] != "failed"
         )
-        if invalid_state or any(
-            candidate["job_id"] == step["job_id"]
-            and candidate["step_no"] < step["step_no"]
-            and candidate["state"] != "succeeded"
+        dependency_numbers = _declared_dependency_numbers(step)
+        dependency_states = {
+            int(candidate["step_no"]): candidate["state"]
             for candidate in self._steps.values()
+            if candidate["job_id"] == step["job_id"]
+            and int(candidate["step_no"]) in dependency_numbers
+        }
+        if (
+            invalid_state
+            or set(dependency_states) != set(dependency_numbers)
+            or any(state != "succeeded" for state in dependency_states.values())
         ):
             raise JobStepNotDispatchable
         if any(

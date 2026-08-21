@@ -14,6 +14,7 @@ from control_tower.task_manager.job_runner import (
     DEFAULT_PACKING_DOCK_CODES,
     JobRunner,
     current_step,
+    ready_steps,
 )
 
 
@@ -39,6 +40,7 @@ def _steps(*states: str, executor_type: str = "mobile"):
             action_type="navigate",
             executor_type=executor_type,
             state=state,
+            input={"dependencies": [] if index == 0 else [index]},
         )
         for index, state in enumerate(states)
     )
@@ -388,3 +390,90 @@ def test_current_step_orders_by_step_number_not_list_order() -> None:
 
 def test_current_step_is_none_when_every_step_succeeded() -> None:
     assert current_step(_steps("succeeded", "succeeded")) is None
+
+
+def test_job_step_detail_preserves_explicit_dependencies() -> None:
+    step = JobStepDetail.from_dict(
+        {
+            "job_step_id": 101,
+            "step_no": 20,
+            "action_type": "navigate",
+            "executor_type": "mobile",
+            "state": "pending",
+            "input": {"dependencies": [10]},
+        }
+    )
+
+    assert step.input == {"dependencies": [10]}
+
+
+def test_ready_steps_returns_both_independent_parallel_branches() -> None:
+    steps = (
+        JobStepDetail(100, 10, "prepare", "arm", "pending", input={"dependencies": []}),
+        JobStepDetail(101, 20, "navigate", "mobile", "pending", input={"dependencies": []}),
+        JobStepDetail(102, 30, "load", "fms", "pending", input={"dependencies": [10, 20]}),
+    )
+
+    assert [step.step_no for step in ready_steps(steps)] == [10, 20]
+
+
+def test_runner_dispatches_arm_prepare_and_mobile_navigation_in_one_cycle() -> None:
+    steps = (
+        JobStepDetail(100, 10, "prepare", "arm", "pending", input={"dependencies": []}),
+        JobStepDetail(101, 20, "navigate", "mobile", "pending", input={"dependencies": []}),
+        JobStepDetail(102, 30, "load", "fms", "pending", input={"dependencies": [10, 20]}),
+    )
+    job = _order_job(
+        1,
+        state="assigned",
+        assignment=_assignment(
+            "PK_01", "OMX_01", "PACKING-01-DOCK-01", "TRIHOUSE-TEST-01-CHG-01"
+        ),
+        steps=steps,
+    )
+    gateway = FakeGateway([job])
+
+    report = JobRunner(gateway).run_once()
+
+    assert [step_id for step_id, _ in gateway.dispatches] == [100, 101]
+    assert report.dispatched == (1,)
+
+
+def test_running_parallel_branch_does_not_block_a_ready_pending_sibling() -> None:
+    steps = (
+        JobStepDetail(100, 10, "prepare", "arm", "running", input={"dependencies": []}),
+        JobStepDetail(101, 20, "navigate", "mobile", "pending", input={"dependencies": []}),
+        JobStepDetail(102, 30, "load", "fms", "pending", input={"dependencies": [10, 20]}),
+    )
+    job = _order_job(
+        1,
+        state="running",
+        assignment=_assignment(
+            "PK_01", "OMX_01", "PACKING-01-DOCK-01", "TRIHOUSE-TEST-01-CHG-01"
+        ),
+        steps=steps,
+    )
+    gateway = FakeGateway([job])
+
+    report = JobRunner(gateway).run_once()
+
+    assert [step_id for step_id, _ in gateway.dispatches] == [101]
+    assert report.dispatched == (1,)
+
+
+def test_missing_dependencies_fail_closed_instead_of_guessing_sequence() -> None:
+    steps = (JobStepDetail(100, 10, "prepare", "arm", "pending"),)
+    job = _order_job(
+        1,
+        state="assigned",
+        assignment=_assignment(
+            "PK_01", "OMX_01", "PACKING-01-DOCK-01", "TRIHOUSE-TEST-01-CHG-01"
+        ),
+        steps=steps,
+    )
+    gateway = FakeGateway([job])
+
+    report = JobRunner(gateway).run_once()
+
+    assert gateway.dispatches == []
+    assert any("dependencies" in reason for reason in report.blocked)
