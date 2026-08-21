@@ -23,14 +23,25 @@ ShutdownSignal이 이미 이 원칙으로 설계돼 있어 그대로 재사용) 
 docs/architecture/robot_arm_safety.md의 "Pinky 도착 확인 전에 handover zone을
 활성화하지 않는다"를 지키는 defense-in-depth다.
 
-**아직 팀원에게 확인 전인 값(placeholder)** — 실제 값이 나오면 아래 함수/상수
-내부만 고치면 된다, 나머지 로직은 안 바뀐다:
-  - ARM_ACTION_TYPE: pick+place를 트리거하는 실제 action_type 문자열.
-  - _extract_zone(): dispatch.payload["input"]에서 창고 구역을 읽는 필드명.
-  - _extract_product_code(): 수량 필드가 아직 안 보여서, 지금은 dispatch 하나를
-    아이템 하나·수량 1로 취급한다(과소 추정이 과다 추정보다 안전).
-이 값들이 확정되기 전까지는 zone/product_code를 확정할 수 없는 dispatch를
-fail-closed로(성공 처리 안 하고 실패 보고) 처리한다.
+**우리가 팀원에게 제안하는 payload 형식** — 실제 스키마가 아직 없어서, 기다리는
+대신 이 형식으로 달라고 먼저 제안한다(코드가 이미 이 형식을 기준으로 동작하므로
+"이대로 주시면 바로 됩니다"라고 말할 수 있음). "omx" 채널 dispatch의
+payload["input"]:
+    {
+        "zone": "frozen",              # "frozen" | "chilled" | "ambient"
+        "items": [
+            {"product_code": "dumpling", "quantity": 2},
+            {"product_code": "porkbelly", "quantity": 1}
+        ]
+    }
+품목이 여러 개면 deliver.run_order()가 연속 실행(fail-closed 중단 포함) 후
+완료 보고를 한 번만 한다 — 사용자가 deliver.py --order dumpling:2,porkbelly:1로
+직접 테스트하며 확인한 것과 동일한 흐름이다.
+
+실제로 이 형식과 다르게 오면(ARM_ACTION_TYPE도 포함) zone/items를 확정할 수
+없는 dispatch로 보고 fail-closed 처리한다(성공 처리 안 하고 실패 보고) — 형식이
+확정되면 _extract_zone()/_extract_items()/ARM_ACTION_TYPE 이 세 곳만 실제
+값에 맞게 고치면 나머지 로직은 안 바뀐다.
 
 deliver.py의 run_order()를 그대로 재사용한다(subprocess로 쉘아웃하지 않음 —
 RobotSession의 "로봇·카메라를 한 번만 연결" 이점을 잃지 않기 위해). v1은
@@ -91,7 +102,8 @@ CLAIM_LIMIT = 1
 
 DEFAULT_POLL_INTERVAL_S = 1.0  # executor_worker_node.py의 기본값과 동일
 
-# 팀원에게 실제 값 확인 전 placeholder. 확정되면 이 한 줄만 고치면 된다.
+# 팀원에게 제안하는 값(모듈 docstring 참고). 실제 값이 다르게 확정되면 이 한
+# 줄만 고치면 된다.
 ARM_ACTION_TYPE = "pick"
 
 PINKY_ARRIVAL_TIMEOUT_S = deliver.PINKY_ARRIVAL_TIMEOUT_S
@@ -101,30 +113,42 @@ PINKY_POLL_INTERVAL_S = deliver.PINKY_POLL_INTERVAL_S
 def _extract_zone(dispatch: ExecutorDispatch) -> str | None:
     """dispatch에서 창고 구역을 뽑는다.
 
-    실제 필드명이 아직 확정되지 않았다(팀원이 payload 스키마를 만드는 중).
-    확정되면 이 함수 내부만 고치면 되고, 호출부(_handle_dispatch)는 안 바뀐다.
-    확인 가능한 값이 없거나 알려진 zone이 아니면 None — fail-closed 판단은
-    호출부가 한다.
+    제안 형식(모듈 docstring): payload["input"]["zone"]. 확인 가능한 값이
+    없거나 알려진 zone(frozen/chilled/ambient)이 아니면 None — fail-closed
+    판단은 호출부(_handle_dispatch)가 한다.
     """
     step_input = dispatch.payload.get("input") or {}
-    zone = step_input.get("zone") or step_input.get("temperature_zone")
+    zone = step_input.get("zone")
     return zone if zone in deliver.KNOWN_ZONES else None
 
 
-def _extract_product_code(dispatch: ExecutorDispatch) -> str | None:
-    """dispatch에서 상품 코드를 뽑는다.
+def _extract_items(dispatch: ExecutorDispatch) -> tuple[tuple[str, int], ...]:
+    """dispatch에서 (product_code, quantity) 목록을 뽑는다.
 
-    executor_worker.py의 _expected_items()와 같은 필드(expected_items/items/
-    sku/product_code)를 본다. 여러 개가 올 수도 있지만, 수량·복수 아이템 처리가
-    아직 확정 안 돼서 지금은 첫 번째 하나만, 수량은 항상 1로 취급한다
-    (mock_inputs.MockOrderItem 생성 지점 참고) — 과소 추정이 과다 추정보다 안전.
+    제안 형식(모듈 docstring): payload["input"]["items"] = [{"product_code":
+    ..., "quantity": ...}, ...]. dispatch 하나에 품목이 여러 개 실려 있으면
+    전부 반환한다 — deliver.run_order()가 다품목을 연속 실행 후 완료 보고
+    한 번으로 처리하므로 여기서 자르지 않는다(사용자 확인: deliver.py --order
+    dumpling:2,porkbelly:1로 테스트하며 기대한 흐름과 동일). quantity가
+    없거나 1 미만이면 그 품목은 버린다(형식이 안 맞는 걸 억지로 1개로
+    해석하지 않는다 — fail-closed).
     """
     step_input = dispatch.payload.get("input") or {}
-    items = step_input.get("expected_items") or step_input.get("items")
-    if isinstance(items, (list, tuple)) and items:
-        return str(items[0])
-    sku = step_input.get("sku") or step_input.get("product_code")
-    return str(sku) if sku else None
+    raw_items = step_input.get("items")
+    if not isinstance(raw_items, (list, tuple)):
+        return ()
+    result: list[tuple[str, int]] = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        product_code = raw.get("product_code")
+        quantity = raw.get("quantity")
+        if not isinstance(product_code, str) or not product_code:
+            continue
+        if not isinstance(quantity, int) or quantity < 1:
+            continue
+        result.append((product_code, quantity))
+    return tuple(result)
 
 
 def _pinky_arrived(
@@ -200,11 +224,11 @@ def _handle_dispatch(
         )
         return
 
-    product_code = _extract_product_code(dispatch)
-    if product_code is None:
+    items = _extract_items(dispatch)
+    if not items:
         _report_failure(
-            gateway, dispatch, reason_code="PRODUCT_CODE_UNCONFIRMED",
-            detail="dispatch payload에서 product_code를 확정할 수 없음",
+            gateway, dispatch, reason_code="ITEMS_UNCONFIRMED",
+            detail="dispatch payload에서 items(product_code+quantity)를 확정할 수 없음",
         )
         return
 
@@ -222,7 +246,17 @@ def _handle_dispatch(
         order_id=f"job-loop-step-{dispatch.job_step_id}",
         job_step_id=dispatch.job_step_id,
         assignment_revision=dispatch.assignment_revision,
-        items=(mock_inputs.MockOrderItem(1, product_code, 1),),
+        # dispatch에 실린 품목 전부를 하나의 주문으로 묶는다 — deliver.run_order()가
+        # 이미 다품목을 연속 실행(fail-closed 중단 포함) 후 완료 보고 한 번으로
+        # 처리하게 돼 있다(사용자 확인: deliver.py --order dumpling:2,porkbelly:1과
+        # 동일한 흐름을 기대함). quantity는 --order의 qty와 같은 자리에 그대로
+        # 넣는다 — MockOrderItem.reserved_quantity는 지금 run_item()에서 실제로
+        # "N번 반복 pick"으로 쓰이지 않고 기록용으로만 남는다는 점은 --order와
+        # 동일한 기존 한계다(이 파일이 새로 만든 문제가 아님).
+        items=tuple(
+            mock_inputs.MockOrderItem(line_no, code, qty)
+            for line_no, (code, qty) in enumerate(items, start=1)
+        ),
         # 위에서 이미 실제 Gateway로 도착을 확인했으니, run_order 내부의
         # (mock 기반) 재확인은 즉시 통과하면 된다.
         pinky=mock_inputs.MockPinkyArrival(already_arrived=True),

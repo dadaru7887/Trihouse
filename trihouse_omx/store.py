@@ -223,16 +223,19 @@ def run_order(
         print(f"[{order.order_id}] pinky did not arrive within timeout — skipping (fail-closed)")
         return
 
+    # reserved_quantity만큼 물리적으로 따로 집어야 한다 — deliver.py의
+    # run_order와 동일한 이유(정책 한 번 실행 = 그 품목 한 개 pick+place).
+    units = [item for item in order.items for _ in range(item.reserved_quantity)]
     item_results = []
     try:
-        for item in order.items:
+        for unit_index, item in enumerate(units):
             verdict = run_item(
                 connected_robot,
                 dataset_features,
                 item,
                 zone=zone,
                 order_id=order.order_id,
-                is_first_order=is_first_order and item is order.items[0],
+                is_first_order=is_first_order and unit_index == 0,
                 episode_steps=episode_steps,
                 fps=fps,
                 bench_=bench_,
