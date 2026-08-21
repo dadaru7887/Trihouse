@@ -143,7 +143,7 @@ pytest -q \
   tests/test_camera_registry.py \
   tests/test_camera_publisher_allowlist.py \
   tests/test_stream_path_consistency.py \
-  vision_system/tests/test_vision_compose_contract.py \
+  model/worker/tests/test_vision_compose_contract.py \
   trihouse_pinky/trihouse_pinky_vision/test/test_command_builder.py \
   trihouse_pinky/trihouse_pinky_vision/test/test_verify_rtsp_script.py \
   trihouse_pinky/trihouse_pinky_bringup/test/test_trihouse_pinky_launch.py

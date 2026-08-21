@@ -1,0 +1,25 @@
+name: trihouse_ai_training
+
+services:
+  offline_training:
+    build:
+      context: .
+      dockerfile: docker/ai/Dockerfile.training
+    image: ${TRIHOUSE_AI_TRAINING_IMAGE:-trihouse_ai_training:local}
+    profiles: [training]
+    command:
+      - /data/recovery.jsonl
+      - --checkpoint
+      - /artifacts/recovery_policy.pt
+      - --epochs
+      - ${VLM_RL_TRAINING_EPOCHS:-20}
+    volumes:
+      - "${TRIHOUSE_AI_DATASET_DIR:-./runtime/ai/data}:/data:ro"
+      - "${TRIHOUSE_AI_ARTIFACT_DIR:-./runtime/ai/artifacts}:/artifacts"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

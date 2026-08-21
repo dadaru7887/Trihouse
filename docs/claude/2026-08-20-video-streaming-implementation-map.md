@@ -70,7 +70,7 @@ DISCONNECTED(3s) / RECOVERING(5s 지속해야 HEALTHY). `trihouse/vision/stream_
 
 ## 2. 송신 — USB 카메라 (OMX 손목 · 창고 고정)
 
-- [vision_system/stream_hub/ingress.py](../../vision_system/stream_hub/ingress.py)
+- [model/worker/media/stream_hub/ingress.py](../../model/worker/media/stream_hub/ingress.py)
 
 `UsbIngressConfig` 가 v4l2 입력을 받아 FFmpeg argv 를 만든다. 입력이 H.264 면 `copy`,
 MJPEG/YUYV422 면 `h264_nvenc`(`-preset p1 -tune ull`) 또는 `libx264`
@@ -119,9 +119,9 @@ RTSP 는 자격 증명을 URL 안에만 실을 수 있어서 publish 를 계정�
 
 | 파일 | 역할 |
 |---|---|
-| [vision_system/inference_common/stream.py](../../vision_system/inference_common/stream.py) | RTSP → 고정 크기 BGR raw frame |
-| [vision_system/person_worker/worker.py](../../vision_system/person_worker/worker.py) | 검출 → 자세 → 낙상 상태전이 |
-| [vision_perception/segmentation/inference_stream.py](../../vision_perception/segmentation/inference_stream.py) | OpenCV 기반 로컬 검증 경로 |
+| [model/worker/common/stream.py](../../model/worker/common/stream.py) | RTSP → 고정 크기 BGR raw frame |
+| [model/worker/person/worker.py](../../model/worker/person/worker.py) | 검출 → 자세 → 낙상 상태전이 |
+| [model/perception/segmentation/inference_stream.py](../../model/perception/segmentation/inference_stream.py) | OpenCV 기반 로컬 검증 경로 |
 
 `InferenceStreamConfig.from_env()` 가 `VISION_RTSP_URL` 을 읽는다. **`VISION_CAMERA_ID`
 는 일부러 없다** — `camera_id` 는 URL 마지막 segment 에서 property 로 파생한다. 필드로
@@ -146,8 +146,8 @@ RTSP 는 자격 증명을 URL 안에만 실을 수 있어서 publish 를 계정�
 
 | 파일 | 줄 | 역할 |
 |---|---|---|
-| [recording_server/recorder.py](../../vision_system/recording_server/recorder.py) | 149 | 60초 H.264 분할 녹화 프로세스 |
-| [recording_server/catalog.py](../../vision_system/recording_server/catalog.py) | 90 | segment 상태 · 보존 정책 |
+| [recording_server/recorder.py](../../model/worker/media/recording/recorder.py) | 149 | 60초 H.264 분할 녹화 프로세스 |
+| [recording_server/catalog.py](../../model/worker/media/recording/catalog.py) | 90 | segment 상태 · 보존 정책 |
 
 `build_ffmpeg_segment_command()` 는 `-c:v copy -f segment -segment_time 60
 -reset_timestamps 1 -strftime 1` 로 **재인코딩 없이** 자른다. recorder 는 파일을 직접
@@ -168,7 +168,7 @@ MediaMTX 자체 녹화와 이 recorder 가 **둘 다** 있다. 녹화본은 감�
 | [scripts/camera_soak_test.py](../../scripts/camera_soak_test.py) | 6스트림 30분 soak. 1800초 미만이면 `UNMEASURED` 판정 |
 | [camera_wall.dart](../../control_ui/rmf_control_ui/lib/trihouse/features/operations/camera_wall.dart) | 이벤트가 필요한 카메라만 여는 벽. 6대 동시 디코딩 안 함 |
 | [live_view.dart](../../control_system/roboapp/lib/ui/live_view.dart) | flutter_webrtc 뷰어 |
-| [pinky_camera_server.py](../../vision_perception/segmentation/pinky_camera_server.py) | MJPEG/HTTP 폴백 (기본 경로 아님) |
+| [pinky_camera_server.py](../../model/perception/segmentation/pinky_camera_server.py) | MJPEG/HTTP 폴백 (기본 경로 아님) |
 
 `verify_rtsp.sh` 는 다른 호스트에서 쓸 때 read 가 계정으로 막혀 있으므로 자격 증명을
 URI 에 실어야 한다: `rtsp://viewer:$MTX_VIEWER_PASS@<PC1>:8554/pinky/CAM-PK-01`.
@@ -211,12 +211,12 @@ omx_wrist→`omx`, warehouse_fixed→`fixed`)와 `camera_id` 로 파생한다. �
 [test_verify_rtsp_script.py](../../trihouse_pinky/trihouse_pinky_vision/test/test_verify_rtsp_script.py) ·
 [test_vision_launch.py](../../trihouse_pinky/trihouse_pinky_vision/test/test_vision_launch.py)
 
-**수신:** [test_stream_ingress.py](../../vision_system/tests/test_stream_ingress.py) ·
-[test_inference_stream.py](../../vision_system/tests/test_inference_stream.py) ·
-[test_recorder.py](../../vision_system/tests/test_recorder.py) ·
-[test_recording_catalog.py](../../vision_system/tests/test_recording_catalog.py)
+**수신:** [test_stream_ingress.py](../../model/worker/tests/test_stream_ingress.py) ·
+[test_inference_stream.py](../../model/worker/tests/test_inference_stream.py) ·
+[test_recorder.py](../../model/worker/tests/test_recorder.py) ·
+[test_recording_catalog.py](../../model/worker/tests/test_recording_catalog.py)
 
-**계약:** [test_vision_compose_contract.py](../../vision_system/tests/test_vision_compose_contract.py)
+**계약:** [test_vision_compose_contract.py](../../model/worker/tests/test_vision_compose_contract.py)
 가 `config/cameras.yaml`(정본)과 `config/mediamtx.yml`(파생 사본)의 경로 목록을 대조한다.
 
 ---

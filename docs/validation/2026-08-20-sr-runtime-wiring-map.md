@@ -90,8 +90,8 @@ grep -n "<찾는 기능 이름>" fms_gateway/app/repositories.py | head
 | [ ] | **SR_11** | High | 물품 파지 기능 | **안 돈다** | control_tower/task_manager/omx_workflow.py ❌<br>control_tower/gateway/omx_protocol.py ❌ |
 | [ ] | **SR_13** | High | 파지 실패 재시도 기능 | **안 돈다** | control_tower/task_manager/omx_workflow.py ❌ |
 | [ ] | **SR_15** | High | 다중 물품 임시 적재 기능 | **안 돈다** | control_tower/task_manager/omx_workflow.py ❌ |
-| [ ] | **SR_17** | High | 물품 정보 일치 확인 기능 | **안 돈다** | vision_system/marker_worker/policy.py ❌ |
-| [ ] | **SR_18** | High | 선반·슬롯 위치 확인 기능 | **안 돈다** | vision_system/marker_worker/policy.py ❌ |
+| [ ] | **SR_17** | High | 물품 정보 일치 확인 기능 | **안 돈다** | model/worker/marker/policy.py ❌ |
+| [ ] | **SR_18** | High | 선반·슬롯 위치 확인 기능 | **안 돈다** | model/worker/marker/policy.py ❌ |
 | [ ] | **SR_50** | High | 전달 완료 입력·기록 기능 | **안 돈다** | control_tower/task_manager/outbound_result.py ❌ |
 | [ ] | **SR_51** | High | 출고 결과 확정 기능 | **안 돈다** | control_tower/fleet_manager/inventory_workflow.py ❌ |
 | [ ] | **SR_06** | High | 작업 완료 후 원본 DB 반영 기능 | **안 돈다** | control_tower/fleet_manager/inventory_workflow.py ❌ |
@@ -104,8 +104,8 @@ grep -n "<찾는 기능 이름>" fms_gateway/app/repositories.py | head
 |---|---|---|---|---|---|
 | [ ] | **SR_23** | High | 사람 충돌 방지 주행 기능 | **일부** | trihouse_pinky/trihouse_pinky_safety/trihouse_pinky_safety/safety_supervisor_node.py ✅<br>trihouse_omx_adapter/trihouse_omx_adapter/policy.py ❌ |
 | [ ] | **SR_16** | High | 로봇팔 사람 충돌 방지 기능 | **안 돈다** | control_tower/task_manager/omx_workflow.py ❌ |
-| [ ] | **SR_19** | High | 로봇팔 작업영역 사람 감지 기능 | **안 돈다** | vision_system/person_worker/policy.py ❌ |
-| [ ] | **SR_20** | High | Pinky 주행경로 사람 감지 기능 | **안 돈다** | vision_system/person_worker/policy.py ❌ |
+| [ ] | **SR_19** | High | 로봇팔 작업영역 사람 감지 기능 | **안 돈다** | model/worker/person/policy.py ❌ |
+| [ ] | **SR_20** | High | Pinky 주행경로 사람 감지 기능 | **안 돈다** | model/worker/person/policy.py ❌ |
 | [ ] | **SR_09** | High | 공유 작업공간·경로 예약 기능 | **안 돈다** | control_tower/rmf_adapter/traffic_reservation.py ❌ |
 | [ ] | **SR_27** | Medium | 배터리 기반 작업 제한 기능 | **안 돈다** | control_tower/fleet_manager/battery_policy.py ❌ |
 | [ ] | **SR_03** | High | 로봇 상태 공유 기능 | **일부** | trihouse_pinky/trihouse_pinky_fleet/trihouse_pinky_fleet/status_node.py ✅<br>control_tower/gateway/omx_status.py ❌<br>trihouse_pinky/trihouse_pinky_fleet/trihouse_pinky_fleet/gateway_node.py ✅<br>trihouse_pinky/trihouse_pinky_fleet/trihouse_pinky_fleet/status.py ✅ |
@@ -116,7 +116,7 @@ grep -n "<찾는 기능 이름>" fms_gateway/app/repositories.py | head
 |---|---|---|---|---|---|
 | [ ] | **SR_01** | High | 통합 관제 화면 기능 | **안 돈다** | control_tower/gateway/http_server.py ❌<br>control_tower/gateway/operations_feed.py ❌ |
 | [ ] | **SR_02** | High | 관리자 개입 기능 | **안 돈다** | control_tower/task_manager/lifecycle.py ❌<br>control_tower/gateway/authorization.py ❌<br>control_tower/database/repositories/audit_repository.py ❌ |
-| [ ] | **SR_04** | High | 작업·비상 이력 및 영상 기록 기능 | **안 돈다** | vision_system/recording_server/recorder.py ❌<br>control_tower/task_manager/pick_failure_report.py ❌<br>vision_system/recording_server/catalog.py ❌ |
+| [ ] | **SR_04** | High | 작업·비상 이력 및 영상 기록 기능 | **안 돈다** | model/worker/media/recording/recorder.py ❌<br>control_tower/task_manager/pick_failure_report.py ❌<br>model/worker/media/recording/catalog.py ❌ |
 | [ ] | **SR_53** | High | 사람 위급상황 알림 기능 | **안 돈다** | control_tower/gateway/operations_feed.py ❌ |
 | [ ] | **SR_21** | High | 최종 파지 실패 보고 기능 | **안 돈다** | control_tower/task_manager/pick_failure_report.py ❌ |
 
@@ -125,7 +125,7 @@ grep -n "<찾는 기능 이름>" fms_gateway/app/repositories.py | head
 | | SR | 우선 | 기능 | 상태 | 요구사항 문서가 가리키는 파일 |
 |---|---|---|---|---|---|
 | [ ] | **SR_43** | Medium | 포장대 사용 상태 관리 기능 | **돈다** | control_tower/fleet_manager/packing_station.py ✅ |
-| [ ] | **SR_44** | Medium | 포장대 작업자 부재 감지 기능 | **안 돈다** | vision_system/person_worker/policy.py ❌ |
+| [ ] | **SR_44** | Medium | 포장대 작업자 부재 감지 기능 | **안 돈다** | model/worker/person/policy.py ❌ |
 | [ ] | **SR_45** | Medium | 포장대 대기·재배정 기능 | **돈다** | control_tower/fleet_manager/packing_station.py ✅ |
 | [ ] | **SR_08** | Medium | 작업 재할당 기능 | **안 돈다** | control_tower/fleet_manager/dispatch_workflow.py ❌ |
 | [ ] | **SR_41** | Medium | 긴급 주문 우선 처리 기능 | **안 돈다** | control_tower/fleet_manager/dispatch_workflow.py ❌ |
@@ -148,13 +148,13 @@ grep -n "<찾는 기능 이름>" fms_gateway/app/repositories.py | head
 | [ ] | **SR_35** | High | 입고 선반·슬롯 배정 기능 | **안 돈다** | control_tower/fleet_manager/inventory_workflow.py ❌ |
 | [ ] | **SR_37** | High | 지정 선반 적재 기능 | **안 돈다** | control_tower/task_manager/omx_workflow.py ❌ |
 | [ ] | **SR_38** | High | 입고 위치·재고 갱신 기능 | **안 돈다** | control_tower/fleet_manager/inventory_workflow.py ❌ |
-| [ ] | **SR_14** | High | 바구니 위치·자세 보정 기능 | **안 돈다** | vision_system/object_worker/basket_correction.py ❌ |
+| [ ] | **SR_14** | High | 바구니 위치·자세 보정 기능 | **안 돈다** | model/worker/object/basket_correction.py ❌ |
 
 ### G. 저우선순위 · 미구현
 
 | | SR | 우선 | 기능 | 상태 | 요구사항 문서가 가리키는 파일 |
 |---|---|---|---|---|---|
-| [ ] | **SR_05** | High | 저조도 데이터 증강 기반 인식 기능 | **안 돈다** | vision_perception/augmentation/generate_augmentation_candidates.py ❌<br>vision_system/training/dataset_policy.py ❌ |
+| [ ] | **SR_05** | High | 저조도 데이터 증강 기반 인식 기능 | **안 돈다** | model/perception/dataset/augmentation/generate_augmentation_candidates.py ❌<br>model/perception/segmentation/training/dataset_policy.py ❌ |
 | [ ] | **SR_10** | Low | 다량 물품 작업 분할 기능 | **코드 없음** | - |
 | [ ] | **SR_12** | Low | 공통 물품 위치·존재 인식 기능 | **코드 없음** | - |
 | [ ] | **SR_22** | Low | 미끄럼 감지·주행 보정 기능 | **코드 없음** | - |
@@ -228,7 +228,7 @@ group A 의 ❌ 는 대부분 **Gateway 로 옮겨간 것**이다. 어디로 갔
 | SR_28 준비상태 동기화 | `task_manager/handover_gate.py` | `status.py` → `dispatchable` → fleet adapter | **판정 기준이 같은지 미확인** |
 | SR_11·13·15·46 OMX | `task_manager/omx_workflow.py` | `executor_worker.py` + `trihouse_omx_adapter/*` | **`OmxSimulator` 프로토콜 왕복만. 실제 motion 없음** |
 | SR_47 인수인계 확인 | `gateway/omx_protocol.py` | `executor_worker.py:225` `handover_group_id`/`pinky_id`/`omx_id` | 〃 |
-| SR_17·18 QR·ArUco | `vision_system/marker_worker/policy.py` | `vision_edge/perception.py` (4060 워커) | **워커가 기동 진입점에 없다 — 진짜 공백** |
+| SR_17·18 QR·ArUco | `model/worker/marker/policy.py` | `model/worker/marker/edge_perception.py` (4060 워커) | **워커가 기동 진입점에 없다 — 진짜 공백** |
 | SR_50 전달 완료 | `task_manager/outbound_result.py` | `main.py:924` `POST /api/v1/jobs/{id}/worker-completion` | 살아 있음 |
 | SR_51 출고 확정 | `fleet_manager/inventory_workflow.py` | `repositories.py` (`reserved_qty` 22 곳) | **취소가 예약을 안 돌려준다(D2)** |
 | SR_06 DB 반영 | 〃 | 〃 | 〃 |
@@ -236,8 +236,7 @@ group A 의 ❌ 는 대부분 **Gateway 로 옮겨간 것**이다. 어디로 갔
 
 **진짜 공백 셋** — 위 표에서 "실제로 도는 곳" 이 없거나 대체가 프로토콜 왕복뿐인 것.
 
-1. **SR_17·18 (QR·ArUco 확인)** — `vision_edge` 워커를 띄우는 진입점이 어디에도 없다.
+1. **SR_17·18 (QR·ArUco 확인)** — `model.worker.marker` 워커를 띄우는 진입점이 어디에도 없다.
    물품이 맞는지 **아무도 확인하지 않고** 출고가 진행된다.
 2. **SR_11·13·15·46·47 (OMX)** — 프로토콜만 오간다. 실제 파지는 없다(결정됨: 이번엔 제외).
 3. **SR_07 (시간 효율 할당)** — first-fit. 2대가 되면 "스케줄링" 이라 부를 것이 없다.
-

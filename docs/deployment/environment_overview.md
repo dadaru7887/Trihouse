@@ -151,7 +151,7 @@ USB 카메라는 먼저 출력 포맷을 확인한다.
 v4l2-ctl --device /dev/video0 --list-formats-ext
 ```
 
-`H264`가 있으면 `vision_system.stream_hub.ingress`의 `VideoEncoder.COPY`,
+`H264`가 있으면 `model.worker.media.stream_hub.ingress`의 `VideoEncoder.COPY`,
 MJPEG/YUYV만 있으면 RTX 4060의 `VideoEncoder.NVENC`를 사용한다. CPU fallback은
 `VideoEncoder.LIBX264`이며 두 호스트에서 다시 인코딩하지 않는다.
 

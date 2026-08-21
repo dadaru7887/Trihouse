@@ -85,8 +85,8 @@ Low 항목은 현재 목표에서 제외하므로 구현 시작 파일을 만들
 | SR_01 | `control_tower/gateway/http_server.py` | `http_server.py → operations_feed.py → ui/operations/index.html → operations.js`; `test_operations_http_server.py` |
 | SR_02 | `control_tower/task_manager/lifecycle.py` | `lifecycle.py → gateway/authorization.py → audit_repository.py`; `test_task_lifecycle.py` |
 | SR_03 | `trihouse_pinky/trihouse_pinky_fleet/trihouse_pinky_fleet/status_node.py` | `status_node.py → status.py → gateway_node.py`; OMX는 `gateway/omx_status.py`; `test_omx_status.py` |
-| SR_04 | `vision_system/recording_server/recorder.py` | `recorder.py → catalog.py → pick_failure_report.py`; `test_recorder.py`, `test_recording_catalog.py` |
-| SR_05 | `vision_system/training/dataset_policy.py` | `dataset_policy.py → vision_perception/augmentation/generate_augmentation_candidates.py`; `test_dataset_policy.py` |
+| SR_04 | `model/worker/media/recording/recorder.py` | `recorder.py → catalog.py → pick_failure_report.py`; `test_recorder.py`, `test_recording_catalog.py` |
+| SR_05 | `model/perception/segmentation/training/dataset_policy.py` | `dataset_policy.py → model/perception/dataset/augmentation/generate_augmentation_candidates.py`; `test_dataset_policy.py` |
 | SR_06 | `control_tower/fleet_manager/inventory_workflow.py` | `reserve_* → OMX/Pinky 완료 event → finalize_inbound/outbound`; `test_inventory_workflow.py` |
 | SR_07 | `control_tower/fleet_manager/dispatch_workflow.py` | `dispatch_workflow.py → Pinky eta.py → OMX schedule`; `test_dispatch_workflow.py`, `test_eta_policy.py` |
 | SR_08 | `control_tower/fleet_manager/dispatch_workflow.py` | `reassign() → completed_steps → 다음 stage`; `test_dispatch_workflow.py` |
@@ -95,13 +95,13 @@ Low 항목은 현재 목표에서 제외하므로 구현 시작 파일을 만들
 | SR_11 | `control_tower/task_manager/omx_workflow.py` | `marker policy → omx_workflow.py → gateway/omx_protocol.py → OMX/MoveIt adapter`; `test_omx_workflow.py` |
 | SR_12 | 확장 범위 (Low) | 공통 물품 YOLO 좌표 보조 구현 없음 |
 | SR_13 | `control_tower/task_manager/omx_workflow.py` | `pick_result → retry offset → ITEM_HELD`; `test_omx_workflow.py` |
-| SR_14 | `vision_system/object_worker/basket_correction.py` | `YOLO OBB corners → bounded correction → REQUEST_PINKY_REPOSITION`; `test_basket_correction.py` |
+| SR_14 | `model/worker/object/basket_correction.py` | `YOLO OBB corners → bounded correction → REQUEST_PINKY_REPOSITION`; `test_basket_correction.py` |
 | SR_15 | `control_tower/task_manager/omx_workflow.py` | `temporary slot reserve → QR 재확인 → release`; `test_omx_workflow.py` |
 | SR_16 | `control_tower/task_manager/omx_workflow.py` | `person ROI event → PAUSED_FOR_PERSON → safe resume`; `test_omx_workflow.py` |
-| SR_17 | `vision_system/marker_worker/policy.py` | `QR order/item 확인 → pick authorization → OMX`; `test_marker_policy.py` |
-| SR_18 | `vision_system/marker_worker/policy.py` | `ArUco marker ID/pose → tolerance gate → OMX`; `test_marker_policy.py` |
-| SR_19 | `vision_system/person_worker/policy.py` | `detector/tracker observation → ROI 연속 frame → OMX pause`; 명시 ROI 테스트 |
-| SR_20 | `vision_system/person_worker/policy.py` | `Pinky camera person observation → ROI/track event → Pinky safety 입력`; 명시 ROI 테스트 |
+| SR_17 | `model/worker/marker/policy.py` | `QR order/item 확인 → pick authorization → OMX`; `test_marker_policy.py` |
+| SR_18 | `model/worker/marker/policy.py` | `ArUco marker ID/pose → tolerance gate → OMX`; `test_marker_policy.py` |
+| SR_19 | `model/worker/person/policy.py` | `detector/tracker observation → ROI 연속 frame → OMX pause`; 명시 ROI 테스트 |
+| SR_20 | `model/worker/person/policy.py` | `Pinky camera person observation → ROI/track event → Pinky safety 입력`; 명시 ROI 테스트 |
 | SR_21 | `control_tower/task_manager/pick_failure_report.py` | `OMX final failure → catalog evidence lookup → UI hold`; `test_pick_failure_report.py` |
 | SR_22 | 확장 범위 (Low) | IMU/odometry 미끄럼 판단 구현 없음 |
 | SR_23 | `trihouse_pinky/trihouse_pinky_safety/trihouse_pinky_safety/safety_supervisor_node.py` | `/cmd_vel_nav,/scan,/range,person → policy.py → /cmd_vel`; `test_pinky_sr_policies.py` |
@@ -125,7 +125,7 @@ Low 항목은 현재 목표에서 제외하므로 구현 시작 파일을 만들
 | SR_41 | `control_tower/fleet_manager/dispatch_workflow.py` | `priority → request time → next available robot`; `test_dispatch_workflow.py` |
 | SR_42 | 확장 범위 (Low) | 작업자 요청 우선 queue 구현 없음 |
 | SR_43 | `control_tower/fleet_manager/packing_station.py` | `AVAILABLE → RESERVED → IN_USE → release`; `test_packing_station_policy.py` |
-| SR_44 | `vision_system/person_worker/policy.py` | `packing ROI → consecutive frames → worker_present input`; 명시 ROI 테스트 |
+| SR_44 | `model/worker/person/policy.py` | `packing ROI → consecutive frames → worker_present input`; 명시 ROI 테스트 |
 | SR_45 | `control_tower/fleet_manager/packing_station.py` | `worker absence → reassign/wait decision → Pinky workflow.reassign`; `test_packing_station_policy.py` |
 | SR_46 | `control_tower/task_manager/omx_workflow.py` | `ready gate → basket correction/QR → load complete`; `test_omx_workflow.py` |
 | SR_47 | `control_tower/gateway/omx_protocol.py` | `omx_result ID 검증 → handover gate → transport allow`; `test_omx_protocol.py` |

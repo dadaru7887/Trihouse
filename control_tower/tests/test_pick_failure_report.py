@@ -3,7 +3,7 @@
 import unittest
 
 from control_tower.task_manager.pick_failure_report import PickFailureReporter
-from vision_system.recording_server.catalog import RecordingCatalog
+from model.worker.media.recording.catalog import RecordingCatalog
 
 
 class PickFailureReporterTest(unittest.TestCase):

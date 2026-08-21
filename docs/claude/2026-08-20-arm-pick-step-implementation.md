@@ -551,8 +551,8 @@ def _run_arm(self, dispatch):
 | `CAM-OMX-01-WRIST` / `CAM-OMX-02-WRIST`, `role: omx_wrist`, `attached_to: OMX_01/02` | [config/cameras.yaml](../../config/cameras.yaml) |
 | 스트림 경로 `omx/CAM-OMX-01-WRIST` (역할 접두사에서 파생) | [camera_registry.py:31-35](../../control_tower/gateway/camera_registry.py#L31-L35) |
 | MediaMTX 의 그 경로 | [config/mediamtx.yml:159-160](../../config/mediamtx.yml#L159-L160) |
-| RTSP → raw frame 변환 계약 | [inference_common/stream.py](../../vision_system/inference_common/stream.py) |
-| 녹화 구간 조회(`camera_id + 시각 → segment`) | [recording_server/catalog.py](../../vision_system/recording_server/catalog.py) |
+| RTSP → raw frame 변환 계약 | [common/stream.py](../../model/worker/common/stream.py) |
+| 녹화 구간 조회(`camera_id + 시각 → segment`) | [recording_server/catalog.py](../../model/worker/media/recording/catalog.py) |
 
 **`front` 카메라는 명부에 없다.** `config/cameras.yaml` 의 역할은 `pinky_travel`,
 `omx_wrist`, `warehouse_fixed` 셋뿐이고, OMX 작업대를 정면에서 보는 카메라가 없다.
@@ -582,7 +582,7 @@ class WristCamera:
     def qr(self) -> QrObservation | None: ...
 ```
 
-**QR/ArUco 디코딩은 `vision_edge` 의 것을 쓴다**([vision_edge/perception.py](../../vision_edge/perception.py)).
+**QR/ArUco 디코딩은 `model.worker.marker`의 것을 쓴다**([model/worker/marker/edge_perception.py](../../model/worker/marker/edge_perception.py)).
 설계가 정한 대로 `DICT_5X5_50` 의 0·1·2 이고 새 ID 범위를 만들지 않는다.
 
 **실물에서 30 초면 끝나는 확인 셋** (A5 단계에서):
@@ -678,7 +678,7 @@ Gateway 가 그것 없이는 step 을 닫아 주지 않는다
 | `POST /internal/v1/job-steps/{id}/pick-attempts` | `load-attempts`([main.py:1070](../../fms_gateway/app/main.py#L1070))와 같은 모양. `result` 는 `PICK_CONFIRMED`/`PICK_FAILED`/`MANUAL_FULFILLMENT_REQUIRED` |
 | pick 게이트 | `record_executor_outcome` 에서 `action_type == 'pick'` 이고 성공이면, 그 step 의 `targets` 품목이 전부 `PICK_CONFIRMED` 인지 확인. 아니면 `PICK_ITEMS_NOT_CONFIRMED` |
 | 모델 계보 | `policy_source` 하드코딩([repositories.py:5868](../../fms_gateway/app/repositories.py#L5868))을 요청값으로 바꾼다. pick 은 `rl`, 나머지는 지금대로 `rule` |
-| 증거 참조 | `evidence_refs` 에 손목 카메라 녹화 구간. [RecordingCatalog](../../vision_system/recording_server/catalog.py) 가 이미 `camera_id + timestamp → segment` 를 준다 — [PickFailureReporter](../../control_tower/task_manager/pick_failure_report.py) 가 쓰는 그 경로다 |
+| 증거 참조 | `evidence_refs` 에 손목 카메라 녹화 구간. [RecordingCatalog](../../model/worker/media/recording/catalog.py) 가 이미 `camera_id + timestamp → segment` 를 준다 — [PickFailureReporter](../../control_tower/task_manager/pick_failure_report.py) 가 쓰는 그 경로다 |
 
 **`policy_name`/`model_name` 을 비워 두지 않는 것이 이 절의 요점이다.** 지금
 `load` 는 `"policy_name": "cargo-sensor-gate", "model_name": "none"` 으로 정직하게

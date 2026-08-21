@@ -106,6 +106,12 @@ from .models import (
     WorkerCompletionRequest,
 )
 from .runtime_profiles import RuntimeProfileProvider
+from .recovery_repository import (
+    InMemoryRecoveryRepository,
+    MySqlRecoveryRepository,
+    RecoveryRepository,
+)
+from .recovery_routes import recovery_router
 from .repositories import (
     CommandClaimConflict,
     DispatchMessageNotFound,
@@ -166,6 +172,7 @@ def _default_repository() -> MySqlFmsRepository:
 def create_app(
     repository: FmsRepository | None = None,
     *,
+    recovery_repository: RecoveryRepository | None = None,
     map_runtime_root: FileSystemPath | None = None,
     map_source_token_ttl_seconds: float | None = None,
     map_source_max_bytes: int | None = None,
@@ -177,6 +184,10 @@ def create_app(
     """
     owns_runtime = repository is None
     repo = repository or _default_repository()
+    recovery_repo = recovery_repository or (
+        MySqlRecoveryRepository(Database(get_settings()))
+        if owns_runtime else InMemoryRecoveryRepository()
+    )
     map_settings = get_map_runtime_settings()
     runtime_root = FileSystemPath(
         map_runtime_root or map_settings.runtime_root
@@ -229,6 +240,7 @@ def create_app(
     # TCP 서버가 없는 구성(테스트, read-only 인스턴스)에서도 라우트가 뜨도록
     # 빈 장부를 먼저 둔다. lifespan 이 실제 서버의 것으로 바꾼다.
     app.state.robot_links = RobotLinkRegistry()
+    app.include_router(recovery_router(recovery_repo))
 
     @app.post(
         "/internal/v1/vision/person-detections",

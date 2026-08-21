@@ -38,9 +38,15 @@ FMS_TABLES = {
     "map_revisions",
     "operation_events",
     "reservations",
+    "schema_migrations",
     "workers",
 }
-RECOVERY_TABLES = {"recovery_episodes", "recovery_steps"}
+RECOVERY_TABLES = {
+    "recovery_episodes",
+    "recovery_steps",
+    "recovery_learning_transitions",
+    "recovery_ingestion_receipts",
+}
 
 
 def _invalid_english_comment(value: object) -> bool:
@@ -292,6 +298,22 @@ def test_recovery_schema_has_no_foreign_keys_to_fms(recovery_mysql_db):
     )
 
     assert cross_database_foreign_keys["count"] == 0
+
+
+def test_recovery_transition_has_the_exact_trainable_tuple_columns(recovery_mysql_db):
+    columns = recovery_mysql_db.all(
+        """
+        SELECT column_name AS column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'trihouse_recovery'
+          AND table_name = 'recovery_learning_transitions'
+        """
+    )
+    assert {row["column_name"] for row in columns} >= {
+        "recovery_step_id", "schema_version", "state_vector", "skill_id",
+        "skill_name", "action_vector", "reward_total", "next_state_vector",
+        "done", "metadata",
+    }
 
 
 def _insert_location(mysql_db) -> None:

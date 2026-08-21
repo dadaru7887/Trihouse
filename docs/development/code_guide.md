@@ -37,8 +37,8 @@ Vision 또는 FMS 정책은 Pinky의 `/cmd_vel`을 직접 발행하지 않는다
 | 배차·교통·배터리 | `control_tower/fleet_manager/dispatch_workflow.py` | `battery_policy.py`, `rmf_adapter/traffic_reservation.py` | `test_dispatch_workflow.py`, `test_battery_policy.py`, `test_traffic_reservation.py` |
 | OMX 작업 | `control_tower/task_manager/omx_workflow.py` | `gateway/omx_protocol.py`, `handover_gate.py`, `stage_engine.py` | `test_omx_workflow.py`, `test_omx_protocol.py` |
 | 비상·관리자 승인 | `control_tower/task_manager/emergency_workflow.py` | `lifecycle.py`, `gateway/authorization.py`, `audit_repository.py` | `test_emergency_workflow.py`, `test_authorization.py`, `test_audit_repository.py` |
-| 마커·바구니·ROI 사람 감지 | `vision_system/marker_worker/policy.py` | `object_worker/basket_correction.py`, `person_worker/policy.py` | `test_marker_policy.py`, `test_basket_correction.py`, 명시 ROI 테스트 2개 |
-| H.264 녹화·보존 | `vision_system/recording_server/recorder.py` | `catalog.py` | `test_recorder.py`, `test_recording_catalog.py` |
+| 마커·바구니·ROI 사람 감지 | `model/worker/marker/policy.py` | `model/worker/object/basket_correction.py`, `model/worker/person/policy.py` | `test_marker_policy.py`, `test_basket_correction.py`, 명시 ROI 테스트 2개 |
+| H.264 녹화·보존 | `model/worker/media/recording/recorder.py` | `catalog.py` | `test_recorder.py`, `test_recording_catalog.py` |
 | 독립 Trihouse 관제 UI | `control_tower/ui/operations/index.html` | `operations.js → gateway/http_server.py → operations_feed.py` | `test_operations_http_server.py` |
 
 SR_52 쓰러짐 감지는 이 표의 구현 흐름에 넣지 않는다. 시작점과 승인 전 단계는
@@ -76,22 +76,22 @@ Pinky의 제동거리·통로·배터리 로그를 측정한 뒤 한 항목씩 �
 
 ## Vision을 조정할 때
 
-- 실제 저조도 증강 recipe는 `vision_perception/augmentation/generate_augmentation_candidates.py`에 있다.
-  `vision_system/training/dataset_policy.py`는 이를 중복 구현하지 않고, 학습 전용 적용과 검증
+- 실제 저조도 증강 recipe는 `model/perception/dataset/augmentation/generate_augmentation_candidates.py`에 있다.
+  `model/perception/segmentation/training/dataset_policy.py`는 이를 중복 구현하지 않고, 학습 전용 적용과 검증
   세트 분리를 지킨다.
-- QR·ArUco 검증은 `vision_system/marker_worker/policy.py`, 바구니 잔여 정차 오차 보정은
-  `vision_system/object_worker/basket_correction.py`에 있다.
-- 영상 보존·증거 구간 선택은 `vision_system/recording_server/catalog.py`에 있고,
+- QR·ArUco 검증은 `model/worker/marker/policy.py`, 바구니 잔여 정차 오차 보정은
+  `model/worker/object/basket_correction.py`에 있다.
+- 영상 보존·증거 구간 선택은 `model/worker/media/recording/catalog.py`에 있고,
   `recorder.py`는 RTSP H.264를 60초 segment로 쓰는 FFmpeg 명령과 process lifecycle을 맡는다.
   실제 FFmpeg, file watcher, storage 삭제 권한은 서버 런타임에서 확인해야 한다.
 - 사람 쓰러짐 감지(SR_52)는 기술 조사·데이터·수용 기준을 정하기 전까지 계획 단계다. 이 문서의
   현재 코드/테스트를 최종 쓰러짐 감지 구현으로 사용하지 않는다.
-- `vision_system/stream_hub/ingress.py`는 USB 카메라 입력을 PC1 MediaMTX의
+- `model/worker/media/stream_hub/ingress.py`는 USB 카메라 입력을 PC1 MediaMTX의
   `<role>/<camera_id>` 경로로 만드는 FFmpeg argv를 소유한다. `camera_id`의 정본은
   `config/cameras.yaml`이고, `StreamIdentity`가 만드는 경로가 그 정본과 같은지는
   `test_stream_ingress.py`가 대조한다. 카메라가 H.264를
   제공하면 `COPY`, 그 외에는 `NVENC` 또는 `LIBX264`를 명시한다.
-- `vision_system/inference_common/stream.py`는 PC2의 `VISION_RTSP_URL`을 검증하고 그 마지막 path segment에서
+- `model/worker/common/stream.py`는 PC2의 `VISION_RTSP_URL`을 검증하고 그 마지막 path segment에서
   `camera_id`를 파생한다(별도 `VISION_CAMERA_ID`는 없다). 모델이
   읽을 BGR24 raw-frame FFmpeg argv를 만든다. 모델 worker는 `frame_size_bytes` 단위로 읽되
   처리 지연 시 과거 frame queue를 끝까지 처리하지 말고 latest-frame 정책을 적용한다.
@@ -129,17 +129,17 @@ python3 -m unittest -q \
   control_tower.tests.test_omx_workflow \
   control_tower.tests.test_audit_repository \
   control_tower.tests.test_order_intake \
-  vision_system.tests.test_person_policy.PersonPolicyTest.test_roi_requires_consecutive_person_frames \
-  vision_system.tests.test_person_policy.PersonPolicyTest.test_person_outside_roi_does_not_count_as_worker_presence \
-  vision_system.tests.test_marker_policy \
-  vision_system.tests.test_basket_correction \
-  vision_system.tests.test_dataset_policy \
-  vision_system.tests.test_recording_catalog \
-  vision_system.tests.test_recorder \
-  vision_system.tests.test_stream_ingress \
-  vision_system.tests.test_inference_stream \
-  vision_system.tests.test_vision_compose_contract
-python3 -m compileall -q control_tower trihouse_pinky vision_system
+  model.worker.tests.test_person_policy.PersonPolicyTest.test_roi_requires_consecutive_person_frames \
+  model.worker.tests.test_person_policy.PersonPolicyTest.test_person_outside_roi_does_not_count_as_worker_presence \
+  model.worker.tests.test_marker_policy \
+  model.worker.tests.test_basket_correction \
+  model.worker.tests.test_dataset_policy \
+  model.worker.tests.test_recording_catalog \
+  model.worker.tests.test_recorder \
+  model.worker.tests.test_stream_ingress \
+  model.worker.tests.test_inference_stream \
+  model.worker.tests.test_vision_compose_contract
+python3 -m compileall -q control_tower trihouse_pinky model
 git diff --check
 ```
 

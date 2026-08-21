@@ -3,8 +3,11 @@ name: trihouse_ai_5080
 
 services:
   ai_runtime:
-    # Build this image from the env branch backend Docker definition on the GPU server.
-    image: ${TRIHOUSE_AI_IMAGE:-trihouse_ai_5080:env}
+    build:
+      context: .
+      dockerfile: docker/ai/Dockerfile.inference
+    image: ${TRIHOUSE_AI_IMAGE:-trihouse_ai_5080:local}
+    command: ["python", "-m", "model.vlm_rl.inference.runtime"]
     restart: unless-stopped
     init: true
     shm_size: ${TRIHOUSE_AI_SHM_SIZE:-16gb}
@@ -23,8 +26,9 @@ services:
       VISION_FRAME_HEIGHT: ${VISION_FRAME_HEIGHT:-720}
       VISION_INFERENCE_FPS: ${VISION_INFERENCE_FPS:-15}
       RECOVERY_QUEUE_DIR: /var/lib/trihouse/recovery_queue
+      RECOVERY_RETRY_INTERVAL_SECONDS: ${RECOVERY_RETRY_INTERVAL_SECONDS:-2}
+      VLM_RL_EXECUTION_MODE: operator_approved
       MODEL_DIR: /models
-      DATASET_DIR: /data
       ARTIFACT_DIR: /artifacts
 
     extra_hosts:
@@ -33,7 +37,6 @@ services:
 
     volumes:
       - "${TRIHOUSE_AI_MODEL_DIR:-./runtime/ai/models}:/models:ro"
-      - "${TRIHOUSE_AI_DATASET_DIR:-./runtime/ai/data}:/data:ro"
       - "${TRIHOUSE_AI_ARTIFACT_DIR:-./runtime/ai/artifacts}:/artifacts"
       - "${TRIHOUSE_AI_QUEUE_DIR:-./runtime/ai/recovery_queue}:/var/lib/trihouse/recovery_queue"
 
@@ -45,6 +48,5 @@ services:
               count: 1
               capabilities: [gpu]
 
-# The image entrypoint owns YOLO streaming, VLM interpretation, RL policy work,
-# and acknowledged recovery-record delivery. The Compose file does not duplicate
-# those process definitions before the env-branch image contract is finalized.
+# Physical runtime performs inference and acknowledged delivery only. Offline
+# training is available exclusively through compose.ai_training.yaml.

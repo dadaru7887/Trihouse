@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """OMX wrist 카메라를 MediaMTX로 RTSP 발행한다 (2단계: 영상 송신 확인).
 
-trihouse_omx/ 바깥 코드를 재사용한다 — vision_system/stream_hub/ingress.py가
+trihouse_omx/ 바깥 코드를 재사용한다 — model/worker/media/stream_hub/ingress.py가
 이미 "USB 카메라 -> MediaMTX" 계약(StreamIdentity, UsbIngressConfig,
 build_usb_ingress_command)을 갖고 있어서, 이 스크립트는 그걸 import해서 쓰기만
 한다. 그 파일은 수정하지 않는다 — 재발명하지 않는다는 원칙(map 문서 1절)을
@@ -51,12 +51,12 @@ import sys
 import time
 from pathlib import Path
 
-# vision_system/stream_hub/ingress.py를 그대로 재사용하기 위해 저장소 루트를
+# model/worker/media/stream_hub/ingress.py를 그대로 재사용하기 위해 저장소 루트를
 # sys.path에 추가한다 — 파일은 안 건드리고 import만 한다.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
 
-from vision_system.stream_hub.ingress import (  # noqa: E402
+from model.worker.media.stream_hub.ingress import (  # noqa: E402
     StreamIdentity,
     UsbIngressConfig,
     UsbVideoFormat,

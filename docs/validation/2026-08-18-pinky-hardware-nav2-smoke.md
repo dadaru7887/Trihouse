@@ -362,7 +362,7 @@ QR 디코더까지 보려면:
 ```bash
 python3 - <<'PY'
 import os, cv2
-from vision_edge.perception import VisionPerception
+from model.worker.marker.edge_perception import VisionPerception
 capture = cv2.VideoCapture(os.environ["VISION_RTSP_URL"])
 ok, frame = capture.read()
 capture.release()

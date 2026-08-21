@@ -1,0 +1,16 @@
+ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:26.07-py3
+FROM ${BASE_IMAGE}
+
+WORKDIR /opt/trihouse
+ENV PYTHONPATH=/opt/trihouse
+
+COPY model/__init__.py model/__init__.py
+COPY model/vlm_rl/__init__.py model/vlm_rl/__init__.py
+COPY model/vlm_rl/shared model/vlm_rl/shared
+COPY model/vlm_rl/inference model/vlm_rl/inference
+COPY model/vlm_rl/recovery_memory model/vlm_rl/recovery_memory
+COPY model/vlm_rl/safety model/vlm_rl/safety
+COPY model/worker model/worker
+COPY model/perception/segmentation/runtime model/perception/segmentation/runtime
+
+CMD ["python", "-m", "model.vlm_rl.inference.runtime"]

@@ -30,7 +30,7 @@
 
 - `pinky_pro/**`, `control_system/**`는 **읽기·실행만** 허용한다. 이 계획의 어떤 태스크도 그 아래를 수정하지 않는다.
 - 로봇팔(OMX)은 다른 팀원 담당이다. `trihouse_omx_adapter/**`, `control_tower/task_manager/omx_*`, `control_tower/gateway/omx_*`를 수정하지 않는다.
-- 카메라는 **ROS를 거치지 않는다.** 로봇의 `camera_streamer`가 ffmpeg로 MediaMTX(PC1)에 RTSP push하고, 서버가 그것을 읽어 [vision_edge/perception.py](../../vision_edge/perception.py)의 `cv2.QRCodeDetector`·`cv2.aruco.DICT_5X5_50`으로 인식한다. **카메라 토픽을 ROS 브리지에 추가하지 않는다.**
+- 카메라는 **ROS를 거치지 않는다.** 로봇의 `camera_streamer`가 ffmpeg로 MediaMTX(PC1)에 RTSP push하고, 서버가 그것을 읽어 [model/worker/marker/edge_perception.py](../../model/worker/marker/edge_perception.py)의 `cv2.QRCodeDetector`·`cv2.aruco.DICT_5X5_50`으로 인식한다. **카메라 토픽을 ROS 브리지에 추가하지 않는다.**
 - ROS 도메인: **시뮬 0, 실기 52.** 절대 섞지 않는다.
 - 로봇 선택 인자는 **robot_id 기준**이다(`robots:=PK_01`, `TRIHOUSE_ROBOTS=PK_01`). namespace(`pinky_01`)가 아니다.
 - pytest는 항상 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest`로 실행한다. 그렇지 않으면 `launch_testing` 플러그인이 venv pytest와 충돌해 `PluginValidationError`가 난다.
@@ -828,7 +828,7 @@ git commit -m "fix: give the real robot's nav2 namespaced params and one TF name
 
 ### Task 6: 실기 카메라를 MediaMTX로 올린다
 
-[trihouse_pinky.launch.py:41](../../trihouse_pinky/trihouse_pinky_bringup/launch/trihouse_pinky.launch.py#L41)이 `vision_enabled` 인자를 **선언만 하고 쓰지 않는다.** 그래서 실기에서 `camera_streamer`가 뜨지 않고, 서버의 QR 인식([vision_edge/perception.py](../../vision_edge/perception.py))이 받을 스트림이 없다. 카메라는 ROS를 거치지 않고 RTSP로 간다.
+[trihouse_pinky.launch.py:41](../../trihouse_pinky/trihouse_pinky_bringup/launch/trihouse_pinky.launch.py#L41)이 `vision_enabled` 인자를 **선언만 하고 쓰지 않는다.** 그래서 실기에서 `camera_streamer`가 뜨지 않고, 서버의 QR 인식([model/worker/marker/edge_perception.py](../../model/worker/marker/edge_perception.py))이 받을 스트림이 없다. 카메라는 ROS를 거치지 않고 RTSP로 간다.
 
 **Files:**
 - Modify: `trihouse_pinky/trihouse_pinky_bringup/launch/trihouse_pinky.launch.py`
@@ -908,7 +908,7 @@ from launch.conditions import IfCondition
 ```python
             # 카메라는 ROS 토픽으로 나가지 않는다. 이 노드는 ffmpeg 로
             # MediaMTX(PC1) 에 RTSP 를 밀고, 서버가 그것을 읽어 QR·ArUco 를
-            # 인식한다(`vision_edge/perception.py`).
+            # 인식한다(`model/worker/marker/edge_perception.py`).
             IncludeLaunchDescription(
                 AnyLaunchDescriptionSource(vision),
                 launch_arguments={'config_file': vision_config}.items(),
@@ -1083,7 +1083,7 @@ curl -s http://127.0.0.1:8080/api/v1/jobs | python3 -m json.tool | head -40
 ```bash
 python3 -c "
 import cv2
-from vision_edge.perception import VisionPerception
+from model.worker.marker.edge_perception import VisionPerception
 import os
 capture = cv2.VideoCapture(os.environ['VISION_RTSP_URL'])
 ok, frame = capture.read()

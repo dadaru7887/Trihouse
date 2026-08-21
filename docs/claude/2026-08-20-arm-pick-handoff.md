@@ -441,7 +441,7 @@ OMX 작업대를 정면에서 보는 카메라가 없다. **결정 필요**: `CA
 **카메라를 한 번 열고 프레임을 두 갈래로 낸다.** 두 프로세스가 같은 `/dev/video0` 을
 두고 다투게 두지 않는다.
 
-QR/ArUco 디코딩은 [vision_edge/perception.py](../../vision_edge/perception.py) 를 쓴다.
+QR/ArUco 디코딩은 [model/worker/marker/edge_perception.py](../../model/worker/marker/edge_perception.py) 를 쓴다.
 `DICT_5X5_50` 의 0·1·2 이고 **새 ID 범위를 만들지 않는다.**
 
 ### W7 — 실제 파지

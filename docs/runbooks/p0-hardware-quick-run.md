@@ -371,7 +371,7 @@ $(ros2 pkg prefix --share trihouse_pinky_vision)/scripts/verify_rtsp.sh \
   "rtsp://viewer:${MTX_VIEWER_PASS}@<4060 Ethernet IP>:8554/pinky/CAM-PK-01" 600
 ```
 
-기존 `vision_edge/perception.py`에는 QR과 `DICT_5X5_50` ArUco ID/corner/camera-frame
+기존 `model/worker/marker/edge_perception.py`에는 QR과 `DICT_5X5_50` ArUco ID/corner/camera-frame
 `rvec/tvec` 검출이 이미 있다. 그러나 현재 실기 launch에는 RTSP를 그 코드에 연결해
 검출 결과를 화면/로그로 보여 주고 `MarkerObservation`을 발행하는 bridge 실행 파일이
 아직 없다. 따라서 이 gate에서는 영상만 검증하고, marker ID가 보인다는 말만으로

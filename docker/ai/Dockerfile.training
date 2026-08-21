@@ -1,0 +1,8 @@
+ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:26.07-py3
+FROM ${BASE_IMAGE}
+
+WORKDIR /opt/trihouse
+ENV PYTHONPATH=/opt/trihouse
+COPY model model
+
+ENTRYPOINT ["python", "-m", "model.vlm_rl.training.offline_train"]
