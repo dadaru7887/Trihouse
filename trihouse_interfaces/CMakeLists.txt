@@ -32,6 +32,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/EstimateTaskEnergy.srv"
   "srv/SetCargoLock.srv"
   "action/Dock.action"
+  "action/ExecuteOmx.action"
   "action/ExecuteTransport.action"
   DEPENDENCIES builtin_interfaces geometry_msgs sensor_msgs std_msgs
 )

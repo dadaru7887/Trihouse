@@ -38,7 +38,7 @@ SERVICE_FILES = {
     "EstimateTaskEnergy.srv",
     "SetCargoLock.srv",
 }
-ACTION_FILES = {"Dock.action", "ExecuteTransport.action"}
+ACTION_FILES = {"Dock.action", "ExecuteOmx.action", "ExecuteTransport.action"}
 
 FORBIDDEN_OVER_SPLIT_FILES = {
     "TaskProgress.msg",
@@ -191,3 +191,23 @@ def test_robot_status_exposes_layered_readiness_and_map_revision():
         "bool ready",
     ):
         assert field in robot_status
+
+
+def test_execute_omx_carries_versioned_json_without_duplicating_domain_fields():
+    contract = (PACKAGE_ROOT / "action" / "ExecuteOmx.action").read_text(
+        encoding="utf-8"
+    )
+
+    goal, result, feedback = [section.strip().splitlines() for section in contract.split("---")]
+    assert goal == ["string command_json"]
+    assert result == [
+        "uint16 CODE_OK=0",
+        "uint16 CODE_INVALID_COMMAND=1",
+        "uint16 CODE_DEVICE_MISMATCH=2",
+        "uint16 CODE_NOT_READY=3",
+        "uint16 CODE_EXECUTION_FAILED=4",
+        "bool success",
+        "uint16 code",
+        "string result_json",
+    ]
+    assert feedback == ["string event_json"]

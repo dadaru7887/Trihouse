@@ -1,0 +1,12 @@
+string command_json
+---
+uint16 CODE_OK=0
+uint16 CODE_INVALID_COMMAND=1
+uint16 CODE_DEVICE_MISMATCH=2
+uint16 CODE_NOT_READY=3
+uint16 CODE_EXECUTION_FAILED=4
+bool success
+uint16 code
+string result_json
+---
+string event_json
