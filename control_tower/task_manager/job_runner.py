@@ -105,13 +105,12 @@ class _Cycle:
 
 
 def current_step(steps: tuple[JobStepDetail, ...]) -> JobStepDetail | None:
-    """Return the earliest step that has not succeeded yet.
+    """Return the earliest unfinished step for legacy status callers.
 
-    Ordering is by `step_no` rather than list order so the runner does not
-    depend on how the Gateway happened to serialise the steps.
+    Dispatch does not use this helper: ``ready_steps`` evaluates explicit
+    dependencies and may return multiple parallel branches. This projection is
+    retained only for code that needs one representative unfinished step.
     """
-    # input.dependencies도 DB에 기록되지만 현재 runner는 병렬 분기를 동시에
-    # dispatch하지 않는다. 가장 이른 미성공 step 하나를 순서대로 진행한다.
     for step in sorted(steps, key=lambda step: step.step_no):
         if step.state != "succeeded":
             return step
@@ -165,11 +164,11 @@ class JobRunner:
         self._packing_dock_codes = tuple(packing_dock_codes)
 
     def run_once(self, *, limit: int = 10) -> JobRunnerReport:
-        """한 polling 주기 동안 주문을 읽어 배정하고 현재 step 하나를 보낸다.
+        """한 polling 주기 동안 주문을 읽어 배정하고 준비된 모든 step을 보낸다.
 
         API가 주문을 만들기만 해서는 로봇이 움직이지 않는다. 이 메서드가 queued
-        job을 발견해 로봇·OMX·포장 도크를 배정하고, 현재 pending step을 Gateway의
-        dispatch API로 넘겨야 integration_messages(outbox)가 생성된다.
+        job을 발견해 로봇·OMX·포장 도크를 배정하고, 의존성이 충족된 pending
+        step들을 Gateway의 dispatch API로 넘겨야 integration_messages(outbox)가 생성된다.
         """
         if limit <= 0:
             raise ValueError("limit must be positive")
