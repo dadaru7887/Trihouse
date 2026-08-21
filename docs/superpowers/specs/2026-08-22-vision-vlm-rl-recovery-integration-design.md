@@ -117,17 +117,15 @@ model/
 │   └── tests/
 └── vlm_rl/
     ├── contracts/
-    ├── runtime/
+    ├── shared/
+    │   └── policy_architecture.py
+    ├── inference/
     │   ├── trigger.py
     │   ├── snapshot.py
     │   ├── vlm_interpreter.py
     │   ├── state_encoder.py
     │   ├── candidate_generator.py
     │   └── orchestrator.py
-    ├── policy/
-    │   ├── tgrpo.py
-    │   ├── sac.py
-    │   └── checkpoint.py
     ├── safety/
     │   ├── filters.py
     │   ├── geometric_rollout.py
@@ -138,6 +136,8 @@ model/
     │   └── replay_export.py
     ├── training/
     │   ├── offline_train.py
+    │   ├── tgrpo.py
+    │   ├── sac.py
     │   ├── reward.py
     │   └── replay_sampler.py
     ├── configs/
@@ -149,6 +149,14 @@ model/
 독립 `model_registry` 서비스나 폴더는 만들지 않는다. 대신 segmentation과 VLM/RL의
 설정 파일이 모델 이름, 버전, weight/checkpoint 경로, SHA-256, class mapping,
 quantization, 승인 상태를 보관한다.
+
+`shared/policy_architecture.py`는 학습과 추론이 동일한 checkpoint를 읽는 데
+필요한 신경망 구조, state/skill/coord 차원, skill 순서만 보유한다. 기존
+`origin/dev_driving`의 신경망 layer, activation, dimension, sampling 수식, 학습 수식과
+hyperparameter는 바꾸지 않는다. 학습 entrypoint와 optimizer·gradient update는
+`training`에만 두고, `inference`는 승인된 checkpoint를 읽어 `torch.no_grad()`로
+후보를 만든다. 실물 5080 runtime image에는 `training` package와 학습
+entrypoint를 포함하지 않는다.
 
 이동 과정에서 제거 가능한 항목은 `__pycache__`, 의미 없는 `.gitkeep`, 완전히 대체된
 중복 상태 머신, 절대경로 전용 옛 실행 스크립트다. 실측 데이터, notebook, weight,
@@ -371,9 +379,16 @@ Gateway가 commit 후 ACK를 보내는 동안 연결이 끊기면 5080은 같은
 다른 payload hash는 conflict로 거절한다.
 
 기존 episode UUID와 `(recovery_episode_uuid, step_no)` unique key를 업무 중복 방지에
-사용한다. application ACK의 message ID와 payload hash를 영속적으로 대조하기 위해
-`002_recovery_ingestion.sql`에 recovery ingestion receipt를 추가한다. 001 baseline은
-수정하지 않는다.
+사용한다. 현재 `recovery_steps`의 state URI와 reward component만으로는 기존
+학습 코드가 필요한 `(state, skill, coord, reward, next_state, done)`을 복원할 수
+있다고 보장할 수 없다. `002_recovery_learning_transitions.sql`에 실제 실행된
+step과 1:1인 `recovery_learning_transitions`를 추가해 9차원 state, 5개 skill ID,
+3차원 상대 action, reward, next state, done을 명시적으로 저장한다.
+
+같은 migration에 application ACK의 message ID와 payload hash를 영속적으로 대조하는
+recovery ingestion receipt를 추가한다. 001 baseline은 수정하지 않는다. 학습 export는
+완료된 episode·step·transition을 join해 기존 offline trainer가 읽는 JSONL tuple로
+변환하며 pickle을 정본으로 사용하지 않는다.
 
 ### 10.2 API
 
@@ -391,7 +406,7 @@ VLM raw response, filter report는 `operation_events`와 artifact URI/SHA-256으
 
 ## 11. Compose와 Runtime
 
-`compose.ai_5080.yaml`의 단일 placeholder entrypoint를 실제 프로세스로 구체화한다.
+`compose.ai_5080.yaml`의 단일 placeholder entrypoint를 실제 추론 프로세스로 구체화한다.
 초기 운영에서는 한 컨테이너 안에서 supervisor가 여러 프로세스를 숨기는 방식보다
 상태를 개별 확인할 수 있는 서비스를 사용한다.
 
@@ -402,6 +417,8 @@ VLM raw response, filter report는 `operation_events`와 artifact URI/SHA-256으
 각 서비스는 동일한 read-only model/config mount와 필요한 GPU를 공유하되 queue sender는
 GPU를 요구하지 않는다. 5080에는 MySQL 환경변수를 전달하지 않는다. RTSP는 4060
 MediaMTX canonical URL을 사용하고 원본 영상 보존은 4060이 담당한다.
+실물 Compose는 `model.vlm_rl.inference`의 entrypoint만 실행한다. 학습은 로봇이
+정지한 별도 학습 profile에서 DB export artifact를 입력으로 명시적으로 실행한다.
 
 필수 환경값은 다음과 같다.
 
