@@ -159,10 +159,10 @@ ON DUPLICATE KEY UPDATE
 INSERT INTO workers
   (worker_id, worker_code, name, role, allowed_zones, active, registered_at)
 VALUES
-  ('W-LEGO-01', 'W-LEGO-01', 'Field Worker 01', 'operator',
+  ('W-FIELD-01', 'W-FIELD-01', 'Field Worker 01', 'operator',
    JSON_ARRAY('ambient', 'chilled', 'frozen', 'packing'), 1,
    '2026-08-03 09:00:00.000000'),
-  ('W-LEGO-02', 'W-LEGO-02', 'Field Worker 02', 'operator',
+  ('W-FIELD-02', 'W-FIELD-02', 'Field Worker 02', 'operator',
    JSON_ARRAY('ambient', 'chilled', 'frozen', 'packing'), 1,
    '2026-08-03 09:00:00.000000'),
   ('W-CONTROL-01', 'W-CONTROL-01', 'AI-Server-4060 Control Operator', 'safety_manager',
@@ -279,7 +279,7 @@ INSERT INTO jobs
    external_reference, source_location_id, destination_location_id, due_at,
    assigned_mobile_id, context, created_at)
 VALUES
-  ('JOB-DEV-001', 'outbound', 'normal', 'queued', 'W-LEGO-01',
+  ('JOB-DEV-001', 'outbound', 'normal', 'queued', 'W-FIELD-01',
    '00000000-0000-0000-0000-000000000001',
    (SELECT location_id FROM locations WHERE location_code = 'AMB-L2-S01'),
    (SELECT location_id FROM locations WHERE location_code = 'OUT-DOCK-01'),

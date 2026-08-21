@@ -11,8 +11,8 @@ FEATURES_JSONL = (
 )
 SEED_PATHS = (DEV_SEED_SQL, HARDWARE_SEED_SQL)
 EXPECTED_WORKERS = {
-    "W-LEGO-01": "operator",
-    "W-LEGO-02": "operator",
+    "W-FIELD-01": "operator",
+    "W-FIELD-02": "operator",
     "W-CONTROL-01": "safety_manager",
 }
 EXPECTED_INVENTORY_LOTS = {
