@@ -374,7 +374,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--zone", required=True, choices=KNOWN_ZONES,
         help="창고 구역. product_code가 이 구역 소속이 아니면 policy_catalog가 fail-closed로 "
-             "거절한다. chilled/ambient는 입고 정책 자체가 아직 없어(policy_catalog.py) "
+             "거절한다. 입고(place) 정책은 zone과 무관하게 아직 하나도 없어(policy_catalog.py) "
              "--policy-repo-id-override 없이는 항상 UnknownStorePolicyError로 끝난다.",
     )
     parser.add_argument(

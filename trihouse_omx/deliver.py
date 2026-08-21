@@ -4,9 +4,9 @@
 --zone {frozen,chilled,ambient}로 창고 구역을 고른다. 하드웨어·세이프티·CLI
 골격은 세 구역 다 동일하고, policy_catalog 조회에 --zone 값을 그대로 넘겨서
 다른 구역 품목을 실수로 집으러 가지 않게 fail-closed 한다(예: --zone chilled로
-dumpling(냉동 품목)을 주문하면 zone 불일치로 거절). 냉장/상온은 아직 학습된
-정책이 하나도 없어서(policy_catalog.py 참고) --zone chilled/ambient는 지금은
-항상 UnknownProductError로 끝난다 — 의도된 동작이다.
+dumpling(냉동 품목)을 주문하면 zone 불일치로 거절). 세 구역 모두 학습된
+정책이 있다(2026-08-21 확인, policy_catalog.py 참고) — frozen 4종, chilled
+4종, ambient 3종.
 
 1단계 목표 (실제 관제 연동 전, trihouse_omx/ 안에서만 검증):
   - 3·4번 인터페이스(상품 정보, 핑키 도착 상태값)를 mock_inputs.py로 임의 공급했을 때
@@ -370,8 +370,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--zone", required=True, choices=KNOWN_ZONES,
         help="창고 구역. product_code가 이 구역 소속이 아니면 policy_catalog가 fail-closed로 "
-             "거절한다(다른 구역 품목을 잘못 집으러 가지 않도록). chilled/ambient는 아직 "
-             "학습된 정책이 없어 --order를 뭘 줘도 UnknownProductError로 끝난다.",
+             "거절한다(다른 구역 품목을 잘못 집으러 가지 않도록).",
     )
     parser.add_argument(
         "--front-cam", default=None,

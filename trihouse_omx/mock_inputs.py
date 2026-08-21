@@ -139,15 +139,48 @@ _FROZEN_STORE_QUEUE: tuple[MockOrder, ...] = (
     ),
 )
 
-# 냉장(chilled)/상온(ambient) 품목은 아직 정책이 학습되지 않았다
-# (policy_catalog.py 참고 — 카탈로그에 zone="chilled"/"ambient" 항목이 하나도
-# 없다). 그래서 기본 큐도 비워 둔다. --order로 직접 넣으면 policy_catalog가
-# 알아서 zone 불일치/미학습을 fail-closed로 잡아준다. 품목이 추가되면 여기에
-# _FROZEN_*_QUEUE와 같은 형태로 채울 것.
+_CHILLED_DELIVER_QUEUE: tuple[MockOrder, ...] = (
+    MockOrder(
+        order_id="mock-deliver-chilled-1",
+        job_step_id=1101,
+        assignment_revision=1,
+        items=(MockOrderItem(1, "milk", 1), MockOrderItem(2, "sandwich", 1)),
+        pinky=MockPinkyArrival(already_arrived=True),
+    ),
+    MockOrder(
+        order_id="mock-deliver-chilled-2",
+        job_step_id=1102,
+        assignment_revision=1,
+        items=(MockOrderItem(1, "yogurt", 1), MockOrderItem(2, "coffee", 1)),
+        pinky=MockPinkyArrival(already_arrived=True),
+    ),
+)
+
+_AMBIENT_DELIVER_QUEUE: tuple[MockOrder, ...] = (
+    MockOrder(
+        order_id="mock-deliver-ambient-1",
+        job_step_id=1201,
+        assignment_revision=1,
+        items=(MockOrderItem(1, "mandarin", 2), MockOrderItem(2, "strawberry", 1)),
+        pinky=MockPinkyArrival(already_arrived=True),
+    ),
+    MockOrder(
+        order_id="mock-deliver-ambient-2",
+        job_step_id=1202,
+        assignment_revision=1,
+        items=(MockOrderItem(1, "orange", 1),),
+        pinky=MockPinkyArrival(already_arrived=True),
+    ),
+)
+
+# 입고(place, 바구니→선반)는 zone과 무관하게 아직 정책이 하나도 없다
+# (policy_catalog.py의 _STORE_CATALOG가 통째로 비어있음) — 그래서
+# 냉장/상온 입고 기본 큐는 계속 비워 둔다. --order로 직접 넣으면
+# policy_catalog가 UnknownStorePolicyError로 fail-closed 잡아준다.
 _DELIVER_QUEUES: dict[str, tuple[MockOrder, ...]] = {
     "frozen": _FROZEN_DELIVER_QUEUE,
-    "chilled": (),
-    "ambient": (),
+    "chilled": _CHILLED_DELIVER_QUEUE,
+    "ambient": _AMBIENT_DELIVER_QUEUE,
 }
 _STORE_QUEUES: dict[str, tuple[MockOrder, ...]] = {
     "frozen": _FROZEN_STORE_QUEUE,
