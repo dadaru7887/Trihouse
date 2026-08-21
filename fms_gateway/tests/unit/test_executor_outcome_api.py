@@ -24,14 +24,14 @@ def executor_job() -> dict[str, object]:
                 "action_type": "pick",
                 "executor_type": "arm",
                 "target_location_id": 12,
-                "input": {"sku": "SKU-1"},
+                "input": {"dependencies": [], "sku": "SKU-1"},
             },
             {
                 "step_no": 20,
                 "action_type": "navigate",
                 "executor_type": "mobile",
                 "target_location_id": 12,
-                "input": {"waypoint": "PACK-01"},
+                "input": {"dependencies": [10], "waypoint": "PACK-01"},
             },
         ],
     }
@@ -107,7 +107,7 @@ def test_a_claim_carries_the_step_context_the_executor_needs() -> None:
     assert claimed["action_type"] == "pick"
     assert claimed["executor_type"] == "arm"
     assert claimed["assignment"] == {}
-    assert claimed["payload"]["input"] == {"sku": "SKU-1"}
+    assert claimed["payload"]["input"] == {"dependencies": [], "sku": "SKU-1"}
 
 
 def test_a_claimed_dispatch_is_not_handed_to_a_second_worker() -> None:

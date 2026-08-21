@@ -135,6 +135,7 @@ ActionType = Literal[
     "navigate",
     "dock",
     "inspect",
+    "prepare",
     "pick",
     "load",
     "unload",

@@ -277,11 +277,11 @@ class BatteryPolicyProjectionTest(unittest.TestCase):
 
 
 class RecoveryHealthTest(unittest.TestCase):
-    def test_stale_battery_or_remaining_cargo_blocks_redeployment(self) -> None:
-        """After emergency, all required telemetry and an empty basket are mandatory."""
+    def test_stale_battery_blocks_redeployment_without_a_cargo_sensor(self) -> None:
+        """After emergency, required Pinky telemetry must be fresh."""
         result = evaluate_recovery_health(RecoveryHealthInputs(odom_fresh=True, scan_fresh=True, ultrasonic_fresh=True, battery_fresh=False))
         self.assertFalse(result.ready)
-        self.assertEqual(('battery', 'cargo'), result.failures)
+        self.assertEqual(('battery',), result.failures)
 
 
 class FleetProtocolTest(unittest.TestCase):
