@@ -1,7 +1,9 @@
 """상품 코드 -> ACT 정책 HF repo_id 매핑.
 
-컨텍스트 문서(trihouse_arm_context_summary.md 2번 항목) 기준 냉동구역 4종만
-학습 완료 상태다. 냉장/상온 8종은 아직 정책이 없으므로 이 카탈로그에 없다.
+냉동 4종(dumpling/porkbelly/icebar/icecorn)에 이어 냉장 4종(milk/yogurt/
+sandwich/coffee), 상온 3종(mandarin/strawberry/orange)까지 총 11종 학습
+완료(2026-08-21, https://huggingface.co/2usang 에서 확인 — 사용자 확인).
+product_code는 policy_repo_id의 "act_trihouse-" 뒤 부분과 그대로 맞췄다.
 
 주의: 여기 쓰는 product_code("dumpling" 등)는 실제 DB `job_items.product_code`와
 같은 문자열인지 아직 확인되지 않았다 (조사 결과 3번 항목 참고 — DB엔 별도
@@ -31,6 +33,13 @@ _CATALOG: dict[str, PolicyEntry] = {
         PolicyEntry("porkbelly", "삼겹살", "2usang/act_trihouse-porkbelly", "2usang/trihouse-porkbelly", "frozen"),
         PolicyEntry("icebar", "핑크 하드 아이스크림", "2usang/act_trihouse-icebar", "2usang/trihouse-icebar", "frozen"),
         PolicyEntry("icecorn", "아이스콘", "2usang/act_trihouse-icecorn", "2usang/trihouse-icecorn", "frozen"),
+        PolicyEntry("milk", "우유", "2usang/act_trihouse-milk", "2usang/trihouse-milk", "chilled"),
+        PolicyEntry("yogurt", "요거트", "2usang/act_trihouse-yogurt", "2usang/trihouse-yogurt", "chilled"),
+        PolicyEntry("sandwich", "샌드위치", "2usang/act_trihouse-sandwich", "2usang/trihouse-sandwich", "chilled"),
+        PolicyEntry("coffee", "커피", "2usang/act_trihouse-coffee", "2usang/trihouse-coffee", "chilled"),
+        PolicyEntry("mandarin", "귤", "2usang/act_trihouse-mandarin", "2usang/trihouse-mandarin", "ambient"),
+        PolicyEntry("strawberry", "딸기", "2usang/act_trihouse-strawberry", "2usang/trihouse-strawberry", "ambient"),
+        PolicyEntry("orange", "오렌지", "2usang/act_trihouse-orange", "2usang/trihouse-orange", "ambient"),
     )
 }
 
