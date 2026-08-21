@@ -23,6 +23,28 @@ from typing import Any, Literal, Protocol
 
 DEFAULT_LOG_PATH = Path(__file__).resolve().parent / "var" / "outcomes.jsonl"
 
+# 실제 Gateway는 outcome="failed"일 때 failure_domain이 "none"이면 422로
+# 거절한다(fms_gateway/app/models.py의 StepOutcome.failure_needs_a_domain —
+# 로컬 개발 Gateway로 실제 확인함, 로컬 JSONL 스텁만으로는 못 잡는 문제였다).
+# 허용값은 fms_gateway/app/models.py의 Literal과 동일해야 한다: none, robot,
+# perception, navigation, manipulation, safety, integration, operator, unknown.
+# 여기 없는 reason_code는 "unknown"으로 fail-closed 분류한다(거짓으로 특정
+# 도메인을 단정하지 않는다).
+_FAILURE_DOMAIN_BY_REASON_CODE: dict[str, str] = {
+    # deliver.py/store.py — 팔 자체가 파지/해제를 확인 못함
+    "GRASP_NOT_CONFIRMED": "manipulation",
+    "RELEASE_NOT_CONFIRMED": "manipulation",
+    # deliver.py/store.py/job_loop.py — 핑키가 아직 안 왔음(우리 쪽 팔 문제 아님)
+    "PINKY_NOT_ARRIVED": "navigation",
+    # store.py — 입고 정책 자체가 없음
+    "NO_PLACE_POLICY": "integration",
+    # job_loop.py — dispatch payload에서 필요한 정보를 못 뽑음(스키마/데이터 문제)
+    "ZONE_UNCONFIRMED": "integration",
+    "ZONE_MISMATCH": "integration",
+    "ITEMS_UNCONFIRMED": "integration",
+}
+_DEFAULT_FAILURE_DOMAIN = "unknown"
+
 
 class ExecutorGatewayClient(Protocol):
     """control_tower.gateway.fms_client.ExecutorGatewayClient와 같은 모양.
@@ -76,12 +98,17 @@ def report_outcome(
         sys.path.insert(0, str(repo_root))
     from control_tower.gateway.fms_client import StepOutcomeRequest
 
+    failure_domain = "none"
+    if outcome.outcome == "failed":
+        failure_domain = _FAILURE_DOMAIN_BY_REASON_CODE.get(outcome.reason_code, _DEFAULT_FAILURE_DOMAIN)
+
     request = StepOutcomeRequest(
         outcome=outcome.outcome,
         assignment_revision=outcome.assignment_revision,
         method_code=outcome.method_code,
         actor_device_id=outcome.actor_device_id,
         reason_code=outcome.reason_code,
+        failure_domain=failure_domain,
         detail=outcome.detail or None,
         metrics=outcome.metrics,
     )
