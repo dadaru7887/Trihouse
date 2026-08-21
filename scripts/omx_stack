@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Manage and diagnose the two-container role on one OMX PC."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+COMPOSE = ROOT / "compose.roles/omx.yaml"
+ENV_FILE = ROOT / ".env"
+
+
+def _environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    if ENV_FILE.is_file():
+        for raw in ENV_FILE.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, value = line.split("=", 1)
+            environment.setdefault(name.strip(), value.strip())
+    return environment
+
+
+def _compose(*arguments: str) -> list[str]:
+    command = ["docker", "compose"]
+    if ENV_FILE.is_file():
+        command += ["--env-file", str(ENV_FILE)]
+    return command + ["-f", str(COMPOSE), *arguments]
+
+
+def _run(arguments: list[str]) -> int:
+    return subprocess.run(arguments, cwd=ROOT, check=False).returncode
+
+
+def doctor() -> int:
+    env = _environment()
+    checks: dict[str, bool] = {
+        "docker": shutil.which("docker") is not None,
+        "ros_domain_id": env.get("ROS_DOMAIN_ID") == "12",
+        "device_identity": (env.get("DEVICE_ID"), env.get("ROS_NAMESPACE"))
+        in {("OMX_01", "omx_01"), ("OMX_02", "omx_02")},
+    }
+    for name in (
+        "OMX_SERIAL_DEVICE",
+        "OMX_FRONT_CAMERA",
+        "OMX_WRIST_CAMERA",
+        "OMX_CALIBRATION_DIR",
+        "OMX_MODEL_CACHE_DIR",
+    ):
+        value = env.get(name, "")
+        checks[name.lower()] = bool(value) and Path(value).exists()
+    zones = {zone.strip() for zone in env.get("OMX_TEMPERATURE_ZONES", "").split(",")}
+    checks["temperature_zones"] = (
+        env.get("DEVICE_ID") == "OMX_01" and zones == {"ambient", "chilled"}
+    ) or (env.get("DEVICE_ID") == "OMX_02" and zones == {"frozen"})
+
+    endpoint = f"/{env.get('ROS_NAMESPACE', '')}/execute"
+    if shutil.which("ros2") is None:
+        checks["action_visible"] = False
+    else:
+        result = subprocess.run(
+            ["ros2", "action", "list"],
+            text=True,
+            capture_output=True,
+            env=env,
+            check=False,
+        )
+        checks["action_visible"] = result.returncode == 0 and endpoint in result.stdout.splitlines()
+    print(json.dumps({"checks": checks, "healthy": all(checks.values())}, indent=2, sort_keys=True))
+    return 0 if all(checks.values()) else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="omx_stack")
+    parser.add_argument("command", choices=("up", "down", "logs", "doctor"))
+    parser.add_argument("--build", action="store_true")
+    args = parser.parse_args()
+    if args.command == "doctor":
+        return doctor()
+    if args.command == "up":
+        command = ["up", "-d", "--wait"]
+        if args.build:
+            command.append("--build")
+        return _run(_compose(*command))
+    if args.command == "down":
+        return _run(_compose("down", "--remove-orphans"))
+    return _run(_compose("logs", "--follow", "--tail", "200"))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

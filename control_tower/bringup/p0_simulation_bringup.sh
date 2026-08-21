@@ -101,7 +101,6 @@ export RMW_IMPLEMENTATION FASTDDS_BUILTIN_TRANSPORTS ROS_AUTOMATIC_DISCOVERY_RAN
 # 좌표에서 오며 `p0_runtime_assets.py` 가 파생 파라미터에 심는다.
 #
 # 지도 없이 돌려야 하면 `TRIHOUSE_NAV2_SLAM=true` 로 되돌릴 수 있다.
-: "${TRIHOUSE_ACT_CONFIG:=$ROOT/config/act.simulation.yaml}"
 : "${TRIHOUSE_NAV2_MAP:=$ROOT/control_ui/rmf_control_ui/data/rmf_maps/trihouse_map_01.yaml}"
 : "${TRIHOUSE_NAV2_SLAM:=false}"
 : "${TRIHOUSE_START_NAV2:=true}"
@@ -282,30 +281,13 @@ start "two pinky order demo" \
     start_job_runner:=false \
     start_executor_worker:=false
 
-# 3) OMX 두 대. 실제 OMX motion 은 나가지 않는다.
-#
-# `simulator_node` 는 ROS 노드가 아니라 stdin/stdout NDJSON 필터라서, 여기서
-# 배경 프로세스로 띄우면 stdin 이 바로 EOF 가 되어 즉시 끝난다. ROS 층에서
-# OMX 존재를 나타내는 것은 `gazebo_adapter_node` 다. 노드 이름이 코드에
-# 박혀 있으므로 두 대가 부딪히지 않게 실행 시 이름을 갈라 준다.
-declare -A OMX_ROBOTS=([OMX_01]=PK_01 [OMX_02]=PK_02)
+# 3) OMX 두 대. tests/simulation 구현도 실물과 같은 Action endpoint를 제공하며
+# 모터 명령은 내보내지 않는다.
 for omx in OMX_01 OMX_02; do
   node_name="$(echo "$omx" | tr '[:upper:]' '[:lower:]')"
-  pinky="${OMX_ROBOTS[$omx]}"
-  # 짝지어진 Pinky 의 namespace 로 cargo 를 보낸다. 어댑터는 이 토픽을 상대
-  # 경로로 발행하는데 namespace 없이 뜨므로 `/trihouse/cargo/state` 가 되고,
-  # Pinky 는 `/pinky_01/trihouse/cargo/state` 를 구독한다 — remap 이 없으면
-  # 둘이 영원히 만나지 못한다(2026-08-19 실측: Publisher count 0).
-  pinky_ns="$(echo "$pinky" | tr '[:upper:]' '[:lower:]' | tr -d '_')"
-  pinky_ns="${pinky_ns/pk/pinky_}"
-  start "omx adapter $omx" \
-    ros2 run trihouse_omx_adapter gazebo_omx_adapter --ros-args \
-      -r __node:="$node_name" \
-      -r trihouse/cargo/state:="/$pinky_ns/trihouse/cargo/state" \
-      -p omx_id:="$omx" \
-      -p robot_id:="$pinky" \
-      -p auto_load_on_handover_ready:=true \
-      -p use_sim_time:=true
+  start "omx action simulator $omx" \
+    python3 -m tests.simulation.omx.action_server --ros-args \
+      -r __node:="$node_name" -p device_id:="$omx"
 done
 
 # 4) Job 러너. `queued` 주문에 로봇·OMX·포장 Dock 을 배정하고 현재 Step 을

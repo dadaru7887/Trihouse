@@ -65,13 +65,13 @@ def test_simulation_doctor_lists_every_required_service(run_control_stack) -> No
     }
 
 
-def test_doctor_reports_the_fake_model_contract_and_no_ai_stack(
+def test_doctor_reports_the_no_motion_action_contract_and_no_ai_stack(
     run_control_stack,
 ) -> None:
     report = json.loads(run_control_stack("doctor", "--mode", "simulation").stdout)
 
     assert report["mode"] == "simulation"
-    assert report["act_contract"] == "deterministic_fake"
+    assert report["act_contract"] == "execute_omx_action_no_motion"
     # compose.ai_5080.yaml은 시뮬레이션에서 시작하지 않는다.
     assert report["ai_5080_started"] is False
 
@@ -154,7 +154,7 @@ def test_the_bringup_starts_every_ros_component_together() -> None:
 
     assert "rmf_core.launch.py" in source
     assert "two_pinky_order_demo.launch.py" in source
-    assert "trihouse_omx_adapter.simulator_node" in source
+    assert "tests.simulation.omx.action_server" in source
     assert "control_tower.rmf_adapter.rmf_gateway_worker_node" in source
     # 러너와 worker 는 짝이다. 러너가 빠지면 outbox 가 비어 worker 가 claim 할
     # 것이 없고, 주문은 `queued` 에서 멈춘다.

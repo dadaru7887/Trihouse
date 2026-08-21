@@ -1,0 +1,68 @@
+name: trihouse_omx
+
+services:
+  lerobot_worker:
+    build:
+      context: ..
+      dockerfile: docker/omx/Dockerfile.lerobot
+    environment:
+      DEVICE_ID: ${DEVICE_ID:?DEVICE_ID is required}
+      OMX_TEMPERATURE_ZONES: ${OMX_TEMPERATURE_ZONES:?OMX_TEMPERATURE_ZONES is required}
+      OMX_SERIAL_DEVICE: ${OMX_SERIAL_DEVICE:?OMX_SERIAL_DEVICE is required}
+      OMX_FRONT_CAMERA: ${OMX_FRONT_CAMERA:?OMX_FRONT_CAMERA is required}
+      OMX_WRIST_CAMERA: ${OMX_WRIST_CAMERA:?OMX_WRIST_CAMERA is required}
+      OMX_CALIBRATION_ID: ${OMX_CALIBRATION_ID:?OMX_CALIBRATION_ID is required}
+      OMX_PRODUCT_POLICIES: /opt/trihouse/config/omx_product_policies.yaml
+      OMX_WORKER_SOCKET: /run/trihouse-omx/worker.sock
+      OMX_EPISODE_STEPS: ${OMX_EPISODE_STEPS:-900}
+      OMX_POLICY_FPS: ${OMX_POLICY_FPS:-15}
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: "1"
+    devices:
+      - "${OMX_SERIAL_DEVICE:?OMX_SERIAL_DEVICE is required}:${OMX_SERIAL_DEVICE:?OMX_SERIAL_DEVICE is required}"
+      - "${OMX_FRONT_CAMERA:?OMX_FRONT_CAMERA is required}:${OMX_FRONT_CAMERA:?OMX_FRONT_CAMERA is required}"
+      - "${OMX_WRIST_CAMERA:?OMX_WRIST_CAMERA is required}:${OMX_WRIST_CAMERA:?OMX_WRIST_CAMERA is required}"
+    volumes:
+      - omx_ipc:/run/trihouse-omx
+      - "${OMX_CALIBRATION_DIR:?OMX_CALIBRATION_DIR is required}:/root/.cache/huggingface/lerobot/calibration/robots:ro"
+      - "${OMX_MODEL_CACHE_DIR:?OMX_MODEL_CACHE_DIR is required}:/root/.cache/huggingface/hub:ro"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3.10", "-c", "import pathlib; assert pathlib.Path('/run/trihouse-omx/worker.sock').is_socket()"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  omx_bridge:
+    build:
+      context: ..
+      dockerfile: docker/ros/Dockerfile.omx_bridge
+    network_mode: host
+    environment:
+      DEVICE_ID: ${DEVICE_ID:?DEVICE_ID is required}
+      ROS_NAMESPACE: ${ROS_NAMESPACE:?ROS_NAMESPACE is required}
+      ROS_DOMAIN_ID: "12"
+      RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
+      ROS_AUTOMATIC_DISCOVERY_RANGE: ${ROS_AUTOMATIC_DISCOVERY_RANGE:-SUBNET}
+      OMX_WORKER_SOCKET: /run/trihouse-omx/worker.sock
+    volumes:
+      - omx_ipc:/run/trihouse-omx
+    depends_on:
+      lerobot_worker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "source /opt/ros/jazzy/setup.bash && source /opt/trihouse_ws/install/setup.bash && ros2 node list | grep -q omx_action_server"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  omx_ipc:

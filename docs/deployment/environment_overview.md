@@ -14,6 +14,8 @@
 | 현재 PC | Compose 작성, 정적 테스트, 회의 시연 준비 | 개발용 로컬 볼륨만 |
 | RTX 4060 | 관제, Task Manager, MySQL, QR, 영상 저장·중계 | `trihouse_fms`, `trihouse_recovery`, 영상 artifact |
 | RTX 5080 | YOLO, VLM, RL 학습·복구 정책 | GPU replay buffer, NVMe cache, 미전송 queue |
+| OMX PC 01 | `/omx_01/execute` ROS bridge, Python 3.10 LeRobot worker | OMX_01 calibration, ACT cache |
+| OMX PC 02 | `/omx_02/execute` ROS bridge, Python 3.10 LeRobot worker | OMX_02 calibration, ACT cache |
 
 MySQL 8.4 서버는 4060 한 곳에 둔다. 5080은 DB 자격증명을 갖지 않고 Gateway
 API와 export artifact를 사용한다. 네트워크가 끊기면 고유 `message_id`가 있는
@@ -29,6 +31,7 @@ recovery record를 로컬 queue에 보관하고 ACK까지 재전송한다.
 | `compose.simulation.yaml` | RMF API/dashboard 지원 stack | 작성·정적 검증 완료, ROS 2/Gazebo는 현재 호스트 실행 |
 | `compose.edge_4060.yaml` | MediaMTX와 4060 application 계약 | 작성·정적 검증 완료, QR·catalog image 구현 필요 |
 | `compose.ai_5080.yaml` | 5080 AI image 실행 계약 | 작성·정적 검증 완료, env image·GPU 서버 검증 필요 |
+| `compose.roles/omx.yaml` | 각 OMX PC의 ROS bridge + LeRobot worker | 실물 장치값 입력 후 검증 필요 |
 
 Docker Engine은 호스트마다 하나만 설치한다. Compose 파일을 역할별로 나눈다는
 뜻은 Docker를 여러 번 설치한다는 뜻이 아니라, 같은 Engine 위에서 수명주기와
@@ -52,6 +55,21 @@ Docker Engine은 호스트마다 하나만 설치한다. Compose 파일을 역�
    스크립트로 분리한다.
 5. DB 초기화 SQL은 빈 볼륨에서만 자동 실행한다. 기존 볼륨 갱신은 migration으로
    수행한다.
+
+`.env.example`은 필요한 변수 이름과 예시를 팀 전체가 공유하는 버전 관리 파일이므로
+`.env`를 만든 뒤에도 삭제하지 않는다. 실제 비밀번호와 호스트별 장치 경로는 Git에서
+제외되는 `.env`에만 둔다.
+
+각 OMX PC에서는 저장소를 받은 뒤 그 PC에 맞는 `.env`를 만들고 다음처럼 실행한다.
+
+```bash
+./scripts/omx_stack up --build
+./scripts/omx_stack doctor
+./scripts/omx_stack logs
+```
+
+`doctor`는 모터를 움직이지 않는다. `ROS_DOMAIN_ID=12`, DB ID/namespace 조합,
+serial·두 카메라·calibration/model 경로와 `/omx_0#/execute` Action 노출만 확인한다.
 
 ## 현재 구현 수준을 읽는 방법
 

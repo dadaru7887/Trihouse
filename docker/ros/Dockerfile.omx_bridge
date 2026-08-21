@@ -1,0 +1,16 @@
+FROM ros:jazzy-ros-base
+
+SHELL ["/bin/bash", "-c"]
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 python3-colcon-common-extensions && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/trihouse_ws/src
+COPY trihouse_interfaces ./trihouse_interfaces
+COPY trihouse_omx_adapter ./trihouse_omx_adapter
+
+WORKDIR /opt/trihouse_ws
+RUN source /opt/ros/jazzy/setup.bash && colcon build --symlink-install
+
+CMD ["bash", "-lc", "source /opt/ros/jazzy/setup.bash && source /opt/trihouse_ws/install/setup.bash && ros2 run trihouse_omx_adapter omx_action_server --ros-args -p device_id:=${DEVICE_ID} -p worker_socket:=${OMX_WORKER_SOCKET}"]

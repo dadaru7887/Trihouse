@@ -18,8 +18,8 @@
   rclpy/DDS/GPU 가 필요해 컨테이너에 넣지 않았다.
 
 `doctor`는 두 층을 함께 점검한다. Gazebo는 기본 headless이며 GUI/RViz는
-플래그로만 켠다. `compose.ai_5080.yaml`은 시작하지 않는다. 시뮬레이션은 fake
-모델 계약만 확인한다.
+플래그로만 켠다. `compose.ai_5080.yaml`은 시작하지 않는다. 시뮬레이션 OMX도
+실물과 같은 ExecuteOmx Action 계약을 사용하되 모션은 만들지 않는다.
 """
 
 from __future__ import annotations
@@ -227,8 +227,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             "docker": sorted(DOCKER_CHECKS),
             "host_ros": sorted(ROS_CHECKS),
         },
-        # 시뮬레이션은 fake 모델 계약만 확인한다. 실제 checkpoint는 P1이다.
-        "act_contract": "deterministic_fake",
+        "act_contract": "execute_omx_action_no_motion",
         "ai_5080_started": False,
         "healthy": all(state == "healthy" for state in checks.values()),
     }
