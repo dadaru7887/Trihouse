@@ -9,7 +9,6 @@ class RecoveryHealthInputs:
     scan_fresh: bool
     ultrasonic_fresh: bool
     battery_fresh: bool
-    cargo_present: bool
 
 
 @dataclass(frozen=True)
@@ -21,6 +20,6 @@ class RecoveryHealthResult:
 def evaluate_recovery_health(inputs: RecoveryHealthInputs) -> RecoveryHealthResult:
     failures = tuple(name for name, passed in (
         ('odom', inputs.odom_fresh), ('scan', inputs.scan_fresh), ('ultrasonic', inputs.ultrasonic_fresh),
-        ('battery', inputs.battery_fresh), ('cargo', not inputs.cargo_present),
+        ('battery', inputs.battery_fresh),
     ) if not passed)
     return RecoveryHealthResult(not failures, failures)

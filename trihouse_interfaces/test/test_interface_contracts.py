@@ -15,7 +15,6 @@ MESSAGE_FILES = {
     "BatteryActionDecision.msg",
     "BatteryCondition.msg",
     "BatteryPolicyState.msg",
-    "CargoState.msg",
     "ConnectionState.msg",
     "HandoverState.msg",
     "IndicatorState.msg",
@@ -36,7 +35,6 @@ MESSAGE_FILES = {
 SERVICE_FILES = {
     "ClearEmergency.srv",
     "EstimateTaskEnergy.srv",
-    "SetCargoLock.srv",
 }
 ACTION_FILES = {"Dock.action", "ExecuteOmx.action", "ExecuteTransport.action"}
 

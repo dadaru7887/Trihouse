@@ -37,7 +37,7 @@ Domain 간 ROS 위치 조회 service는 사용하지 않는다.
 
 ## 7. 사용하는 공용 인터페이스
 
-`RobotStatus`, `NavigationState`, `TaskEvent`, `HandoverState`, `CargoState`,
+`RobotStatus`, `NavigationState`, `TaskEvent`, `HandoverState`,
 `BatteryPolicyState`, `SafetyState`, `Readiness`, `StreamHealth`, `ExecuteTransport`, `Dock`.
 
 ## 8. pinky_pro 참조

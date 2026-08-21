@@ -70,7 +70,6 @@ def status(sequence=1, **overrides):
             "detail": "battery permits normal work",
         },
         "safety_state": 0,
-        "cargo_state": 1,
         "telemetry_valid": True,
         "execution_ready": True,
         "dispatchable": True,

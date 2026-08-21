@@ -23,7 +23,6 @@
 | safety | 구독 | `/trihouse/safety/keep_out_zones` | `trihouse_interfaces/msg/KeepOutZone` | gateway |
 | safety | 발행 | `/cmd_vel` | `geometry_msgs/msg/Twist` | motor driver |
 | safety | 발행 | `/trihouse/safety/state` | `trihouse_interfaces/msg/SafetyState` | fleet/io/gateway |
-| safety | 발행 | `/trihouse/cargo/state` | `trihouse_interfaces/msg/CargoState` | fleet/health |
 | vision | 발행 | `/trihouse/vision/stream_health` | `trihouse_interfaces/msg/StreamHealth` | readiness/health/gateway |
 | vision gate | 발행 | `/trihouse/vision/readiness` | `trihouse_interfaces/msg/Readiness` | docking/handover/health |
 | vision bridge | 발행 | `/trihouse/vision/person_detection/camera` | `trihouse_interfaces/msg/PersonDetection` | transformer |
@@ -41,7 +40,6 @@
 | 제공 역할 | Endpoint | Type | 호출 역할 |
 |---|---|---|---|
 | safety | `/trihouse/safety/clear_emergency` | `trihouse_interfaces/srv/ClearEmergency` | gateway/operator adapter |
-| cargo controller | `/trihouse/cargo/set_lock` | `trihouse_interfaces/srv/SetCargoLock` | handover manager |
 | Pinky LED | `/set_led` | `pinky_interfaces/srv/SetLed` | io LED client |
 
 ## Actions

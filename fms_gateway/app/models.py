@@ -35,8 +35,6 @@ class DeviceView(BaseModel):
     observed_at: datetime | None = None
     # 적재 확인에 필요한 관측. 실행기는 이 값을 근거로만 적재 증거를 제출한다 —
     # 자기가 지어내지 않는다.
-    cargo_state: int | None = None
-    cargo_sensor_confirmed: bool | None = None
     navigation_state: int | None = None
     current_job_step_id: int | None = None
 

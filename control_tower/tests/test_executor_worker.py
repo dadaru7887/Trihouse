@@ -15,7 +15,7 @@ from control_tower.task_manager.executor_worker import (
 def _dispatch(
     job_step_id=100,
     *,
-    action_type="pick",
+    action_type="prepare",
     executor_type="arm",
     channel="omx",
     device="OMX_01",
@@ -30,7 +30,9 @@ def _dispatch(
         message_type="execute_action",
         action_type=action_type,
         executor_type=executor_type,
-        payload=payload if payload is not None else {"input": {"sku": "SKU-1"}},
+        payload=payload
+        if payload is not None
+        else {"input": {"temperature_zone": "chilled", "product_codes": ["SKU-1"]}},
         assigned_device_id=device,
         assignment_revision=revision,
         assignment={"omx_id": "OMX_01", "mobile_id": "PK_01"},
@@ -38,10 +40,11 @@ def _dispatch(
 
 
 class FakeSimulator:
-    def __init__(self, omx_id="OMX_01", fail_with=None):
+    def __init__(self, omx_id="OMX_01", fail_with=None, result=None):
         self._omx_id = omx_id
         self.commands = []
         self._fail_with = fail_with
+        self._result = result
 
     @property
     def state(self):
@@ -51,15 +54,33 @@ class FakeSimulator:
         if self._fail_with is not None:
             raise self._fail_with
         self.commands.append(command)
-        return ()
+        if self._result is not None:
+            return self._result
+        return {
+            "success": True,
+            "policy_completed": True,
+            "items": [
+                {
+                    "job_item_id": item["job_item_id"],
+                    "grasp_confirmed": True,
+                    "release_confirmed": True,
+                    "policy_completed": True,
+                    "evidence_refs": [f"omx_result:{item['job_item_id']}"],
+                }
+                for item in command["items"]
+            ],
+        }
 
 
 class FakeGateway:
-    def __init__(self, dispatches, fail_outcome_with=None):
+    def __init__(self, dispatches, fail_outcome_with=None, items=None):
         self._dispatches = tuple(dispatches)
         self.claims = []
         self.outcomes = []
         self.fail_outcome_with = fail_outcome_with
+        self._items = items if items is not None else [
+            {"job_item_id": 11, "product_code": "SKU-1", "requested_qty": 1}
+        ]
 
     def claim_executor_dispatches(self, request):
         self.claims.append(request)
@@ -75,6 +96,14 @@ class FakeGateway:
             state="succeeded" if request.outcome == "succeeded" else "failed",
             attempt_uuid="attempt-1",
             attempt_no=1,
+        )
+
+    def get_job(self, job_id):
+        return JobDetailResponse(
+            job_id=job_id,
+            job_code="JOB-1",
+            state="assigned",
+            items=tuple(self._items),
         )
 
 
@@ -134,7 +163,7 @@ def test_an_fms_step_is_closed_without_an_arm() -> None:
 
     assert report.succeeded == (100,)
     _, request, _ = gateway.outcomes[0]
-    assert request.method_code == "FMS_SIMULATED_CONTRACT"
+    assert request.method_code == "FMS_LEDGER_CONTRACT"
     assert request.actor_device_id is None
 
 
@@ -215,12 +244,28 @@ def test_an_arm_falls_back_to_the_job_assignment_for_its_identity() -> None:
 def test_expected_items_come_from_the_step_input() -> None:
     simulator = FakeSimulator()
     gateway = FakeGateway(
-        [_dispatch(payload={"input": {"expected_items": ["SKU-A", "SKU-B"]}})]
+        [
+            _dispatch(
+                payload={
+                    "input": {
+                        "temperature_zone": "chilled",
+                        "product_codes": ["SKU-A", "SKU-B"],
+                    }
+                }
+            )
+        ],
+        items=[
+            {"job_item_id": 11, "product_code": "SKU-A", "requested_qty": 1},
+            {"job_item_id": 12, "product_code": "SKU-B", "requested_qty": 2},
+        ],
     )
 
     _worker(gateway, {"OMX_01": simulator}).run_once()
 
-    assert simulator.commands[0]["expected_items"] == ("SKU-A", "SKU-B")
+    assert simulator.commands[0]["items"] == [
+        {"job_item_id": 11, "product_code": "SKU-A", "quantity": 1},
+        {"job_item_id": 12, "product_code": "SKU-B", "quantity": 2},
+    ]
 
 
 def test_a_non_positive_limit_is_rejected() -> None:
@@ -242,16 +287,11 @@ def test_a_non_positive_limit_is_rejected() -> None:
 from dataclasses import replace
 
 from control_tower.gateway.fms_client import (
-    DeviceSummary,
     ExecutorGatewayClient,
     FMSGatewayHttpClient,
     JobDetailResponse,
     LoadAttemptResponse,
 )
-
-CARGO_LOCKED = 2
-CARGO_UNLOCKED = 1
-
 
 def _load_dispatch(**overrides):
     base = _dispatch(
@@ -275,40 +315,23 @@ class LoadGateway(FakeGateway):
     """적재 경로를 위한 fake. **진짜 반환 타입**을 쓴다 — dict 로 흉내 내면
     운영에서만 터지는 속성 접근 오류를 테스트가 놓친다."""
 
-    def __init__(self, dispatches, *, cargo_state=CARGO_LOCKED, sensor_confirmed=True, items=None):
-        super().__init__(dispatches)
-        self._cargo_state = cargo_state
-        self._sensor_confirmed = sensor_confirmed
-        self._items = items if items is not None else [{"job_item_id": 11}, {"job_item_id": 12}]
+    def __init__(self, dispatches, *, items=None):
+        resolved_items = items if items is not None else [
+            {"job_item_id": 11, "product_code": "SKU-A", "requested_qty": 1},
+            {"job_item_id": 12, "product_code": "SKU-B", "requested_qty": 1},
+        ]
+        super().__init__(dispatches, items=resolved_items)
         self.load_attempts = []
 
     def list_devices(self):
-        return (
-            DeviceSummary(
-                device_id="PK_01",
-                device_type="mobile",
-                control_mode="auto",
-                state="idle",
-                cargo_state=self._cargo_state,
-                cargo_sensor_confirmed=self._sensor_confirmed,
-                navigation_state=2,
-            ),
-        )
-
-    def get_job(self, job_id):
-        return JobDetailResponse(
-            job_id=job_id,
-            job_code="JOB-1",
-            state="assigned",
-            items=tuple(self._items),
-        )
+        raise AssertionError("load evidence must not read Pinky cargo state")
 
     def record_load_attempt(self, job_step_id, request, *, idempotency_key):
         self.load_attempts.append((job_step_id, request, idempotency_key))
         return LoadAttemptResponse(departure_allowed=request.result == "LOAD_CONFIRMED")
 
 
-def test_a_confirmed_cargo_closes_the_load_step_with_one_attempt_per_item() -> None:
+def test_a_confirmed_omx_result_closes_the_load_step_with_one_attempt_per_item() -> None:
     gateway = LoadGateway([_load_dispatch()])
 
     report = _worker(gateway).run_once()
@@ -318,9 +341,13 @@ def test_a_confirmed_cargo_closes_the_load_step_with_one_attempt_per_item() -> N
     submitted = [attempt[1] for attempt in gateway.load_attempts]
     assert [request.item_id for request in submitted] == [11, 12]
     assert {request.result for request in submitted} == {"LOAD_CONFIRMED"}
-    # 증거는 지어낸 값이 아니라 로봇이 보고한 관측이어야 한다.
-    assert submitted[0].observations["cargo_state"] == CARGO_LOCKED
-    assert submitted[0].observations["cargo_sensor_confirmed"] is True
+    assert submitted[0].criteria == {
+        "grasp_confirmed": True,
+        "release_confirmed": True,
+        "policy_completed": True,
+    }
+    assert submitted[0].observations["job_item_id"] == 11
+    assert submitted[0].evidence_refs == ("omx_result:11",)
     assert submitted[0].pinky_id == "PK_01"
     assert submitted[0].omx_id == "OMX_01"
     assert submitted[0].handover_group_id == "group-1"
@@ -333,15 +360,25 @@ def test_a_load_step_commands_the_prepared_omx_before_recording_cargo() -> None:
     is the only point that authorizes the arm to transfer the prepared item.
     A cargo observation alone must not make that transfer look as if it ran.
     """
-    from trihouse_omx_adapter.protocol_simulator import OmxProtocolSimulator
-
-    simulator = OmxProtocolSimulator(omx_id="OMX_01")
-    gateway = LoadGateway([_dispatch(), _load_dispatch()])
+    simulator = FakeSimulator(omx_id="OMX_01")
+    gateway = LoadGateway(
+        [
+            _dispatch(
+                payload={
+                    "input": {
+                        "temperature_zone": "chilled",
+                        "product_codes": ["SKU-A", "SKU-B"],
+                    }
+                }
+            ),
+            _load_dispatch(),
+        ]
+    )
 
     report = _worker(gateway, {"OMX_01": simulator}).run_once()
 
     assert report.succeeded == (100, 4)
-    assert simulator.state == "LOAD_COMPLETE"
+    assert [command["kind"] for command in simulator.commands] == ["prepare", "load"]
 
 
 def test_a_frozen_load_uses_its_zone_workcell_instead_of_the_job_default() -> None:
@@ -369,25 +406,37 @@ def test_a_frozen_load_uses_its_zone_workcell_instead_of_the_job_default() -> No
     assert gateway.load_attempts[0][1].omx_id == "OMX_02"
 
 
-def test_an_unloaded_robot_defers_instead_of_failing_the_step() -> None:
-    """아직 안 실린 것은 실패가 아니라 대기다. 실패로 적으면 운영자가 없는 문제를 쫓고,
-    outbox 재시도 예산만 태운다."""
-    gateway = LoadGateway(
-        [_load_dispatch()], cargo_state=CARGO_UNLOCKED, sensor_confirmed=False
-    )
+def test_partial_omx_evidence_blocks_departure_without_writing_attempts() -> None:
+    result = {
+        "success": True,
+        "policy_completed": True,
+        "items": [
+            {
+                "job_item_id": 11,
+                "grasp_confirmed": True,
+                "release_confirmed": False,
+                "policy_completed": True,
+                "evidence_refs": [],
+            }
+        ],
+    }
+    gateway = LoadGateway([_load_dispatch()])
 
-    report = _worker(gateway).run_once()
+    report = _worker(
+        gateway, {"OMX_01": FakeSimulator(result=result)}
+    ).run_once()
 
     assert report.succeeded == ()
     assert report.failed == ()
-    assert report.errors == ()
-    assert any("적재 대기" in deferred for deferred in report.deferred)
+    assert any("incomplete OMX load evidence" in error for error in report.errors)
     assert gateway.load_attempts == []
     assert gateway.outcomes == []
 
 
 def test_a_load_step_without_handover_identity_is_an_error() -> None:
-    gateway = LoadGateway([_load_dispatch(payload={"input": {}})])
+    gateway = LoadGateway(
+        [_load_dispatch(payload={"input": {"temperature_zone": "chilled"}})]
+    )
 
     report = _worker(gateway).run_once()
 

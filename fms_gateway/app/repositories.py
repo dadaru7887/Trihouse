@@ -1302,17 +1302,8 @@ class MySqlFmsRepository:
             ORDER BY d.device_type, d.device_id
             """
         )
-        # 적재 확인은 로봇이 실제로 보고한 화물 상태를 근거로 해야 한다. 그 값이
-        # 원장 안에만 있으면 실행기가 증거를 만들 수 없어, 결국 아무도 확인하지
-        # 못하는 단계가 된다(2026-08-19 실측: step 30 이 영원히 pending).
         for row in rows:
             details = _json(row.pop("details", None)) or {}
-            cargo = details.get("cargo_state")
-            row["cargo_state"] = cargo if isinstance(cargo, int) else None
-            confirmed = details.get("cargo_sensor_confirmed")
-            row["cargo_sensor_confirmed"] = (
-                confirmed if isinstance(confirmed, bool) else None
-            )
             navigation = details.get("navigation_state")
             row["navigation_state"] = navigation if isinstance(navigation, int) else None
         return rows
@@ -2489,9 +2480,7 @@ class MySqlFmsRepository:
             "battery_condition": status["battery_condition"],
             "battery_policy": status["battery_policy"],
             "safety_state": status["safety_state"],
-            "cargo_state": status["cargo_state"],
             # 옛 로봇 펌웨어는 이 키를 보내지 않는다. 없으면 확인 안 된 것으로 본다.
-            "cargo_sensor_confirmed": bool(status.get("cargo_sensor_confirmed", False)),
             "telemetry_valid": status["telemetry_valid"],
             "execution_ready": status["execution_ready"],
             "dispatchable": status["dispatchable"],

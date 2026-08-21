@@ -27,7 +27,6 @@
 | `/trihouse/safety/state` | `trihouse_interfaces/msg/SafetyState` | RELIABLE + TRANSIENT_LOCAL, depth 1 | safety supervisor | fleet, LED selector, status |
 | `/trihouse/safety/keep_out_zones` | `trihouse_interfaces/msg/KeepOutZone` | RELIABLE + TRANSIENT_LOCAL | gateway | safety supervisor |
 | `/trihouse/handover/state` | `trihouse_interfaces/msg/HandoverState` | RELIABLE, depth 20 | handover manager | fleet, cargo controller |
-| `/trihouse/cargo/state` | `trihouse_interfaces/msg/CargoState` | RELIABLE + TRANSIENT_LOCAL, depth 1 | cargo controller | fleet, health |
 | `/trihouse/vision/stream_health` | `trihouse_interfaces/msg/StreamHealth` | RELIABLE, depth 10, 1 Hz | vision sender | readiness, health, gateway |
 | `/trihouse/vision/readiness` | `trihouse_interfaces/msg/Readiness` | RELIABLE + TRANSIENT_LOCAL, depth 1 | observation gate | docking, handover, health |
 | `/trihouse/vision/person_detection/camera` | `trihouse_interfaces/msg/PersonDetection` | RELIABLE, depth 10 | detection bridge | observation transformer |
@@ -46,7 +45,6 @@
 | Service | Type | Server | Client |
 |---|---|---|---|
 | `/trihouse/safety/clear_emergency` | `trihouse_interfaces/srv/ClearEmergency` | safety supervisor | gateway/operator adapter |
-| `/trihouse/cargo/set_lock` | `trihouse_interfaces/srv/SetCargoLock` | cargo controller | handover manager |
 
 Pinky LED는 기존 `/set_led` (`pinky_interfaces/srv/SetLed`)를 그대로 사용한다.
 

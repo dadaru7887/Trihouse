@@ -16,7 +16,7 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 from rclpy.task import Future
 from std_msgs.msg import Bool, String
 from trihouse_interfaces.action import Dock, ExecuteTransport
-from trihouse_interfaces.msg import CargoState, HandoverState, NavigationState, Readiness, RobotHealth, RobotStatus, SafetyState, TaskEvent
+from trihouse_interfaces.msg import HandoverState, NavigationState, Readiness, RobotHealth, RobotStatus, SafetyState, TaskEvent
 
 from .workflow import JobCommand, JobPhase, TransportWorkflow
 from .narrow_zone_pilot import (
@@ -107,7 +107,7 @@ class FleetNode(Node):
         self.declare_parameter('arrival_stop_timeout_s', 2.0)
         self.robot_id = self.get_parameter('robot_id').value
         self.workflow = TransportWorkflow(robot_id=self.robot_id, expected_map_revision=self.get_parameter('map_revision').value)
-        self.ready = False; self.outbox_ready = False; self.cargo_confirmed = False; self.emergency = False; self.stationary = False; self.recovery_health_ok = False; self.current_pose: tuple[float, float, float] | None = None
+        self.ready = False; self.outbox_ready = False; self.emergency = False; self.stationary = False; self.recovery_health_ok = False; self.current_pose: tuple[float, float, float] | None = None
         # 정밀 정차 판정용 map 프레임 pose. odom 은 프레임이 달라 쓸 수 없다.
         self.map_pose: tuple[float, float, float] | None = None
         self.map_frame: str = ""
@@ -121,7 +121,6 @@ class FleetNode(Node):
         # `cmd_vel` 에 직접 쏘아 "사람이 지켜보다가 Ctrl+C" 를 전제했다.
         self.narrow_cmd_pub = self.create_publisher(Twist, 'cmd_vel_nav', 10)
         self.create_subscription(Readiness, 'trihouse/readiness', self._on_readiness, 10)
-        self.create_subscription(CargoState, 'trihouse/cargo/state', self._on_cargo, 10)
         self.create_subscription(SafetyState, 'trihouse/safety/state', self._on_safety, 10)
         self.create_subscription(RobotHealth, 'trihouse/health', self._on_health, 10)
         self.create_subscription(
@@ -158,13 +157,6 @@ class FleetNode(Node):
 
     def _on_readiness(self, message: Readiness) -> None:
         self.ready = message.state == Readiness.STATE_READY
-
-    def _on_cargo(self, message: CargoState) -> None:
-        self.cargo_confirmed = message.state == CargoState.STATE_LOCKED and message.sensor_confirmed
-        if message.state == CargoState.STATE_UNLOCKED and self.workflow.phase is JobPhase.WAITING_HANDOVER:
-            completed = self.workflow.complete_handover()
-            self.display_pub.publish(String(data=''))
-            self._publish_handover(message, HandoverState.STATE_CONFIRMED, completed.detail)
 
     def _on_safety(self, message: SafetyState) -> None:
         self.emergency = message.state == SafetyState.STATE_EMERGENCY
@@ -287,7 +279,9 @@ class FleetNode(Node):
                     handover_expected=bool(goal.handover_expected),
                 ),
                 ready=self.ready and not self.emergency,
-                cargo_confirmed=self.cargo_confirmed,
+                # EN: Gateway dispatch is the authorization; Pinky has no cargo sensor.
+                # KO: Gateway가 적재 증거를 확인한 뒤 명령을 보내며 Pinky에는 화물 센서가 없다.
+                cargo_confirmed=True,
             )
         if not accepted.accepted:
             goal_handle.abort(); result.success = False; result.code = ExecuteTransport.Result.CODE_REJECTED; result.message = accepted.detail
@@ -435,7 +429,7 @@ class FleetNode(Node):
         await self._settle_before_arrival()
         arrived = self.workflow.nav_result(succeeded=nav_result.status == 4 and precise, stationary=self.stationary)
         if arrived.phase is JobPhase.HEALTH_CHECK:
-            arrived = self.workflow.finish_return(health_ok=self.recovery_health_ok, cargo_present=self.cargo_confirmed)
+            arrived = self.workflow.finish_return(health_ok=self.recovery_health_ok, cargo_present=False)
         self._publish_navigation(goal, arrived)
         if transport_arrival_succeeded(arrived):
             self._publish_event(goal, TaskEvent.EVENT_ARRIVED, arrived.detail)

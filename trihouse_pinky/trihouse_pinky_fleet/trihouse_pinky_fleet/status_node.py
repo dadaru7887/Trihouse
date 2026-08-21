@@ -18,7 +18,6 @@ from sensor_msgs.msg import BatteryState, LaserScan     # 배터리 잔량 반�
 from trihouse_interfaces.msg import (
     BatteryCondition,
     BatteryPolicyState,
-    CargoState,
     ConnectionState,
     NavigationState,
     Readiness,
@@ -109,7 +108,6 @@ class StatusNode(Node):
         self.task_progress = 0.0                                # 작업 진행률
 
         self.safety = SafetyState()
-        self.cargo = CargoState()
         self.battery_policy = BatteryPolicyState()
 
         self.create_subscription(LaserScan, 'scan', self._scan, 10)
@@ -117,7 +115,6 @@ class StatusNode(Node):
         self.create_subscription(BatteryState, 'trihouse/battery', self._battery, 10)
         self.create_subscription(BatteryCondition, 'trihouse/battery/condition', self._battery_condition, 10)
         self.create_subscription(SafetyState, 'trihouse/safety/state', self._safety, 10)
-        self.create_subscription(CargoState, 'trihouse/cargo/state', self._cargo, 10)
         self.create_subscription(BatteryPolicyState, 'trihouse/battery/policy_state', lambda m: setattr(self, 'battery_policy', m), 10)
         self.create_subscription(NavigationState, 'trihouse/navigation/state', self._navigation, 10)
         self.create_subscription(Readiness, 'trihouse/readiness', self._readiness, 10)
@@ -187,11 +184,6 @@ class StatusNode(Node):
     def _safety(self, message: SafetyState) -> None:
         """최신 안전 상태를 저장하고 통합 상태를 즉시 발행한다."""
         self.safety = message
-        self._publish()
-
-    def _cargo(self, message: CargoState) -> None:
-        """최신 적재 상태를 저장하고 통합 상태를 즉시 발행한다."""
-        self.cargo = message
         self._publish()
 
     def _navigation(self, message: NavigationState) -> None:
@@ -275,8 +267,7 @@ class StatusNode(Node):
         # 정책 노드에서 받은 BatteryPolicyState 메시지를 타입 그대로 포함한다.
         message.battery_policy = self.battery_policy
 
-        # 하위 노드들에서 받은 적재 상태와 안전 상태 메시지를 그대로 포함한다.
-        message.cargo = self.cargo
+        # 하위 안전 노드에서 받은 상태 메시지를 타입 그대로 포함한다.
         message.safety = self.safety
 
         # 현재 주행 상태와 작업 진행률을 포함한다.

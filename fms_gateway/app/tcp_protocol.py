@@ -185,7 +185,6 @@ class ProtocolSession:
             "battery_condition",
             "battery_policy",
             "safety_state",
-            "cargo_state",
             "telemetry_valid",
             "execution_ready",
             "dispatchable",

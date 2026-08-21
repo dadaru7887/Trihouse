@@ -7,7 +7,6 @@ geometry_msgs/PoseWithCovariance pose
 geometry_msgs/Twist twist
 float32 battery_percentage
 trihouse_interfaces/BatteryPolicyState battery_policy
-trihouse_interfaces/CargoState cargo
 trihouse_interfaces/SafetyState safety
 trihouse_interfaces/TaskContext task_context
 float32 task_progress

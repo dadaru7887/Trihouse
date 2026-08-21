@@ -101,9 +101,6 @@ class DeviceSummary:
     control_mode: str
     state: str | None = None
     health: str | None = None
-    # 적재 확인의 근거가 되는 관측. 실행기는 이 값으로만 증거를 만든다.
-    cargo_state: int | None = None
-    cargo_sensor_confirmed: bool | None = None
     navigation_state: int | None = None
     current_job_step_id: int | None = None
 

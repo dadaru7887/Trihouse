@@ -124,9 +124,6 @@ def build_robot_status_payload(
             'detail': message.battery_policy.detail,
         },
         'safety_state': message.safety.state,
-        'cargo_state': message.cargo.state,
-        # 잠금 상태와 센서 확인은 다른 사실이다. 적재 판정은 둘 다 필요하다.
-        'cargo_sensor_confirmed': message.cargo.sensor_confirmed,
         'errors': list(message.errors),
     }
 
