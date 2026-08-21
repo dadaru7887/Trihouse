@@ -1,0 +1,47 @@
+schema_version: 1
+
+products:
+  SKU-ORANGE:
+    policy_key: orange
+    policy_repo_id: 2usang/act_trihouse-orange
+    temperature_zone: ambient
+  SKU-STRAWBERRY:
+    policy_key: strawberry
+    policy_repo_id: 2usang/act_trihouse-strawberry
+    temperature_zone: ambient
+  SKU-MANDARIN:
+    policy_key: mandarin
+    policy_repo_id: 2usang/act_trihouse-mandarin
+    temperature_zone: ambient
+  SKU-COFFEE:
+    policy_key: coffee
+    policy_repo_id: 2usang/act_trihouse-coffee
+    temperature_zone: chilled
+  SKU-SANDWICH:
+    policy_key: sandwich
+    policy_repo_id: 2usang/act_trihouse-sandwich
+    temperature_zone: chilled
+  SKU-YOGURT:
+    policy_key: yogurt
+    policy_repo_id: 2usang/act_trihouse-yogurt
+    temperature_zone: chilled
+  SKU-MILK:
+    policy_key: milk
+    policy_repo_id: 2usang/act_trihouse-milk
+    temperature_zone: chilled
+  SKU-PORKBELLY:
+    policy_key: porkbelly
+    policy_repo_id: 2usang/act_trihouse-porkbelly
+    temperature_zone: frozen
+  SKU-DUMPLING:
+    policy_key: dumpling
+    policy_repo_id: 2usang/act_trihouse-dumpling
+    temperature_zone: frozen
+  SKU-ICEBAR:
+    policy_key: icebar
+    policy_repo_id: 2usang/act_trihouse-icebar
+    temperature_zone: frozen
+  SKU-ICECONE:
+    policy_key: icecorn
+    policy_repo_id: 2usang/act_trihouse-icecorn
+    temperature_zone: frozen
