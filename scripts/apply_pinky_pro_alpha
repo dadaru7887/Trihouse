@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "usage: $0 /absolute/or/relative/path/to/pinky_pro" >&2
+  exit 2
+fi
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repository_root="$(cd -- "${script_dir}/.." && pwd)"
+overlay_root="${repository_root}/pinky_pro_alpha/pinky_navigation"
+target_root="$(realpath -e -- "$1")"
+
+# EN: package.xml is the guard against copying robot files into an unrelated directory.
+# KO: package.xml 확인은 로봇 파일을 관계없는 디렉터리에 복사하는 사고를 막는 경계다.
+if [[ ! -f "${target_root}/pinky_navigation/package.xml" ]]; then
+  echo "error: target is not a Pinky Pro checkout: ${target_root}" >&2
+  exit 2
+fi
+
+install -D -m 0644 "${overlay_root}/map/new_map_2.yaml" \
+  "${target_root}/pinky_navigation/map/new_map_2.yaml"
+install -D -m 0644 "${overlay_root}/map/new_map_2.pgm" \
+  "${target_root}/pinky_navigation/map/new_map_2.pgm"
+install -D -m 0644 "${overlay_root}/params/amcl_params.yaml" \
+  "${target_root}/pinky_navigation/params/amcl_params.yaml"
+install -D -m 0644 "${overlay_root}/params/nav2_params.yaml" \
+  "${target_root}/pinky_navigation/params/nav2_params.yaml"
+
+echo "Pinky Pro Alpha overlay applied to ${target_root}"

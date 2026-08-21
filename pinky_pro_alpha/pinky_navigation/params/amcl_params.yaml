@@ -1,0 +1,30 @@
+# amcl_params.yaml
+amcl:
+  ros__parameters:
+    use_map_topic: true
+
+    # EN: TF frames must match the robot description. / KO: TF frame은 로봇 description과 일치해야 한다.
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    global_frame_id: "map"
+
+    # EN: Laser topic consumed by AMCL. / KO: AMCL이 구독하는 레이저 토픽이다.
+    scan_topic: "/scan"
+
+    # EN: Particle-filter bounds. / KO: 파티클 필터 범위다.
+    min_particles: 500
+    max_particles: 3000
+
+    set_initial_pose: true
+    initial_pose:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      yaw: 0.0
+
+    # EN: Minimum motion before an update. / KO: 위치 추정 갱신에 필요한 최소 이동량이다.
+    update_min_d: 0.1
+    update_min_a: 0.2
+
+    transform_tolerance: 1.0
+    tf_broadcast: true
