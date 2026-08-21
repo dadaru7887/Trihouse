@@ -65,6 +65,8 @@ from .models import (
     ReservationAnomaly,
     ReservationsExpired,
     LoadAttemptRequest,
+    MarkerObservationDelivery,
+    MarkerObservationReport,
     PersonDetectionDelivery,
     PersonDetectionReport,
     LoadAttemptView,
@@ -260,6 +262,35 @@ def create_app(
                 status_code=409, detail=f"{robot_id} is not connected"
             )
         return PersonDetectionDelivery(robot_id=robot_id, delivered=True)
+
+    @app.post(
+        "/internal/v1/vision/marker-observations",
+        response_model=MarkerObservationDelivery,
+    )
+    async def receive_marker_observation(
+        observation: MarkerObservationReport, request: Request
+    ) -> MarkerObservationDelivery:
+        """검증된 camera-frame ArUco 관측을 해당 Pinky TCP 링크로 전달한다.
+
+        4060은 영상 인식까지만 담당한다. 카메라 ID에서 로봇을 결정하고 onboard
+        TF 변환 전의 좌표를 그대로 보낸다. 관제가 ROS나 모터 명령을 우회하지
+        못하도록 이 endpoint는 관측 외의 제어 필드를 받지 않는다.
+        """
+        try:
+            robot_id = route_person_detection(
+                observation.camera_id, load_camera_registry()
+            )
+        except PersonDetectionRoutingError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+        payload = observation.model_dump(exclude_none=True)
+        payload["type"] = "marker_observation"
+        delivered = await request.app.state.robot_links.push(robot_id, payload)
+        if not delivered:
+            raise HTTPException(
+                status_code=409, detail=f"{robot_id} is not connected"
+            )
+        return MarkerObservationDelivery(robot_id=robot_id, delivered=True)
 
     @app.get("/health")
     def health() -> dict[str, str]:

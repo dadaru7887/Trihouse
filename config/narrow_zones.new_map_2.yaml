@@ -27,15 +27,34 @@ zones:
     exit: []
 
   frozen_storage_loading_dock_01:
-    enabled: false
-    marker_id: '0'
-    entry: null
-    zone: null
-    enter: []
-    exit: []
+    # 2026-08-21 PK02 실측. Nav2는 이 입구까지만 오고, 아래 고정 규칙이
+    # 냉동 도크까지 주차한다. marker_id는 일부러 비운다. 값이 있으면 고정
+    # 시퀀스 대신 아직 미검증인 ArUco dock action으로 분기하기 때문이다.
+    entry: { x: 1.1792881155, y: -1.1896842748, yaw: 0.0109381190 }
+    # 도킹 뒤 로봇이 머무르는 직사각형. entry와 분리해야 다음 출발 명령에서
+    # 역순 탈출 시퀀스를 선택할 수 있다.
+    zone: { x: 1.3314581184, y: -0.8149269956, yaw: -1.572140, length: 0.20, width: 0.20 }
+    enter:
+      - [straight, 0.20]
+      - [rotate, -1.572140]
+      - [straight, -0.372569]
+    # 입고 시 실제로 지난 궤적의 역순. 도크 yaw를 먼저 유지한 채 전진해 회전
+    # 여유 위치로 나온 뒤 입구 방향으로 되돌아간다.
+    exit:
+      - [straight, 0.372569]
+      - [rotate, 0.0109381190]
+      - [straight, -0.20]
+    measured:
+      source: waypoint.md
+      entry_pose: 2026-08-21
+      dock_pose: 2026-08-21
+      note: >-
+        PK02 냉동 입구에서 20 cm 전진 후 도킹 yaw(-1.572140 rad)로 회전하고,
+        0.372569 m 후진한다. 최종 x 오차 약 4.8 cm는 현재 0.15 m 검증 범위 안이다.
 
   charging_station_01:
-    entry: { x: 0.065, y: 0.227, yaw: -0.005 }
+    # 2026-08-21 PK02 AMCL 재측정 최종 자세. exit 길이는 아직 별도 실물 보정값을 유지한다.
+    entry: { x: 0.0570244747, y: 0.1949666005, yaw: 0.1093261667 }
     zone: { length: 0.30, width: 0.30 }
     # 귀환 때는 Nav2가 충전 좌표까지 정차하고 이 0 m 스텝이 즉시 완료된다.
     enter:
@@ -47,13 +66,14 @@ zones:
     exit_target: { x: 0.841, y: -0.111, yaw: -1.276 }
     measured:
       date: 2026-08-21
-      source: new_map_2_geometry
+      source: waypoint.md_pk02_amcl
       note: >-
-        charging_station_01에서 먼저 0.68 m 저속 전진해 회전 외접원 여유를 만든 뒤,
-        bottleneck_zone_01로 회전·전진한다. 베이 안 제자리 회전은 swept_stop으로 금지된다.
+        최종 pose는 PK02 AMCL 재측정값이다. 첨부 기록의 세 출력은 timestamp와 값이
+        같으므로 독립 3회 측정으로 보지 않는다. 기존 0.68 m 저속 탈출 시퀀스는 유지한다.
 
   charging_station_02:
-    entry: { x: 0.076, y: -0.013, yaw: 0.239 }
+    # 2026-08-21 PK02 AMCL 재측정 최종 자세. exit 길이는 아직 별도 실물 보정값을 유지한다.
+    entry: { x: 0.1336554086, y: -0.0065562838, yaw: 0.1569596446 }
     zone: { length: 0.30, width: 0.30 }
     enter:
       - [straight, 0.0]
@@ -64,7 +84,7 @@ zones:
     exit_target: { x: 0.841, y: -0.111, yaw: -1.083 }
     measured:
       date: 2026-08-21
-      source: new_map_2_geometry
+      source: waypoint.md_pk02_amcl
       note: >-
-        charging_station_02에서 먼저 0.65 m 저속 전진해 회전 여유를 만든 뒤,
-        bottleneck_zone_01로 회전·전진한다.
+        최종 pose는 PK02 AMCL 재측정값이다. 첨부 기록의 세 출력은 timestamp와 값이
+        같으므로 독립 3회 측정으로 보지 않는다. 기존 0.65 m 저속 탈출 시퀀스는 유지한다.

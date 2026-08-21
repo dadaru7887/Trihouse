@@ -106,14 +106,45 @@ def test_new_map_2_has_calibrated_egress_plans_for_both_chargers() -> None:
     zones = load_zones(document, map_name="new_map_2")
     chargers = {"charging_station_01", "charging_station_02"}
     assert chargers <= set(zones)
+    measured_entries = {
+        "charging_station_01": (0.0570244747, 0.1949666005, 0.1093261667),
+        "charging_station_02": (0.1336554086, -0.0065562838, 0.1569596446),
+    }
     for name in chargers:
         zone = zones[name]
+        assert zone.entry_pose == pytest.approx(measured_entries[name])
         # 충전 베이에서는 회전 외접원이 벽을 스친다. 먼저 현재 방향으로 저속
         # 전진해 여유를 만든 다음에만 회전한다.
         assert [kind for kind, _ in zone.exit] == [STRAIGHT, ROTATE, STRAIGHT]
         assert zone.exit[0][1] > 0.40
         assert zone.exit[-1][1] > 0.30
         assert zone.exit_target == pytest.approx((0.841, -0.111, zone.exit[1][1]))
+
+
+def test_new_map_2_frozen_rule_uses_the_measured_entry_and_exact_dock_yaw() -> None:
+    """Nav2는 입구까지만, 고정 규칙은 냉동 도크까지 책임진다.
+
+    입구와 도크는 다른 자리다. `entry_pose`는 Nav2 목표이고, `geometry`는
+    도킹 후 다음 이동 때 탈출 규칙을 선택할 도크 영역이다.
+    """
+    document = yaml.safe_load(NEW_MAP_2_ZONE_FILE.read_text(encoding="utf-8"))
+    frozen = load_zones(document, map_name="new_map_2")[FROZEN]
+
+    assert frozen.marker_id is None
+    assert frozen.entry_pose == pytest.approx((1.1792881155, -1.1896842748, 0.0109381190))
+    assert (frozen.geometry.x, frozen.geometry.y, frozen.geometry.yaw) == pytest.approx(
+        (1.3314581184, -0.8149269956, -1.572140)
+    )
+    assert [kind for kind, _ in frozen.enter] == [STRAIGHT, ROTATE, STRAIGHT]
+    assert [value for _, value in frozen.enter] == pytest.approx(
+        [0.20, -1.572140, -0.372569]
+    )
+
+    arrived = _apply(frozen.enter, *frozen.entry_pose)
+    # 도킹 yaw는 측정값에 정확히 맞춘다. 두 번의 독립 AMCL 측정 차이로 남는
+    # x 오차(약 4.8 cm)는 fleet_node의 15 cm 최종 도킹 검증 범위 안이어야 한다.
+    assert arrived[2] == pytest.approx(-1.572140)
+    assert math.hypot(arrived[0] - frozen.geometry.x, arrived[1] - frozen.geometry.y) < 0.15
 
 
 def test_the_zone_rectangle_is_oriented_not_circular() -> None:
@@ -298,7 +329,8 @@ def test_every_shipped_zone_table_fits_its_own_map(zone_file) -> None:
 
     clearance = _occupancy(map_name)
     for name, zone in load_zones(document, map_name=map_name).items():
-        entry = clearance(zone.geometry.x, zone.geometry.y)
+        entry_x, entry_y, entry_yaw = zone.entry_pose
+        entry = clearance(entry_x, entry_y)
         assert entry is not None, f"{name}: 진입점이 지도 밖이다"
         if (map_name, name) in KNOWN_UNUSABLE:
             # 좌표는 실측이라 지우지 않는다. 대신 "여전히 못 쓴다"는 사실을 못 박아,
@@ -311,7 +343,7 @@ def test_every_shipped_zone_table_fits_its_own_map(zone_file) -> None:
         assert entry >= STAND_CLEARANCE_M, (
             f"{name}: 진입점 여유 {entry:.2f} m — 로봇이 설 수 없다"
         )
-        x, y, _ = _apply(zone.enter, zone.geometry.x, zone.geometry.y, zone.geometry.yaw)
+        x, y, _ = _apply(zone.enter, entry_x, entry_y, entry_yaw)
         dock = clearance(x, y)
         assert dock is not None, f"{name}: enter 시퀀스가 지도 밖으로 나간다"
         assert dock >= INSCRIBED_RADIUS_M, (

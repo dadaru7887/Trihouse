@@ -80,6 +80,13 @@ class NarrowZone:
     # 탈출 직후 Nav2 에 넘기기 전에 대조할 map 좌표. 특히 충전 베이는 시작점이
     # 벽에 가까워서 "존만 벗어남"으로는 충분하지 않다.
     exit_target: tuple[float, float, float] | None = None
+    # Nav2가 멈출 입구 pose. 구형 표는 geometry와 같은 위치를 사용하므로 None이면
+    # geometry를 그대로 쓴다. 창고는 입구와 최종 도크가 달라 둘을 분리한다.
+    entry: tuple[float, float, float] | None = None
+
+    @property
+    def entry_pose(self) -> tuple[float, float, float]:
+        return self.entry or (self.geometry.x, self.geometry.y, self.geometry.yaw)
 
 
 def _step(raw: Sequence[Any], where: str) -> tuple[str, float | None]:
@@ -112,8 +119,15 @@ def load_zones(document: Mapping[str, Any], *, map_name: str) -> dict[str, Narro
             continue
         entry, shape = body.get("entry") or {}, body.get("zone") or {}
         try:
+            entry_pose = (
+                float(entry["x"]), float(entry["y"]), float(entry["yaw"])
+            )
             geometry = ZoneGeometry(
-                x=float(entry["x"]), y=float(entry["y"]), yaw=float(entry["yaw"]),
+                # 기존 충전소 표에는 zone 좌표가 없으므로 entry를 계속 중심으로 쓴다.
+                # 창고는 zone에 도크 중심을 적어 입구와 탈출 판정을 분리한다.
+                x=float(shape.get("x", entry_pose[0])),
+                y=float(shape.get("y", entry_pose[1])),
+                yaw=float(shape.get("yaw", entry_pose[2])),
                 length=float(shape["length"]), width=float(shape["width"]),
             )
         except (KeyError, TypeError, ValueError) as error:
@@ -140,6 +154,7 @@ def load_zones(document: Mapping[str, Any], *, map_name: str) -> dict[str, Narro
                 str(body["marker_id"]) if body.get("marker_id") is not None else None
             ),
             exit_target=exit_target,
+            entry=entry_pose,
         )
     return zones
 

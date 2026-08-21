@@ -20,6 +20,41 @@ class MotionCommand:
     angular_z: float
 
 
+def select_motion_source(
+    nav: MotionCommand,
+    dock: MotionCommand | None,
+    *,
+    now_s: float,
+    dock_received_at_s: float,
+    dock_timeout_s: float,
+) -> MotionCommand:
+    """도킹 속도는 새 관측 제어 주기 안에서만 Nav2보다 우선한다.
+
+    marker dock action은 완료/취소 때 zero Twist를 한 번 발행한다. 그 값을
+    무기한 우선하면 이후 Nav2가 영구 정지하므로, stale dock은 의도적으로 버린다.
+    """
+    if (
+        dock is not None
+        and dock_timeout_s > 0.0
+        and 0.0 <= now_s - dock_received_at_s <= dock_timeout_s
+    ):
+        return dock
+    return nav
+
+
+def select_manual_command(
+    command: MotionCommand,
+    *,
+    now_s: float,
+    received_at_s: float,
+    timeout_s: float,
+) -> MotionCommand:
+    """Local-manual 입력은 새 키보드 명령이 끊기면 반드시 정지한다."""
+    if timeout_s > 0.0 and 0.0 <= now_s - received_at_s <= timeout_s:
+        return command
+    return MotionCommand(0.0, 0.0)
+
+
 @dataclass(frozen=True)
 class SafetyInputs:
     sensor_fresh: bool = True

@@ -917,3 +917,47 @@ class PersonDetectionReport(BaseModel):
 class PersonDetectionDelivery(BaseModel):
     robot_id: str
     delivered: bool
+
+
+class MarkerTranslation(BaseModel):
+    """4060이 추정한 marker의 **camera-frame** 미터 좌표.
+
+    이 좌표를 base frame이라고 주장하면 카메라 장착 방향이 다른 Pinky가 반대로
+    움직일 수 있다. Pinky onboard transformer만 TF를 적용해 base-frame으로 바꾼다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    x: float
+    y: float
+    z: float
+
+    @field_validator("x", "y", "z")
+    @classmethod
+    def coordinate_must_be_finite(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("translation_m coordinates must be finite")
+        return value
+
+
+class MarkerObservationReport(BaseModel):
+    """4060 vision이 FMS로 보내는 ArUco 관측 하나.
+
+    수신 robot_id는 camera registry의 ``attached_to``가 정한다. 요청자가 robot_id를
+    고르면 카메라와 로봇이 어긋날 수 있으므로 extra="forbid"로 거절한다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    camera_id: str = Field(min_length=1, max_length=64)
+    marker_family: Literal["DICT_5X5_50"]
+    marker_id: str = Field(min_length=1, max_length=64)
+    translation_m: MarkerTranslation
+    confidence: float = Field(gt=0.0, le=1.0)
+    ttl_ms: int = Field(gt=0, le=60_000)
+    observed_at_ms: int = Field(ge=0)
+
+
+class MarkerObservationDelivery(BaseModel):
+    robot_id: str
+    delivered: bool

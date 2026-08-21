@@ -340,13 +340,14 @@ class FleetNode(Node):
         nav_goal = NavigateToPose.Goal(); nav_goal.pose = goal.dropoff_pose
         if narrow_zone is not None:
             nav_goal.pose.header.frame_id = 'map'
-            nav_goal.pose.pose.position.x = narrow_zone.geometry.x
-            nav_goal.pose.pose.position.y = narrow_zone.geometry.y
-            nav_goal.pose.pose.orientation.z = sin(narrow_zone.geometry.yaw / 2.0)
-            nav_goal.pose.pose.orientation.w = cos(narrow_zone.geometry.yaw / 2.0)
+            entry_x, entry_y, entry_yaw = narrow_zone.entry_pose
+            nav_goal.pose.pose.position.x = entry_x
+            nav_goal.pose.pose.position.y = entry_y
+            nav_goal.pose.pose.orientation.z = sin(entry_yaw / 2.0)
+            nav_goal.pose.pose.orientation.w = cos(entry_yaw / 2.0)
             self.get_logger().info(
                 f'{goal.destination_code}: 협로 존 진입점으로 먼저 간다 '
-                f'({narrow_zone.geometry.x:.3f}, {narrow_zone.geometry.y:.3f})'
+                f'({entry_x:.3f}, {entry_y:.3f})'
             )
         nav_handle = await self.nav_client.send_goal_async(nav_goal)
         if not nav_handle.accepted:

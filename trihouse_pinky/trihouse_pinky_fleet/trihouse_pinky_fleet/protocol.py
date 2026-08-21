@@ -1,6 +1,7 @@
 """Control Tower 경계에서 ROS 없이 NDJSON 명령을 엄격히 해석하는 정책."""
 
 from dataclasses import dataclass
+import math
 from typing import Any
 
 
@@ -176,6 +177,62 @@ class PersonObservation:
     pose_class: str = ''
     pose: tuple[float, float] | None = None
     bbox: tuple[int, int, int, int] | None = None
+
+
+@dataclass(frozen=True)
+class MarkerObservationCommand:
+    """4060이 FMS/TCP를 거쳐 내린 ArUco의 camera-frame 관측.
+
+    ``translation_m``은 아직 base 좌표가 아니다. 카메라 장착 TF를 가진
+    onboard vision transformer만 이 값을 base-frame으로 바꿀 수 있다.
+    """
+
+    camera_id: str
+    marker_family: str
+    marker_id: str
+    translation_m: tuple[float, float, float]
+    confidence: float
+    ttl_ms: int
+    observed_at_ms: int
+
+
+def parse_marker_observation(payload: dict[str, Any]) -> MarkerObservationCommand:
+    """marker docking에 쓸 수 있는 camera-frame 관측만 통과시킨다."""
+    if payload.get('type') != 'marker_observation':
+        raise ProtocolError('marker_observation requires type=marker_observation')
+    camera_id = str(payload.get('camera_id', '')).strip()
+    marker_id = str(payload.get('marker_id', '')).strip()
+    if not camera_id or not marker_id:
+        raise ProtocolError('marker_observation requires camera_id and marker_id')
+    if payload.get('marker_family') != 'DICT_5X5_50':
+        raise ProtocolError('marker_observation marker_family must be DICT_5X5_50')
+    raw_translation = payload.get('translation_m')
+    if not isinstance(raw_translation, dict) or any(
+        name not in raw_translation for name in ('x', 'y', 'z')
+    ):
+        raise ProtocolError('marker_observation translation_m requires x, y, z')
+    try:
+        translation = tuple(float(raw_translation[name]) for name in ('x', 'y', 'z'))
+        confidence = float(payload['confidence'])
+        ttl_ms = int(payload['ttl_ms'])
+        observed_at_ms = int(payload['observed_at_ms'])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ProtocolError('marker_observation numeric fields are invalid') from error
+    if not all(math.isfinite(value) for value in translation):
+        raise ProtocolError('marker_observation translation_m must be finite')
+    if not 0.0 < confidence <= 1.0:
+        raise ProtocolError('marker_observation confidence must be within (0, 1]')
+    if ttl_ms <= 0 or ttl_ms > 60_000 or observed_at_ms < 0:
+        raise ProtocolError('marker_observation ttl_ms or observed_at_ms is invalid')
+    return MarkerObservationCommand(
+        camera_id=camera_id,
+        marker_family='DICT_5X5_50',
+        marker_id=marker_id,
+        translation_m=translation,
+        confidence=confidence,
+        ttl_ms=ttl_ms,
+        observed_at_ms=observed_at_ms,
+    )
 
 
 def _person_bbox(payload: dict[str, Any]) -> tuple[int, int, int, int] | None:

@@ -1,0 +1,10 @@
+/**:
+  ros__parameters:
+    # 실측 checkerboard calibration과 camera_optical_frame -> base_footprint TF를
+    # 기록하고 검토하기 전에는 절대 true로 바꾸지 않는다.
+    robot_id: PK_02
+    camera_id: CAM-PK-02
+    camera_frame: camera_optical_frame
+    base_frame: base_footprint
+    calibration_verified: false
+    observation_timeout_s: 0.5

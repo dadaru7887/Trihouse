@@ -23,6 +23,7 @@ from trihouse_interfaces.action import ExecuteTransport
 from trihouse_interfaces.msg import (
     ConnectionState,
     KeepOutZone,
+    MarkerObservation,
     PersonDetection,
     RobotStatus,
     TaskEvent,
@@ -39,6 +40,7 @@ from .protocol import (
     parse_clear_keep_out_zone,
     parse_emergency_command,
     parse_keep_out_zone,
+    parse_marker_observation,
     parse_person_detection,
     parse_transport_command,
 )
@@ -316,6 +318,12 @@ class GatewayNode(Node):
         self.person_pub = self.create_publisher(
             PersonDetection, 'trihouse/vision/person_detection/base', 10
         )
+        # ArUco pose는 4060 camera frame 값이다. 여기서 base frame으로 바꾸지
+        # 않는다. 실측 camera-to-base TF를 검증하는 vision transformer가 다음
+        # 경계이며, 그 전에는 marker_dock이 이 관측을 사용할 수 없다.
+        self.marker_camera_pub = self.create_publisher(
+            MarkerObservation, 'trihouse/vision/marker_observation/camera', 10
+        )
         self.clear_emergency = self.create_client(ClearEmergency, 'trihouse/safety/clear_emergency')
 
         # NDJSON client는 별도 thread에서 재접속하며 수신 결과만 queue에 추가한다.
@@ -526,6 +534,9 @@ class GatewayNode(Node):
             if payload.get('type') == 'person_detection':
                 self._handle_person_detection(payload)
                 continue
+            if payload.get('type') == 'marker_observation':
+                self._handle_marker_observation(payload)
+                continue
             if payload.get('type') == 'clear_keep_out_zone':
                 self._clear_keep_out_zone(payload)
                 continue
@@ -727,6 +738,41 @@ class GatewayNode(Node):
             message.pose.pose.position.x = observation.pose[0]
             message.pose.pose.position.y = observation.pose[1]
         self.person_pub.publish(message)
+
+    def _handle_marker_observation(self, payload: dict) -> None:
+        """FMS가 라우팅한 camera-frame ArUco 관측을 ROS 경계로 옮긴다.
+
+        이 handler는 작업 명령이 아니라 연속 관측 처리다. 중복 ACK를 만들지
+        않고, 잘못된 한 프레임은 거절하되 뒤 프레임의 수신은 계속 허용한다.
+        """
+        try:
+            observation = parse_marker_observation(payload)
+        except ProtocolError as error:
+            self.link.send(
+                {
+                    'type': 'command_rejected',
+                    'robot_id': self.robot_id,
+                    'detail': str(error),
+                }
+            )
+            return
+
+        message = MarkerObservation()
+        message.header.stamp = self.get_clock().now().to_msg()
+        # camera frame 이름은 transformer 설정이 수신 camera_id와 대조한다.
+        # 아직 TF를 찾지 않았으므로 base_footprint를 쓰면 안 된다.
+        message.header.frame_id = 'camera_optical_frame'
+        message.observation_id = f'{observation.camera_id}:{observation.observed_at_ms}'
+        message.robot_id = self.robot_id
+        message.camera_id = observation.camera_id
+        message.marker_family = observation.marker_family
+        message.marker_id = observation.marker_id
+        message.pose.pose.position.x = observation.translation_m[0]
+        message.pose.pose.position.y = observation.translation_m[1]
+        message.pose.pose.position.z = observation.translation_m[2]
+        message.confidence = observation.confidence
+        message.ttl_ms = observation.ttl_ms
+        self.marker_camera_pub.publish(message)
 
     def _clear_keep_out_zone(self, payload: dict) -> None:
         """기존 접근 금지 구역을 즉시 만료시키는 메시지를 발행한다."""

@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'camera_streamer = trihouse_pinky_vision.camera_streamer_node:main',
+            'marker_observation_transformer = trihouse_pinky_vision.marker_observation_transformer_node:main',
         ],
     },
 )

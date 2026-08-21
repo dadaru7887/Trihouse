@@ -30,7 +30,14 @@ from .geometry import (
     point_in_polygon,
     rotating_in_place,
 )
-from .policy import MotionCommand, SafetyConfig, SafetyInputs, apply_safety_gate
+from .policy import (
+    MotionCommand,
+    SafetyConfig,
+    SafetyInputs,
+    apply_safety_gate,
+    select_manual_command,
+    select_motion_source,
+)
 
 
 # `trihouse/fms/state` 는 흘러가는 사건이 아니라 **최신 값이 계속 유효한 사실**이다.
@@ -59,7 +66,15 @@ class SafetySupervisor(Node):
         self.declare_parameter('slow_distance_m', 0.70)
         self.declare_parameter('slow_linear_speed_mps', 0.08)
         self.declare_parameter('require_ultrasonic', True)
+        # waypoint 측정 전용 local-manual에서는 관제 연결 없이도 허용하되,
+        # 라이다·초음파·비상정지·보호 필드는 동일하게 적용한다.
+        self.declare_parameter('manual_mode_enabled', False)
+        self.declare_parameter('manual_command_timeout_s', 0.25)
         self.declare_parameter('person_protective_distance_m', 1.0)
+        # marker dock이 종료하며 남긴 zero Twist가 Nav2 주행을 영구히 막지 않게
+        # 한다. docking node의 20 Hz 제어 주기보다 넉넉하고, stale 명령은 짧게
+        # 잊는 값이다.
+        self.declare_parameter('dock_command_timeout_s', 0.25)
         # 안전 필드의 모양. 기본값의 근거는 `geometry.py` 에 적었고
         # `test_safety_fields_match_the_robot.py` 가 벤더 URDF·Nav2 발자국과 묶는다.
         self.declare_parameter('scan_forward_offset_rad', SCAN_FORWARD_OFFSET_RAD)
@@ -79,8 +94,18 @@ class SafetySupervisor(Node):
         self.sensor_timeout_s = float(self.get_parameter('sensor_timeout_s').value)
         self.config = SafetyConfig(float(self.get_parameter('stop_distance_m').value), float(self.get_parameter('slow_distance_m').value), float(self.get_parameter('slow_linear_speed_mps').value), float(self.get_parameter('person_protective_distance_m').value))
         self.require_ultrasonic = bool(self.get_parameter('require_ultrasonic').value)
+        self.manual_mode_enabled = bool(self.get_parameter('manual_mode_enabled').value)
+        self.manual_command_timeout_s = float(
+            self.get_parameter('manual_command_timeout_s').value
+        )
+        self.dock_command_timeout_s = float(
+            self.get_parameter('dock_command_timeout_s').value
+        )
         self.nav = MotionCommand(0.0, 0.0)
+        self.manual = MotionCommand(0.0, 0.0)
+        self.last_manual_at = float('-inf')
         self.dock: MotionCommand | None = None
+        self.last_dock_at = float('-inf')
         self.front_range: float | None = None
         self.forward_clearance: float | None = None
         self.reverse_clearance: float | None = None
@@ -96,6 +121,7 @@ class SafetySupervisor(Node):
         self.last_range_at = 0.0
         self.last_scan_at = 0.0
         self.create_subscription(Twist, 'cmd_vel_nav', self._on_nav, 10)
+        self.create_subscription(Twist, 'cmd_vel_manual', self._on_manual, 10)
         self.create_subscription(Twist, 'cmd_vel_dock', self._on_dock, 10)
         self.create_subscription(Range, 'trihouse/proximity/front', self._on_range, 10)
         self.create_subscription(LaserScan, 'scan', self._on_scan, 10)
@@ -114,8 +140,13 @@ class SafetySupervisor(Node):
     def _on_nav(self, message: Twist) -> None:
         self.nav = MotionCommand(message.linear.x, message.angular.z)
 
+    def _on_manual(self, message: Twist) -> None:
+        self.manual = MotionCommand(message.linear.x, message.angular.z)
+        self.last_manual_at = monotonic()
+
     def _on_dock(self, message: Twist) -> None:
         self.dock = MotionCommand(message.linear.x, message.angular.z)
+        self.last_dock_at = monotonic()
 
     def _on_range(self, message: Range) -> None:
         self.front_range = message.range; self.last_range_at = monotonic(); self.last_sensor_at = self.last_range_at
@@ -178,9 +209,23 @@ class SafetySupervisor(Node):
         return response
 
     def _publish(self) -> None:
-        desired = self.dock if self.dock is not None else self.nav
-        person_detected = self.person_detected and monotonic() <= self.person_until
         now = monotonic()
+        if self.manual_mode_enabled:
+            desired = select_manual_command(
+                self.manual,
+                now_s=now,
+                received_at_s=self.last_manual_at,
+                timeout_s=self.manual_command_timeout_s,
+            )
+        else:
+            desired = select_motion_source(
+                self.nav,
+                self.dock,
+                now_s=now,
+                dock_received_at_s=self.last_dock_at,
+                dock_timeout_s=self.dock_command_timeout_s,
+            )
+        person_detected = self.person_detected and monotonic() <= self.person_until
         scan_fresh = now - self.last_scan_at <= self.sensor_timeout_s
         range_fresh = now - self.last_range_at <= self.sensor_timeout_s
         # 보호 필드의 모양은 **지금 내리려는 명령**을 따른다. 제자리 회전은
@@ -197,7 +242,7 @@ class SafetySupervisor(Node):
                               person_detected=person_detected,
                               person_distance_m=self.person_distance if person_detected else None,
                               keep_out=self._in_keep_out_zone(), emergency_latched=self.emergency_latched,
-                              control_link_fresh=self.control_link_online)
+                              control_link_fresh=(self.manual_mode_enabled or self.control_link_online))
         decision = apply_safety_gate(desired, inputs, self.config)
         cmd = Twist(); cmd.linear.x = decision.command.linear_x; cmd.angular.z = decision.command.angular_z
         self.cmd_pub.publish(cmd)
