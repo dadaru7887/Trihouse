@@ -6,6 +6,8 @@
 
 이 설계의 기준 프로파일은 `physical_01`이고 ROS 2 통신 도메인은 `12`이다.
 
+프로파일에는 저장소의 실행 코드, DB seed, DHCP 예약 화면, 실측 waypoint와 장비에서 직접 확인한 값만 기록한다. 확인 근거가 없는 값은 추정하거나 예제 주소로 채우지 않고 빈 문자열로 둔다. 선택한 역할에 필요한 필수값이 비어 있으면 doctor가 필드 경로를 출력하고 bringup을 중단한다.
+
 ## 결정
 
 `config/profiles/physical_01.yaml`을 실물 시스템의 정적 구성 정본으로 사용한다. 이 파일은 장비 식별자, ROS namespace, DHCP 예약 주소, 지도와 파라미터 파일 경로, 기능 활성화 여부, 포장대와 작업자 매핑을 담는다.
@@ -87,6 +89,7 @@ robots:
     device_id: PK_01
     namespace: pinky_01
     host: 192.168.0.21
+    charger_code: TRIHOUSE-TEST-01-CHG-01
     nav2_params_file: hardware_pinky_01.yaml
     vision_config_file: pinky_1.yaml
 
@@ -94,6 +97,7 @@ robots:
     device_id: PK_02
     namespace: pinky_02
     host: 192.168.0.22
+    charger_code: TRIHOUSE-TEST-01-CHG-02
     nav2_params_file: hardware_pinky_02.yaml
     vision_config_file: pinky_2.yaml
 
@@ -102,11 +106,25 @@ omx_stations:
     device_id: OMX_01
     namespace: omx_01
     host: 192.168.0.31
+    temperature_zones: [ambient, chilled]
+    serial_device: ""
+    front_camera: ""
+    wrist_camera: ""
+    calibration_id: ""
+    calibration_directory: ""
+    model_cache_directory: ""
 
   omx_02:
     device_id: OMX_02
     namespace: omx_02
     host: 192.168.0.32
+    temperature_zones: [frozen]
+    serial_device: ""
+    front_camera: ""
+    wrist_camera: ""
+    calibration_id: ""
+    calibration_directory: ""
+    model_cache_directory: ""
 
 packing_dock_assignments:
   - packing_dock_id: PACKING-01-DOCK-01
@@ -232,6 +250,7 @@ bringup은 프로세스를 시작하기 전에 다음 조건을 모두 확인한
 - 실물 프로파일에서 `use_sim_time`이 `false`이다.
 - 선택한 역할의 host가 현재 호스트에서 확인한 DHCP 예약 주소와 일치한다.
 - `.env`에 필요한 비밀값이 존재하고 placeholder가 아니다.
+- 선택한 역할의 필수 필드가 빈 문자열이 아니다. 빈 값은 사용자가 실제 장비에서 확인해 채울 항목으로 그대로 보고한다.
 
 검증 실패 시 어떤 필드와 파일이 문제인지 출력하고 어떤 프로세스도 시작하지 않는다.
 
