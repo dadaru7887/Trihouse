@@ -60,44 +60,41 @@ zones:
       note: narrow_2 시퀀스는 narrow_1 규칙을 재사용한 미검증 후보라 calibration 주행이 필요하다.
 
   frozen_storage_loading_dock_01:
-    # 2026-08-21 PK02 실측. Nav2는 이 입구까지만 오고, 아래 고정 규칙이
-    # 냉동 도크까지 주차한다. marker_id는 일부러 비운다. 값이 있으면 고정
-    # 시퀀스 대신 아직 미검증인 ArUco dock action으로 분기하기 때문이다.
-    entry: { x: 1.1792881155, y: -1.1896842748, yaw: 0.0109381190 }
+    # j_narrow3_rule_based_docking_1.py의 narrow_3 실측값을 그대로 사용한다.
+    # Nav2는 이 입구까지만 오고, 아래 고정 규칙이 냉동 도크까지 주차한다.
+    entry: { x: 0.9198039894575488, y: -1.1892528962848725, yaw: -0.03242978898931081 }
     # EN: Nav2 yields control anywhere in this oriented box. Rule control then
     # closes the remaining position and yaw error against `entry`.
     # KO: Nav2는 이 회전 직사각형 안에서 제어권을 넘긴다. 남은 위치와 yaw 오차는
     # 규칙 제어가 `entry` 값에 맞춘다.
     entry_zone:
-      { x: 1.1792881155, y: -1.1896842748, yaw: 0.0109381190, length: 0.20, width: 0.20 }
+      { x: 0.9198039894575488, y: -1.1892528962848725, yaw: -0.03242978898931081, length: 0.10, width: 0.20 }
     # 도킹 뒤 로봇이 머무르는 직사각형. entry와 분리해야 다음 출발 명령에서
     # 역순 탈출 시퀀스를 선택할 수 있다.
-    zone: { x: 1.3314581184, y: -0.8149269956, yaw: -1.572140, length: 0.20, width: 0.20 }
-    dock_target: { x: 1.3314581184, y: -0.8149269956, yaw: -1.572140 }
+    # 원본에는 별도 dock 좌표가 없으므로 entry에서 원본 sequence를 적분한 예상값이다.
+    zone: { x: 1.036067117750, y: -0.933812857015, yaw: -0.9057963267948966, length: 0.20, width: 0.20 }
+    dock_target: { x: 1.036067117750, y: -0.933812857015, yaw: -0.9057963267948966 }
     enter:
-      - [straight, 0.20]
-      - [rotate, -1.572140]
-      - [straight, -0.372569]
-    # 입고 시 실제로 지난 궤적의 역순. 도크 yaw를 먼저 유지한 채 전진해 회전
-    # 여유 위치로 나온 뒤 입구 방향으로 되돌아간다.
+      - [straight, 0.325]
+      - [rotate, -0.9057963267948966]
+      - [straight, -0.338]
+    # 원본 Python의 sequence_exit를 그대로 옮긴다.
     exit:
-      - [straight, 0.372569]
-      - [rotate, 0.0109381190]
-      - [straight, -0.20]
-    # 현재 exit는 입고 궤적을 역순으로 만든 후보값이다. 하드웨어 모듈 테스트가
-    # 이 좌표 복귀를 확인하기 전에는 일반 주문 배정을 열지 않는다.
-    exit_target: { x: 1.1792881155, y: -1.1896842748, yaw: 0.0109381190 }
+      - [straight, 0.315]
+      - [rotate, -2.999132807834344]
+      - [exit_zone, null]
+    # exit_zone의 종료 좌표는 원본에 없으므로 실측 전까지 entry 중심을 검증 후보로 둔다.
+    exit_target: { x: 0.9198039894575488, y: -1.1892528962848725, yaw: -2.999132807834344 }
     measured:
-      source: waypoint.md
+      source: /home/newuser/Downloads/j_narrow3_rule_based_docking_1.py
       entry_pose: true
-      dock_pose: true
+      dock_pose: false
       enter: true
       exit: false
-      entry_pose_date: 2026-08-21
-      dock_pose_date: 2026-08-21
+      entry_pose_date: 2026-08-15
       note: >-
-        PK02 냉동 입구에서 20 cm 전진 후 도킹 yaw(-1.572140 rad)로 회전하고,
-        0.372569 m 후진한다. 최종 x 오차 약 4.8 cm는 현재 0.15 m 검증 범위 안이다.
+        narrow_3 원본값: 0.325 m 직진, yaw -0.9057963267948966 rad로 회전,
+        0.338 m 후진. dock_target은 이 시퀀스를 적분한 예상값이므로 이번 실기에서 검증한다.
 
   charging_narrow_departure:
     # 두 대기/충전 waypoint는 하나의 narrow_4 탈출 상태를 공유한다. 아래 반경은

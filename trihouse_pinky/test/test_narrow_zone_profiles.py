@@ -90,7 +90,7 @@ def test_frozen_keeps_todays_entry_dock_and_distinct_exit_target() -> None:
 
     assert frozen.entry_pose is not None
     assert (frozen.entry_pose.x, frozen.entry_pose.y, frozen.entry_pose.yaw) == pytest.approx(
-        (1.1792881155, -1.1896842748, 0.0109381190)
+        (0.9198039894575488, -1.1892528962848725, -0.03242978898931081)
     )
     assert frozen.entry_zone is not None
     assert (
@@ -99,12 +99,20 @@ def test_frozen_keeps_todays_entry_dock_and_distinct_exit_target() -> None:
         frozen.entry_zone.yaw,
         frozen.entry_zone.length,
         frozen.entry_zone.width,
-    ) == pytest.approx((1.1792881155, -1.1896842748, 0.0109381190, 0.20, 0.20))
+    ) == pytest.approx(
+        (0.9198039894575488, -1.1892528962848725, -0.03242978898931081, 0.10, 0.20)
+    )
     assert frozen.dock_target is not None
     assert (frozen.dock_target.x, frozen.dock_target.y, frozen.dock_target.yaw) == pytest.approx(
-        (1.3314581184, -0.8149269956, -1.572140)
+        (1.036067117750, -0.933812857015, -0.9057963267948966)
     )
-    assert frozen.exit_target == frozen.entry_pose
+    assert frozen.exit_target is not None
+    assert (frozen.exit_target.x, frozen.exit_target.y, frozen.exit_target.yaw) == pytest.approx(
+        (0.9198039894575488, -1.1892528962848725, -2.999132807834344)
+    )
+    assert tuple(step.value for step in frozen.enter) == pytest.approx(
+        (0.325, -0.9057963267948966, -0.338)
+    )
     assert frozen.enter != frozen.exit
 
 

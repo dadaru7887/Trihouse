@@ -113,19 +113,21 @@ def test_new_map_2_frozen_rule_uses_the_measured_entry_and_exact_dock_yaw() -> N
     frozen = load_zones(document, map_name="new_map_2")[FROZEN]
 
     assert frozen.marker_id is None
-    assert frozen.entry_pose == pytest.approx((1.1792881155, -1.1896842748, 0.0109381190))
+    assert frozen.entry_pose == pytest.approx(
+        (0.9198039894575488, -1.1892528962848725, -0.03242978898931081)
+    )
     assert (frozen.geometry.x, frozen.geometry.y, frozen.geometry.yaw) == pytest.approx(
-        (1.3314581184, -0.8149269956, -1.572140)
+        (1.036067117750, -0.933812857015, -0.9057963267948966)
     )
     assert [kind for kind, _ in frozen.enter] == [STRAIGHT, ROTATE, STRAIGHT]
     assert [value for _, value in frozen.enter] == pytest.approx(
-        [0.20, -1.572140, -0.372569]
+        [0.325, -0.9057963267948966, -0.338]
     )
 
     arrived = _apply(frozen.enter, *frozen.entry_pose)
     # 도킹 yaw는 측정값에 정확히 맞춘다. 두 번의 독립 AMCL 측정 차이로 남는
     # x 오차(약 4.8 cm)는 fleet_node의 15 cm 최종 도킹 검증 범위 안이어야 한다.
-    assert arrived[2] == pytest.approx(-1.572140)
+    assert arrived[2] == pytest.approx(-0.9057963267948966)
     assert math.hypot(arrived[0] - frozen.geometry.x, arrived[1] - frozen.geometry.y) < 0.15
 
 
