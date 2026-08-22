@@ -78,12 +78,15 @@ class OutboundOrderItemRequest(BaseModel):
 
 
 class OutboundOrderRequest(BaseModel):
-    """Session-originated product-only outbound order."""
+    """EN: Product-only order; anonymous callers omit requested_by.
+
+    KO: 상품 기반 주문이며 익명 호출자는 requested_by를 생략한다.
+    """
 
     model_config = ConfigDict(extra="forbid")   # 정의되지 않은 필드 거절
 
     external_reference: str | None = Field(default=None, min_length=1, max_length=128)
-    requested_by: str = Field(min_length=1, max_length=64)
+    requested_by: str | None = Field(default=None, min_length=1, max_length=64)
     priority: Literal["normal", "high", "critical"] = "normal"
     allow_partial_fulfillment: bool = False
     items: list[OutboundOrderItemRequest] = Field(min_length=1, max_length=100)

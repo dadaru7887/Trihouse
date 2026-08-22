@@ -8,6 +8,7 @@ update 가 도착해야 돈다. RMF 에 제출되기 전에 멈춘 job 은 그 �
 
 from contextlib import contextmanager
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -67,7 +68,29 @@ def _assigned_job(
     )
     assert response.status_code == 201, response.text
     job_id = int(response.json()["job_id"])
-    _repository().assign_job_resources(job_id, ASSIGNMENT)
+    arm_steps = rows(
+        "SELECT input FROM job_steps "
+        "WHERE job_id=%s AND executor_type='arm' ORDER BY step_no",
+        (job_id,),
+    )
+    omx_ids = tuple(
+        dict.fromkeys(
+            str(
+                (
+                    json.loads(step["input"])
+                    if isinstance(step["input"], str)
+                    else step["input"]
+                )["omx_id"]
+            )
+            for step in arm_steps
+        )
+    )
+    assignment = {
+        **ASSIGNMENT,
+        "omx_id": omx_ids[0],
+        "omx_ids": list(omx_ids),
+    }
+    _repository().assign_job_resources(job_id, assignment)
     return job_id
 
 
@@ -221,9 +244,15 @@ def test_a_finished_step_keeps_its_outcome_when_the_job_is_cancelled(
 ) -> None:
     """취소는 아직 끝나지 않은 것만 닫는다. 이미 일어난 일을 되쓰면 원장이 거짓이 된다."""
     job_id = _assigned_job("succeeded-step")
+    first_step_id = int(
+        rows(
+            "SELECT job_step_id FROM job_steps WHERE job_id=%s ORDER BY step_no LIMIT 1",
+            (job_id,),
+        )[0]["job_step_id"]
+    )
     _execute(
-        "UPDATE job_steps SET state='succeeded' WHERE job_id=%s AND action_type='pick'",
-        (job_id,),
+        "UPDATE job_steps SET state='succeeded' WHERE job_step_id=%s",
+        (first_step_id,),
     )
     finished = {
         int(row["job_step_id"])

@@ -26,7 +26,7 @@ class OrderLine:
 class OutboundOrder:
     order_identity: str
     external_reference: str | None
-    requested_by: str
+    requested_by: str | None
     priority: str
     allow_partial_fulfillment: bool
     items: tuple[OrderLine, ...]
@@ -261,8 +261,8 @@ class OutboundPlanner:
 
     @staticmethod
     def _validate_order(order: OutboundOrder) -> None:
-        if not order.order_identity or not order.requested_by or not order.items:
-            raise ValueError("order identity, requester, and at least one item are required")
+        if not order.order_identity or not order.items:
+            raise ValueError("order identity and at least one item are required")
         if order.priority not in {"normal", "high", "critical"}:
             raise ValueError("unsupported outbound priority")
         if len({item.line_no for item in order.items}) != len(order.items):

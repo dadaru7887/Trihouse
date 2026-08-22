@@ -182,7 +182,7 @@ def install_active_map() -> None:
               (map_revision, map_name, source_project_id, draft_revision, state,
                building_sha256, nav_graph_sha256, world_sha256, manifest, published_by)
             VALUES ('trihouse_test_01:test', 'trihouse_test_01', %s, 1, 'published',
-                    %s, %s, %s, %s, 'W-OP-01')
+                    %s, %s, %s, %s, 'W-CONTROL-01')
             """,
             (project_id, "0" * 64, "1" * 64, "2" * 64, json.dumps(manifest)),
         )
@@ -253,7 +253,7 @@ def install_unrelated_newer_map() -> None:
                building_sha256, nav_graph_sha256, world_sha256, manifest,
                published_by, published_at)
             VALUES ('unrelated_facility:newer', 'unrelated_facility', %s, 1,
-                    'published', %s, %s, %s, %s, 'W-OP-01',
+                    'published', %s, %s, %s, %s, 'W-CONTROL-01',
                     DATE_ADD(NOW(6), INTERVAL 1 HOUR))
             """,
             (project_id, "3" * 64, "4" * 64, "5" * 64, json.dumps(manifest)),
@@ -472,7 +472,6 @@ def test_null_reference_orders_get_distinct_replay_stable_handover_groups(
         "external_reference": None,
         "priority": "normal",
         "allow_partial_fulfillment": False,
-        "requested_by": "W-OP-01",
         "items": [{"product_code": "SKU-SANDWICH", "quantity": 1}],
     }
     client = real_client()
@@ -508,6 +507,34 @@ def test_null_reference_orders_get_distinct_replay_stable_handover_groups(
         return str(payload["handover_group_id"])
 
     assert handover_group(first) != handover_group(second)
+
+
+def test_anonymous_order_persists_no_employee_requester(seeded_schema) -> None:
+    """EN: Anonymous intake stores SQL NULL instead of a fabricated worker ID.
+
+    KO: 익명 주문은 가짜 작업자 ID 대신 SQL NULL을 저장해야 한다.
+    """
+    install_active_map()
+    request = deepcopy(DEMO_ORDERS[5]["request"])
+    request.pop("requested_by", None)
+
+    response = real_client().post(
+        "/api/v1/orders",
+        headers={"Idempotency-Key": "anonymous-order-integration"},
+        json=request,
+    )
+
+    assert response.status_code == 201, response.text
+    requester = rows(
+        "SELECT requested_by FROM jobs WHERE job_id = %s",
+        (response.json()["job_id"],),
+    )[0]
+    assert requester == {"requested_by": None}
+    move_actor = rows(
+        "SELECT DISTINCT recorded_by FROM inventory_moves WHERE job_id = %s",
+        (response.json()["job_id"],),
+    )
+    assert move_actor == [{"recorded_by": "system:fms_gateway"}]
 
 
 def test_concurrent_retries_with_the_same_key_replay_one_order(seeded_schema) -> None:
@@ -575,14 +602,12 @@ def test_overlapping_single_and_reverse_multi_product_orders_do_not_deadlock(
             "external_reference": f"OVERLAP-SINGLE-{round_no}",
             "priority": "normal",
             "allow_partial_fulfillment": False,
-            "requested_by": "W-OP-01",
             "items": [{"product_code": "SKU-SANDWICH", "quantity": 1}],
         },
         {
             "external_reference": f"OVERLAP-MULTI-{round_no}",
             "priority": "normal",
             "allow_partial_fulfillment": False,
-            "requested_by": "W-OP-01",
             "items": [
                 {"product_code": "SKU-ICEBAR", "quantity": 1},
                 {"product_code": "SKU-SANDWICH", "quantity": 1},

@@ -15,7 +15,6 @@ REQUEST = {
     "external_reference": "DEMO-ORDER-ALL-ZONES-001",
     "priority": "normal",
     "allow_partial_fulfillment": False,
-    "requested_by": "W-OP-01",
     "items": [{"product_code": "SKU-MANDARIN", "quantity": 1}],
 }
 
@@ -57,6 +56,22 @@ def test_public_order_route_requires_an_idempotency_key() -> None:
     assert response.status_code == 422
 
 
+def test_public_order_route_accepts_an_order_without_a_worker_identity() -> None:
+    """EN: Anonymous order intake must not invent an employee identity.
+
+    KO: 익명 주문 접수는 존재하지 않는 직원 식별자를 만들어서는 안 된다.
+    """
+    repository = RecordingRepository()
+    response = TestClient(create_app(repository)).post(
+        "/api/v1/orders",
+        headers={"Idempotency-Key": "anonymous-order-001"},
+        json=REQUEST,
+    )
+
+    assert response.status_code == 201, response.text
+    assert repository.calls[0][0]["requested_by"] is None
+
+
 def test_public_order_route_accepts_only_product_order_fields() -> None:
     repository = RecordingRepository()
     body = {**REQUEST, "destination_id": "PACKING-01", "robot_id": "PK_01"}
@@ -71,7 +86,7 @@ def test_public_order_route_accepts_only_product_order_fields() -> None:
     assert repository.calls == []
 
 
-def test_public_order_route_passes_the_session_order_to_one_repository_command() -> None:
+def test_public_order_route_passes_the_anonymous_order_to_one_repository_command() -> None:
     repository = RecordingRepository()
 
     response = TestClient(create_app(repository)).post(
@@ -82,7 +97,7 @@ def test_public_order_route_passes_the_session_order_to_one_repository_command()
 
     assert response.status_code == 201
     assert response.json()["outstanding_quantity"] == 0
-    assert repository.calls == [(REQUEST, "order-api-001")]
+    assert repository.calls == [({**REQUEST, "requested_by": None}, "order-api-001")]
 
 
 def test_full_only_shortage_is_a_stable_atomic_conflict() -> None:

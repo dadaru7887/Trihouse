@@ -5,7 +5,6 @@
       "external_reference": "DEMO-ORDER-ALL-ZONES-001",
       "priority": "normal",
       "allow_partial_fulfillment": false,
-      "requested_by": "W-OP-01",
       "items": [
         {"product_code": "SKU-MANDARIN", "quantity": 1},
         {"product_code": "SKU-YOGURT", "quantity": 1},
@@ -19,7 +18,6 @@
       "external_reference": "DEMO-ORDER-CHL-FRZ-001",
       "priority": "high",
       "allow_partial_fulfillment": false,
-      "requested_by": "W-OP-01",
       "items": [
         {"product_code": "SKU-MILK", "quantity": 1},
         {"product_code": "SKU-ICECONE", "quantity": 1}
@@ -32,7 +30,6 @@
       "external_reference": "DEMO-ORDER-INSUFFICIENT-001",
       "priority": "normal",
       "allow_partial_fulfillment": false,
-      "requested_by": "W-OP-01",
       "items": [
         {"product_code": "SKU-ORANGE", "quantity": 2}
       ]
@@ -44,7 +41,6 @@
       "external_reference": "DEMO-ORDER-CRITICAL-001",
       "priority": "critical",
       "allow_partial_fulfillment": false,
-      "requested_by": "W-OP-01",
       "items": [
         {"product_code": "SKU-STRAWBERRY", "quantity": 1},
         {"product_code": "SKU-PORKBELLY", "quantity": 1}
@@ -57,7 +53,6 @@
       "external_reference": "DEMO-ORDER-PARTIAL-001",
       "priority": "normal",
       "allow_partial_fulfillment": true,
-      "requested_by": "W-OP-01",
       "items": [
         {"product_code": "SKU-SANDWICH", "quantity": 3},
         {"product_code": "SKU-ICEBAR", "quantity": 1}
@@ -70,7 +65,6 @@
       "external_reference": "DEMO-ORDER-AMBIENT-BUNDLE-001",
       "priority": "high",
       "allow_partial_fulfillment": false,
-      "requested_by": "W-OP-01",
       "items": [
         {"product_code": "SKU-ORANGE", "quantity": 1},
         {"product_code": "SKU-MANDARIN", "quantity": 1}

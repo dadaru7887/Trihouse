@@ -30,6 +30,9 @@ from control_tower.task_manager.outbound_sequence import planned_outbound_steps
 
 
 SEOUL = ZoneInfo("Asia/Seoul")
+# EN: Automated ledger rows name the service actor without fabricating a worker.
+# KO: 자동 원장 행은 가짜 직원을 만들지 않고 서비스를 행위자로 기록한다.
+FMS_GATEWAY_ACTOR = "system:fms_gateway"
 
 
 class FmsRepository(Protocol):
@@ -3281,7 +3284,11 @@ class MySqlFmsRepository:
                 outbound_order = OutboundOrder(
                     order_identity=job_identity,
                     external_reference=external_reference,
-                    requested_by=str(request["requested_by"]),
+                    requested_by=(
+                        str(request["requested_by"])
+                        if request.get("requested_by") is not None
+                        else None
+                    ),
                     priority=str(request["priority"]),
                     allow_partial_fulfillment=bool(
                         request["allow_partial_fulfillment"]
@@ -3467,7 +3474,7 @@ class MySqlFmsRepository:
                                 lot_row["available_qty"],
                                 allocation.reserved_qty,
                                 reserved_after,
-                                outbound_order.requested_by,
+                                outbound_order.requested_by or FMS_GATEWAY_ACTOR,
                                 f"outbound order line {line.line_no}",
                             ),
                         )
@@ -6488,7 +6495,11 @@ class InMemoryFmsRepository:
     실제 잠금과 스키마의 검증은 MySQL integration test가 담당한다.
     """
 
-    def __init__(self, seed_locations: list[dict[str, Any]] | None = None):
+    def __init__(
+        self,
+        seed_locations: list[dict[str, Any]] | None = None,
+        seed_workers: list[dict[str, Any]] | None = None,
+    ):
         self._jobs: dict[int, dict[str, Any]] = {}
         self._steps: dict[int, dict[str, Any]] = {}
         self._events: dict[int, list[dict[str, Any]]] = {}
@@ -6504,6 +6515,14 @@ class InMemoryFmsRepository:
         self._cancellations: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
         self._anomalies: dict[str, dict[str, Any]] = {}
         self._anomaly_acknowledgements: dict[str, dict[str, Any]] = {}
+        # EN: Tests inject the same worker shape that MySQL reads instead of
+        # granting authority to repository-local worker IDs.
+        # KO: 저장소 내부 작업자 ID에 권한을 주지 않고 MySQL과 같은 형태의
+        # 작업자 데이터를 테스트가 전달한다.
+        self._workers: dict[str, dict[str, Any]] = {
+            str(worker["worker_id"]): deepcopy(worker)
+            for worker in (seed_workers or [])
+        }
         # 테스트가 비상 판단 경로를 돌릴 수 있게 최소한의 incident 대장을 둔다.
         self._incidents: dict[int, dict[str, Any]] = {}
         self._incident_decisions: dict[str, dict[str, Any]] = {}
@@ -7401,7 +7420,8 @@ class InMemoryFmsRepository:
         if existing is not None:
             return deepcopy(existing)
         worker_id = str(request["worker_id"])
-        if worker_id not in {"W-OP-01", "W-SAFE-01"}:
+        worker = self._workers.get(worker_id)
+        if worker is None or not worker.get("active"):
             raise AnomalyAcknowledgementConflict("ACTIVE_WORKER_REQUIRED")
         acknowledgement = {
             "correlation_uuid": correlation_uuid,
@@ -7452,7 +7472,8 @@ class InMemoryFmsRepository:
         decidable = MySqlFmsRepository.EMERGENCY_DECIDABLE_STATES[decision]
         if incident["state"] not in decidable:
             raise EmergencyDecisionConflict("INCIDENT_NOT_DECIDABLE")
-        if worker_id not in {"W-OP-01", "W-SAFE-01"}:
+        worker = self._workers.get(worker_id)
+        if worker is None or not worker.get("active"):
             raise EmergencyDecisionConflict("ACTIVE_WORKER_REQUIRED")
         incident["state"] = rule["state"]
         response = {

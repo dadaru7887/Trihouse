@@ -12,12 +12,28 @@ from fms_gateway.app.repositories import InMemoryFmsRepository
 
 
 def _client_with_incident(incident_id: int = 1, state: str = "active"):
-    repository = InMemoryFmsRepository()
+    repository = InMemoryFmsRepository(
+        seed_workers=[
+            {
+                "worker_id": "W-CONTROL-01",
+                "role": "safety_manager",
+                "active": True,
+            }
+        ]
+    )
     repository.open_incident(incident_id, incident_code="INC-FALL-0001", state=state)
     return TestClient(create_app(repository)), repository
 
 
-def _decide(client, incident_id, decision, *, key, worker="W-OP-01", reason="fall"):
+def _decide(
+    client,
+    incident_id,
+    decision,
+    *,
+    key,
+    worker="W-CONTROL-01",
+    reason="fall",
+):
     return client.post(
         f"/api/v1/incidents/{incident_id}/decision",
         json={"worker_id": worker, "decision": decision, "reason": reason},
@@ -34,7 +50,7 @@ def test_raising_the_alarm_acknowledges_the_incident_and_names_the_operator():
     body = response.json()
     assert body["state"] == "acknowledged"
     assert body["decision"] == "RAISE_ALARM"
-    assert body["decided_by"] == "W-OP-01"
+    assert body["decided_by"] == "W-CONTROL-01"
     assert body["incident_code"] == "INC-FALL-0001"
     # 원장이 실제로 옮겨졌는지 본다. 응답만 맞고 상태가 안 바뀌면 의미가 없다.
     assert repository._incidents[1]["state"] == "acknowledged"
@@ -120,7 +136,7 @@ def test_the_idempotency_key_header_is_required():
 
     response = client.post(
         "/api/v1/incidents/1/decision",
-        json={"worker_id": "W-OP-01", "decision": "RAISE_ALARM", "reason": "fall"},
+        json={"worker_id": "W-CONTROL-01", "decision": "RAISE_ALARM", "reason": "fall"},
     )
 
     assert response.status_code == 422
@@ -131,7 +147,7 @@ def test_an_unknown_decision_is_rejected_before_it_reaches_the_ledger():
 
     response = client.post(
         "/api/v1/incidents/1/decision",
-        json={"worker_id": "W-OP-01", "decision": "SHUT_DOWN", "reason": "fall"},
+        json={"worker_id": "W-CONTROL-01", "decision": "SHUT_DOWN", "reason": "fall"},
         headers={"Idempotency-Key": "emergency-1-shutdown"},
     )
 

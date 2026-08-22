@@ -40,7 +40,11 @@ def _job() -> dict[str, object]:
 
 
 def _client_with_overdue_job() -> tuple[TestClient, InMemoryFmsRepository, int]:
-    repository = InMemoryFmsRepository()
+    repository = InMemoryFmsRepository(
+        seed_workers=[
+            {"worker_id": "W-FIELD-01", "role": "operator", "active": True}
+        ]
+    )
     client = TestClient(create_app(repository))
     created = client.post("/internal/v1/jobs", json=_job())
     job_id = int(created.json()["job_id"])
@@ -123,11 +127,11 @@ def test_the_open_anomalies_are_readable_and_closable_by_a_person():
     correlation_uuid = anomalies[0]["correlation_uuid"]
     acknowledged = client.post(
         f"/api/v1/operations/anomalies/{correlation_uuid}/acknowledge",
-        json={"worker_id": "W-OP-01", "note": "robot was parked"},
+        json={"worker_id": "W-FIELD-01", "note": "robot was parked"},
     )
 
     assert acknowledged.status_code == 200, acknowledged.text
-    assert acknowledged.json()["acknowledged_by"] == "W-OP-01"
+    assert acknowledged.json()["acknowledged_by"] == "W-FIELD-01"
     remaining = client.get(
         "/api/v1/operations/anomalies", params={"state": "open"}
     ).json()
@@ -139,7 +143,7 @@ def test_acknowledging_an_unknown_anomaly_is_not_found():
 
     response = client.post(
         "/api/v1/operations/anomalies/00000000-0000-0000-0000-000000000000/acknowledge",
-        json={"worker_id": "W-OP-01", "note": "nothing here"},
+        json={"worker_id": "W-FIELD-01", "note": "nothing here"},
     )
 
     assert response.status_code == 404

@@ -1,5 +1,6 @@
 """Product-only outbound planning contract tests."""
 
+from dataclasses import replace
 from datetime import date, datetime
 
 from control_tower.task_manager.outbound_planner import (
@@ -55,6 +56,32 @@ def order(*lines: tuple[str, int], allow_partial: bool = False) -> OutboundOrder
             for index, (code, quantity) in enumerate(lines, start=1)
         ),
     )
+
+
+def test_anonymous_order_identity_does_not_require_an_employee() -> None:
+    """EN: Inventory planning must not depend on an authenticated employee.
+
+    KO: 재고 계획은 로그인한 직원이 없어도 수행되어야 한다.
+    """
+    anonymous = replace(order(("SKU-ORANGE", 1)), requested_by=None)
+
+    result = OutboundPlanner().plan(
+        anonymous,
+        (
+            lot(
+                1,
+                "SKU-ORANGE",
+                "ambient",
+                11,
+                1,
+                expiry_date=date(2026, 8, 28),
+                received_at=datetime(2026, 8, 1),
+            ),
+        ),
+        LOCATIONS,
+    )
+
+    assert result.accepted is True
 
 
 def test_full_only_shortage_rejects_the_entire_plan_without_allocations() -> None:

@@ -200,12 +200,16 @@ VALUES
   ('OMX_01', 'arm', 'OMX_01', 'OMX-AI', NULL,
    (SELECT location_id FROM locations WHERE location_code = 'OMX-WS-01'),
    (SELECT location_id FROM locations WHERE location_code = 'OMX-WS-01'),
-   'automatic', 1, JSON_OBJECT('pick', true, 'place', true),
+   'automatic', 1, JSON_OBJECT(
+     'pick', true, 'place', true,
+     'temperature_zones', JSON_ARRAY('ambient', 'chilled')),
    '2026-08-03 09:00:00.000000'),
   ('OMX_02', 'arm', 'OMX_02', 'OMX-AI', NULL,
    (SELECT location_id FROM locations WHERE location_code = 'OMX-WS-02'),
    (SELECT location_id FROM locations WHERE location_code = 'OMX-WS-02'),
-   'automatic', 1, JSON_OBJECT('pick', true, 'place', true),
+   'automatic', 1, JSON_OBJECT(
+     'pick', true, 'place', true,
+     'temperature_zones', JSON_ARRAY('frozen')),
    '2026-08-03 09:00:00.000000')
 ON DUPLICATE KEY UPDATE
   name = VALUES(name),

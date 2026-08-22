@@ -370,7 +370,10 @@ def create_app(
         order: OutboundOrderRequest,
         idempotency_key: str = Header(min_length=1, max_length=160),
     ):
-        """Create one product-only order in the caller's credentialed session."""
+        """EN: Create one product-only order, with or without worker identity.
+
+        KO: 작업자 식별 여부와 무관하게 상품 주문 하나를 생성한다.
+        """
         try:
             return repo.create_outbound_order(order.model_dump(), idempotency_key)
         except OutboundOrderInsufficientStock as error:     # 재고 부족
