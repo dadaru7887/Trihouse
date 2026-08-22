@@ -39,7 +39,12 @@ import cv2
 import numpy as np
 import torch
 
-from lerobot.datasets.utils import build_dataset_frame
+try:  # OMX_01(0.31)의 lerobot은 이 PC/5080보다 최신 버전이라 이 심볼이
+    # lerobot.datasets.utils -> lerobot.utils.feature_utils로 옮겨졌다
+    # (실측 확인, 2026-08-22) — 함수 내용은 동일, 위치만 다르다.
+    from lerobot.datasets.utils import build_dataset_frame
+except ImportError:
+    from lerobot.utils.feature_utils import build_dataset_frame
 from lerobot.policies.utils import make_robot_action
 from lerobot.robots.omx_follower import OmxFollower
 from lerobot.utils.constants import OBS_STR

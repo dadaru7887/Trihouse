@@ -22,14 +22,24 @@ from lerobot.datasets.pipeline_features import (
     aggregate_pipeline_dataset_features,
     create_initial_features,
 )
-from lerobot.datasets.utils import build_dataset_frame, combine_feature_dicts
+try:  # OMX_01(0.31)의 lerobot은 이 PC/5080보다 최신 버전이라 이 두 심볼이
+    # lerobot.datasets.utils -> lerobot.utils.feature_utils로 옮겨졌다
+    # (실측 확인, 2026-08-22) — 함수 내용은 동일, 위치만 다르다.
+    from lerobot.datasets.utils import build_dataset_frame, combine_feature_dicts
+except ImportError:
+    from lerobot.utils.feature_utils import build_dataset_frame, combine_feature_dicts
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.utils import make_robot_action
 from lerobot.processor import make_default_processors
 from lerobot.robots.omx_follower import OmxFollower
 from lerobot.utils.constants import OBS_STR
-from lerobot.utils.control_utils import predict_action, prepare_observation_for_inference
+try:  # 위와 같은 이유 — predict_action은 lerobot.common.control_utils로,
+    # prepare_observation_for_inference는 lerobot.policies로 옮겨갔다.
+    from lerobot.utils.control_utils import predict_action, prepare_observation_for_inference
+except ImportError:
+    from lerobot.common.control_utils import predict_action
+    from lerobot.policies import prepare_observation_for_inference
 from lerobot.utils.utils import get_safe_torch_device
 
 
