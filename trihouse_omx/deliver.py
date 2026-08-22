@@ -107,6 +107,7 @@ def run_item(
     bench_: bench.Bench,
     debug_gripper: bool = False,
     policy_runtime_module=None,
+    post_release_settle_steps: int = POST_RELEASE_SETTLE_STEPS,
 ) -> ItemVerdict:
     """정책 하나를 실행해 물체 하나를 pick+place한다.
 
@@ -122,6 +123,11 @@ def run_item(
     remote_policy_runtime(5080 원격 추론, 같은 이름의 함수 4개를 제공)을
     넘기면 된다 — 이 함수의 나머지 로직(파지/해제 판정, fail-closed 등)은
     완전히 그대로다.
+
+    post_release_settle_steps: 안 주면(기본값) 기존과 동일한 120. 냉장/상온처럼
+    회전 각도가 더 커서 120스텝(15fps 기준 약 8초) 안에 홈 위치까지 다 못
+    돌아오는 존은 CLI에서 더 크게 줄 수 있다(실측 확인: 상온은 120으로
+    충분, 냉장은 부족 — 물체마다 다를 수 있어 zone별 고정값 대신 CLI 인자로 둠).
     """
     pr = policy_runtime_module or policy_runtime
     entry = policy_catalog.lookup(item.product_code, zone=zone)
@@ -171,10 +177,10 @@ def run_item(
                 if release_debounce.update(rverdict.released):
                     release_verdict = rverdict
                     step_released = step
-                    settle_deadline = step + POST_RELEASE_SETTLE_STEPS
+                    settle_deadline = step + post_release_settle_steps
                     print(
                         f"[{order_id}] item={item.product_code} released at step {step} (debounced) "
-                        f"— settling {POST_RELEASE_SETTLE_STEPS} more steps for return-to-home before ending"
+                        f"— settling {post_release_settle_steps} more steps for return-to-home before ending"
                     )
             elif step >= settle_deadline:
                 print(f"[{order_id}] item={item.product_code} settle complete at step {step} — episode complete")
@@ -214,6 +220,7 @@ def run_order(
     worker_id: str = "trihouse-omx",
     policy_runtime_module=None,
     pinky_arrival_timeout_s: float = PINKY_ARRIVAL_TIMEOUT_S,
+    post_release_settle_steps: int = POST_RELEASE_SETTLE_STEPS,
 ) -> None:
     """주문 하나(핑키 대기 → 품목별 pick+place → 완료 보고)를 끝까지 처리한다.
 
@@ -267,6 +274,7 @@ def run_order(
             bench_=bench_,
             debug_gripper=debug_gripper,
             policy_runtime_module=policy_runtime_module,
+            post_release_settle_steps=post_release_settle_steps,
         )
         item_results.append((item, verdict))
         print(
@@ -384,6 +392,7 @@ def run(args: argparse.Namespace) -> None:
                 is_first_order=order_index == 0,
                 policy_runtime_module=policy_runtime_module,
                 pinky_arrival_timeout_s=args.pinky_arrival_timeout_s,
+                post_release_settle_steps=args.post_release_settle_steps,
             )
 
     print("\n" + bench_.summary())
@@ -461,6 +470,14 @@ def _parser() -> argparse.ArgumentParser:
         default=PINKY_ARRIVAL_TIMEOUT_S,
         help=f"핑키 도착 대기 최대 시간(초). 기본 {PINKY_ARRIVAL_TIMEOUT_S}. "
              "--pinky-delay-s로 이 값보다 긴 이동 시간을 재현하려면 같이 늘려야 함.",
+    )
+    parser.add_argument(
+        "--post-release-settle-steps",
+        type=int,
+        default=POST_RELEASE_SETTLE_STEPS,
+        help=f"release 확인 후 홈 위치로 복귀할 때까지 기다리는 스텝 수. 기본 {POST_RELEASE_SETTLE_STEPS}"
+             "(15fps 기준 약 8초). 냉장/상온처럼 회전 각도가 더 커서 기본값 안에 "
+             "다 못 돌아오는 존은 이 값을 키워서 씀(실측: 상온은 기본값으로 충분, 냉장은 부족).",
     )
     parser.add_argument(
         "--remote-infer-url",

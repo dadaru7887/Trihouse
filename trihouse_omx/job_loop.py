@@ -215,6 +215,7 @@ def _handle_dispatch(
     fps: float,
     debug_gripper: bool,
     policy_runtime_module=None,
+    post_release_settle_steps: int = deliver.POST_RELEASE_SETTLE_STEPS,
 ) -> None:
     if dispatch.executor_type != "arm" or dispatch.action_type != ARM_ACTION_TYPE:
         print(
@@ -288,6 +289,7 @@ def _handle_dispatch(
         gateway=gateway,
         worker_id=WORKER_ID,
         policy_runtime_module=policy_runtime_module,
+        post_release_settle_steps=post_release_settle_steps,
     )
 
 
@@ -302,6 +304,7 @@ def _run_cycle(
     fps: float,
     debug_gripper: bool,
     policy_runtime_module=None,
+    post_release_settle_steps: int = deliver.POST_RELEASE_SETTLE_STEPS,
 ) -> bool:
     """한 사이클: dispatch 최대 하나 클레임 → 처리. 클레임된 게 있었으면 True."""
     dispatches = gateway.claim_executor_dispatches(
@@ -320,6 +323,7 @@ def _run_cycle(
         fps=fps,
         debug_gripper=debug_gripper,
         policy_runtime_module=policy_runtime_module,
+        post_release_settle_steps=post_release_settle_steps,
     )
     return True
 
@@ -338,6 +342,7 @@ def run_poll_loop(
     once: bool,
     shutdown: ShutdownSignal,
     policy_runtime_module=None,
+    post_release_settle_steps: int = deliver.POST_RELEASE_SETTLE_STEPS,
 ) -> None:
     """executor_worker_node.py의 run_poll_loop와 같은 철학.
 
@@ -358,6 +363,7 @@ def run_poll_loop(
                 fps=fps,
                 debug_gripper=debug_gripper,
                 policy_runtime_module=policy_runtime_module,
+                post_release_settle_steps=post_release_settle_steps,
             )
         except Exception as error:  # noqa: BLE001
             print(f"[job_loop] cycle failed: {error}")
@@ -427,6 +433,7 @@ def run(args: argparse.Namespace) -> None:
             once=args.once,
             shutdown=shutdown,
             policy_runtime_module=policy_runtime_module,
+            post_release_settle_steps=args.post_release_settle_steps,
         )
 
     print("\n" + bench_.summary())
@@ -483,6 +490,14 @@ def _parser() -> argparse.ArgumentParser:
         type=float,
         default=5.0,
         help="--remote-infer-url 요청 타임아웃(초). 넘기면 재시도 없이 즉시 실패(fail-closed).",
+    )
+    parser.add_argument(
+        "--post-release-settle-steps",
+        type=int,
+        default=deliver.POST_RELEASE_SETTLE_STEPS,
+        help=f"release 확인 후 홈 위치로 복귀할 때까지 기다리는 스텝 수. 기본 {deliver.POST_RELEASE_SETTLE_STEPS}"
+             "(15fps 기준 약 8초). 냉장/상온처럼 회전 각도가 더 커서 기본값 안에 "
+             "다 못 돌아오는 존을 담당하는 워커는 이 값을 키워서 실행(예: --zone chilled면 180).",
     )
     return parser
 

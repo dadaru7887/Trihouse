@@ -104,6 +104,8 @@ def _build_children(args: argparse.Namespace) -> list[_Child]:
         job_loop_cmd += ["--front-cam", args.front_cam]
     if args.remote_infer_url:
         job_loop_cmd += ["--remote-infer-url", args.remote_infer_url, "--remote-infer-timeout-s", str(args.remote_infer_timeout_s)]
+    if args.post_release_settle_steps is not None:
+        job_loop_cmd += ["--post-release-settle-steps", str(args.post_release_settle_steps)]
 
     stream_cmd = [
         args.system_python, str(_HERE / "stream_wrist_camera.py"),
@@ -172,6 +174,14 @@ def _parser() -> argparse.ArgumentParser:
              "안 주면(기본값) job_loop.py가 지금처럼 로컬에서 추론.",
     )
     parser.add_argument("--remote-infer-timeout-s", type=float, default=5.0, help="job_loop.py --remote-infer-timeout-s에 그대로 넘김")
+    parser.add_argument(
+        "--post-release-settle-steps",
+        type=int,
+        default=None,
+        help="주어지면 job_loop.py --post-release-settle-steps로 그대로 전달. "
+             "안 주면(기본값) job_loop.py의 기본값(120)을 씀 — 냉장처럼 회전 각도가 커서 "
+             "더 필요한 존은 여기서 180 등으로 지정.",
+    )
     return parser
 
 
