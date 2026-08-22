@@ -48,8 +48,12 @@ GRASP_CHECK_START_STEP = 30
 # deliver.py와 동일한 이유 — release 확인 즉시 멈추면 팔이 뻗어 있는 채로 다음
 # 아이템/주문으로 넘어가거나 disconnect(토크 해제)로 이어질 수 있는데, 토크가
 # 꺼지면 지지되지 않은 자세에서 팔이 중력으로 그대로 무너진다 — 실제로 겪은 사고.
-# deliver.py에서 100스텝으로 실측했을 때 복귀 막판에 살짝 못 미쳐 120으로 늘림.
-POST_RELEASE_SETTLE_STEPS = 120
+# 냉동만두 입고(act_trihouse-dumpling-inbound) 실측(2026-08-23, --debug-gripper):
+# release 후 약 150~160스텝에서 전류/위치 완전히 안정 — 여유를 두어 200으로.
+# deliver.py의 출고용 120보다 큰 이유: 입고(바구니→선반) 동작이 출고보다 더 크게
+# 움직여서 복귀 시간도 더 걸림(deliver.py --post-release-settle-steps로 냉장이
+# 120에서 180으로 늘어난 것과 같은 패턴).
+POST_RELEASE_SETTLE_STEPS = 200
 
 
 def _wait_for_pinky(pinky: mock_inputs.MockPinkyArrival, *, timeout_s: float) -> bool:
@@ -101,6 +105,7 @@ def run_item(
     policy_repo_id_override: str | None,
     debug_gripper: bool = False,
     policy_runtime_module=None,
+    post_release_settle_steps: int = POST_RELEASE_SETTLE_STEPS,
 ) -> ItemVerdict:
     """정책 하나를 실행해 물체 하나를 바구니에서 꺼내 선반에 놓는다.
 
@@ -159,10 +164,10 @@ def run_item(
                 if release_debounce.update(rverdict.released):
                     release_verdict = rverdict
                     step_released = step
-                    settle_deadline = step + POST_RELEASE_SETTLE_STEPS
+                    settle_deadline = step + post_release_settle_steps
                     print(
                         f"[{order_id}] item={item.product_code} released at step {step} (debounced) "
-                        f"— settling {POST_RELEASE_SETTLE_STEPS} more steps for return-to-home before ending"
+                        f"— settling {post_release_settle_steps} more steps for return-to-home before ending"
                     )
             elif step >= settle_deadline:
                 print(f"[{order_id}] item={item.product_code} settle complete at step {step} — episode complete")
@@ -202,6 +207,7 @@ def run_order(
     gateway=None,
     worker_id: str = "trihouse-omx",
     policy_runtime_module=None,
+    post_release_settle_steps: int = POST_RELEASE_SETTLE_STEPS,
 ) -> None:
     """주문 하나(핑키 대기 → 품목별 pick(바구니)+place(선반) → 완료 보고)를 끝까지 처리한다.
 
@@ -249,6 +255,7 @@ def run_order(
                 policy_repo_id_override=policy_repo_id_override,
                 debug_gripper=debug_gripper,
                 policy_runtime_module=policy_runtime_module,
+                post_release_settle_steps=post_release_settle_steps,
             )
             item_results.append((item, verdict))
             print(
@@ -380,6 +387,7 @@ def run(args: argparse.Namespace) -> None:
                 debug_gripper=args.debug_gripper,
                 is_first_order=order_index == 0,
                 policy_runtime_module=policy_runtime_module,
+                post_release_settle_steps=args.post_release_settle_steps,
             )
 
     print("\n" + bench_.summary())
@@ -406,11 +414,12 @@ def _parser() -> argparse.ArgumentParser:
              "set_cameras.py로 저장해둔 값을 씀.",
     )
     parser.add_argument(
-        "--episode-steps", type=int, default=900,
+        "--episode-steps", type=int, default=1000,
         help="정책 최대 실행 스텝 수(안전 상한). pick(바구니)+place(선반) 전체 사이클을 "
              "담을 만큼 충분히 커야 한다 — release가 확인되면 이 값에 도달하기 전에 "
-             "자동으로 끝난다(조기 종료)이므로 넉넉하게 잡아도 손해가 없다. 기본값 900 = "
-             "fps 15 기준 약 60초 (deliver.py 실측 근거로 맞춤).",
+             "자동으로 끝난다(조기 종료)이므로 넉넉하게 잡아도 손해가 없다. 기본값 1000 "
+             "(fps 15 기준 약 67초) — 냉동만두 입고 실측(파지 433+release까지 261+settle 200"
+             "=894)에서 900 기준 여유가 6스텝뿐이라 늘림.",
     )
     parser.add_argument("--fps", type=float, default=15.0)
     parser.add_argument(
@@ -462,6 +471,13 @@ def _parser() -> argparse.ArgumentParser:
         type=float,
         default=5.0,
         help="--remote-infer-url 요청 타임아웃(초). 넘기면 재시도 없이 즉시 실패(fail-closed).",
+    )
+    parser.add_argument(
+        "--post-release-settle-steps",
+        type=int,
+        default=POST_RELEASE_SETTLE_STEPS,
+        help=f"release 확인 후 홈 위치로 복귀할 때까지 기다리는 스텝 수. 기본 {POST_RELEASE_SETTLE_STEPS}"
+             "(15fps 기준 약 8초). --debug-gripper로 실측하며 조정.",
     )
     return parser
 

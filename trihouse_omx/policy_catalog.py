@@ -76,13 +76,22 @@ def known_product_codes(*, zone: str | None = None) -> tuple[str, ...]:
     return tuple(code for code, entry in _CATALOG.items() if entry.zone == zone)
 
 
-# 입고(store, 바구니→선반) 전용 카탈로그. 컨텍스트 문서 9번 항목대로 이건
-# 아직 하나도 녹화·학습되지 않았다 — 출고용 체크포인트(_CATALOG)를 방향만
+# 입고(store, 바구니→선반) 전용 카탈로그. 냉동만두 입고(2026-08-23, 사용자
+# 확인)를 시작으로 하나씩 채워진다 — 출고용 체크포인트(_CATALOG)를 방향만
 # 바꿔서 쓰면 안 된다(집는 것과 내려놓는 것은 다른 모션이라 학습이 따로 필요).
-# 그래서 의도적으로 비워 둔다. store.py는 이 카탈로그가 비어 있으면 항상
-# UnknownStorePolicyError로 fail-closed하고, --policy-repo-id-override로만
-# (배관 테스트 목적 한정, 의미상 올바른 동작 아님) 우회 가능하다.
-_STORE_CATALOG: dict[str, PolicyEntry] = {}
+# 아직 없는 product_code는 store.py가 UnknownStorePolicyError로 fail-closed
+# 하고, --policy-repo-id-override로만(배관 테스트 목적 한정, 의미상 올바른
+# 동작 아님) 우회 가능하다.
+_STORE_CATALOG: dict[str, PolicyEntry] = {
+    entry.product_code: entry
+    for entry in (
+        PolicyEntry(
+            "dumpling", "냉동만두",
+            "2usang/act_trihouse-dumpling-inbound", "2usang/trihouse-dumpling-inbound",
+            "frozen",
+        ),
+    )
+}
 
 
 class UnknownStorePolicyError(KeyError):
