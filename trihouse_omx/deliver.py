@@ -213,6 +213,7 @@ def run_order(
     gateway=None,
     worker_id: str = "trihouse-omx",
     policy_runtime_module=None,
+    pinky_arrival_timeout_s: float = PINKY_ARRIVAL_TIMEOUT_S,
 ) -> None:
     """주문 하나(핑키 대기 → 품목별 pick+place → 완료 보고)를 끝까지 처리한다.
 
@@ -223,11 +224,14 @@ def run_order(
     gateway/worker_id는 outcome_report.report_outcome에 그대로 넘긴다 — CLI
     경로(job_loop.py를 거치지 않는 run(args))는 안 주므로 기존과 동일하게 로컬
     JSONL만 남긴다. policy_runtime_module은 run_item()에 그대로 전달한다
-    (로컬/원격 추론 선택 — run_item()의 docstring 참고).
+    (로컬/원격 추론 선택 — run_item()의 docstring 참고). pinky_arrival_timeout_s는
+    안 주면(기본값) 기존과 동일한 10초 — 여러 로봇팔이 존을 나눠 맡는 실제
+    시나리오(예: 냉동 팔이 먼저 집고, 핑키가 냉장 구역까지 이동하는 데 10초
+    이상 걸린 뒤 도착)를 --pinky-delay-s로 재현할 때만 CLI에서 늘려 쓴다.
     """
     print(f"\n=== order {order.order_id} (job_step_id={order.job_step_id}) ===")
 
-    arrived = _wait_for_pinky(order.pinky, timeout_s=PINKY_ARRIVAL_TIMEOUT_S)
+    arrived = _wait_for_pinky(order.pinky, timeout_s=pinky_arrival_timeout_s)
     if not arrived:
         outcome_report.report_outcome(
             outcome_report.StepOutcome(
@@ -379,6 +383,7 @@ def run(args: argparse.Namespace) -> None:
                 debug_gripper=args.debug_gripper,
                 is_first_order=order_index == 0,
                 policy_runtime_module=policy_runtime_module,
+                pinky_arrival_timeout_s=args.pinky_arrival_timeout_s,
             )
 
     print("\n" + bench_.summary())
@@ -449,6 +454,13 @@ def _parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="--order로 만든 모든 주문의 핑키 도착을 이만큼 지연 (0=즉시 도착, 안전 게이트 테스트용)",
+    )
+    parser.add_argument(
+        "--pinky-arrival-timeout-s",
+        type=float,
+        default=PINKY_ARRIVAL_TIMEOUT_S,
+        help=f"핑키 도착 대기 최대 시간(초). 기본 {PINKY_ARRIVAL_TIMEOUT_S}. "
+             "--pinky-delay-s로 이 값보다 긴 이동 시간을 재현하려면 같이 늘려야 함.",
     )
     parser.add_argument(
         "--remote-infer-url",
