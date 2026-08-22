@@ -19,7 +19,7 @@ from rclpy.action import ActionClient
 from rclpy.duration import Duration
 from rclpy.node import Node
 from std_msgs.msg import Bool
-from trihouse_interfaces.action import ExecuteTransport
+from trihouse_interfaces.action import ExecuteRecovery, ExecuteTransport
 from trihouse_interfaces.msg import (
     ConnectionState,
     KeepOutZone,
@@ -35,6 +35,7 @@ from .ndjson_client import NdjsonClient
 from .event_outbox import EventOutbox
 from .protocol import (
     ProtocolError,
+    RecoveryCommand,
     TransportCommand,
     classify_gateway_response,
     parse_clear_keep_out_zone,
@@ -42,6 +43,7 @@ from .protocol import (
     parse_keep_out_zone,
     parse_marker_observation,
     parse_person_detection,
+    parse_recovery_command,
     parse_transport_command,
 )
 
@@ -306,6 +308,7 @@ class GatewayNode(Node):
 
         # 검증된 운송 명령은 fleet_node가 제공하는 ROS action으로 전달한다.
         self.transport = ActionClient(self, ExecuteTransport, 'trihouse/transport/execute')
+        self.recovery = ActionClient(self, ExecuteRecovery, 'trihouse/recovery/execute')
 
         # 비상 요청과 접근 금지 구역은 해당 로컬 안전 노드에 ROS 메시지로 넘긴다.
         self.emergency_pub = self.create_publisher(Bool, 'trihouse/safety/emergency_request', 10)
@@ -536,6 +539,9 @@ class GatewayNode(Node):
                 continue
             if payload.get('type') == 'clear_keep_out_zone':
                 self._clear_keep_out_zone(payload)
+                continue
+            if payload.get('type') == 'recovery_command':
+                self._handle_recovery_command(payload)
                 continue
 
             # 나머지 입력은 운송 명령 계약에 맞는지 엄격히 검증한다.
@@ -871,6 +877,151 @@ class GatewayNode(Node):
         future.add_done_callback(
             lambda result: self._goal_response(command.message_id, result)
         )
+
+    def _handle_recovery_command(self, payload: dict) -> None:
+        try:
+            command = parse_recovery_command(payload)
+        except ProtocolError as error:
+            self.link.send({
+                'type': 'recovery_command_ack', 'schema_version': 3,
+                'robot_id': self.robot_id, 'session_id': self.session_id,
+                'command_id': str(payload.get('command_id', uuid4())),
+                'proposal_sha256': str(payload.get('proposal_sha256', '0' * 64)),
+                'accepted': False, 'reason_code': str(error),
+            })
+            return
+        if command.device_id != self.robot_id:
+            self.link.send({
+                'type': 'recovery_command_ack', 'schema_version': 3,
+                'robot_id': self.robot_id, 'session_id': self.session_id,
+                'command_id': command.command_id,
+                'proposal_sha256': command.proposal_sha256,
+                'accepted': False, 'reason_code': 'DEVICE_ID_MISMATCH',
+            })
+            return
+        previous = self.event_outbox.recovery_command(command.command_id)
+        if previous is not None:
+            if previous['proposal_sha256'] != command.proposal_sha256:
+                self.link.send({
+                    'type': 'recovery_command_ack', 'schema_version': 3,
+                    'robot_id': self.robot_id, 'session_id': self.session_id,
+                    'command_id': command.command_id,
+                    'proposal_sha256': command.proposal_sha256,
+                    'accepted': False, 'reason_code': 'COMMAND_ID_HASH_CONFLICT',
+                })
+                return
+            completed = previous['status'] == 'completed'
+            rejected = previous['status'] == 'rejected'
+            same_runtime = previous['runtime_id'] == self.runtime_id
+            self.link.send({
+                'type': 'recovery_command_ack', 'schema_version': 3,
+                'robot_id': self.robot_id, 'session_id': self.session_id,
+                'command_id': command.command_id,
+                'proposal_sha256': command.proposal_sha256,
+                'accepted': completed or (same_runtime and not rejected),
+                'reason_code': (
+                    'DUPLICATE_COMPLETED' if completed
+                    else 'ACTION_REJECTED' if rejected
+                    else 'ACTION_IN_PROGRESS' if same_runtime
+                    else 'EXECUTION_STATE_UNKNOWN_AFTER_RESTART'
+                ),
+            })
+            if completed and previous['result_payload'] is not None:
+                self.link.send(previous['result_payload'])
+            return
+        self._send_recovery(command)
+
+    def _send_recovery(self, command: RecoveryCommand) -> None:
+        if not self.recovery.wait_for_server(timeout_sec=0.0):
+            self.link.send({
+                'type': 'recovery_command_ack', 'schema_version': 3,
+                'robot_id': self.robot_id, 'session_id': self.session_id,
+                'command_id': command.command_id,
+                'proposal_sha256': command.proposal_sha256,
+                'accepted': False, 'reason_code': 'ACTION_UNAVAILABLE',
+            })
+            return
+        # EN: Persist before ROS motion so a process restart cannot repeat movement.
+        # KO: ROS 동작 전에 기록해 프로세스 재시작 후 같은 이동을 반복하지 않게 한다.
+        self.event_outbox.begin_recovery(
+            command.command_id, command.proposal_sha256, self.runtime_id
+        )
+        goal = ExecuteRecovery.Goal()
+        for name in (
+            'command_id', 'proposal_id', 'proposal_sha256', 'approval_id',
+            'approval_worker_id', 'device_id', 'map_name', 'map_revision',
+            'recovery_episode_uuid', 'step_no', 'selected_skill_id',
+            'selected_skill_name',
+        ):
+            setattr(goal, name, getattr(command, name))
+        goal.canonical_coord.x, goal.canonical_coord.y, goal.canonical_coord.z = command.canonical_coord
+        goal.has_map_target = command.map_target is not None
+        if command.map_target is not None:
+            x_m, y_m, yaw_rad = command.map_target
+            goal.map_target.header.frame_id = 'map'
+            goal.map_target.pose.position.x = x_m
+            goal.map_target.pose.position.y = y_m
+            goal.map_target.pose.orientation.z = math.sin(yaw_rad / 2.0)
+            goal.map_target.pose.orientation.w = math.cos(yaw_rad / 2.0)
+        future = self.recovery.send_goal_async(goal)
+        future.add_done_callback(
+            lambda result: self._recovery_goal_response(command, result)
+        )
+
+    def _recovery_goal_response(self, command: RecoveryCommand, future: object) -> None:
+        handle = future.result()
+        self.link.send({
+            'type': 'recovery_command_ack', 'schema_version': 3,
+            'robot_id': self.robot_id, 'session_id': self.session_id,
+            'command_id': command.command_id,
+            'proposal_sha256': command.proposal_sha256,
+            'accepted': bool(handle.accepted),
+            'reason_code': 'ACTION_ACCEPTED' if handle.accepted else 'ACTION_REJECTED',
+        })
+        if not handle.accepted:
+            self.event_outbox.reject_recovery(command.command_id)
+        if handle.accepted:
+            result_future = handle.get_result_async()
+            result_future.add_done_callback(
+                lambda completed: self._recovery_execution_result(command, completed)
+            )
+
+    @staticmethod
+    def _recovery_pose_payload(pose_stamped: object) -> dict[str, float]:
+        pose = pose_stamped.pose
+        orientation = pose.orientation
+        yaw = math.atan2(
+            2.0 * (orientation.w * orientation.z + orientation.x * orientation.y),
+            1.0 - 2.0 * (orientation.y * orientation.y + orientation.z * orientation.z),
+        )
+        return {'x': pose.position.x, 'y': pose.position.y, 'yaw': yaw}
+
+    def _recovery_execution_result(self, command: RecoveryCommand, future: object) -> None:
+        """Return the actual ExecuteRecovery outcome after the earlier acceptance ACK."""
+        # TRIHOUSE EXTENSION — EN: The original executor returned only to a local buffer.
+        # TRIHOUSE 확장 — KO: 원본 실행기는 결과를 로컬 버퍼에만 반환했다.
+        action_result = future.result().result
+        status = action_result.status
+        if status not in {'succeeded', 'failed', 'cancelled'}:
+            status = 'succeeded' if action_result.success else 'failed'
+        payload = {
+            'type': 'recovery_execution_result', 'schema_version': 3,
+            'robot_id': self.robot_id, 'session_id': self.session_id,
+            'command_id': command.command_id,
+            'proposal_sha256': command.proposal_sha256,
+            'success': bool(action_result.success),
+            'status': status,
+            'detail': action_result.detail,
+            'pre_pose': self._recovery_pose_payload(action_result.pre_pose),
+            'post_pose': self._recovery_pose_payload(action_result.post_pose),
+            'clearance_before_m': float(action_result.clearance_before_m),
+            'clearance_after_m': float(action_result.clearance_after_m),
+            'elapsed_seconds': float(action_result.elapsed_seconds),
+            'safety_intervened': bool(action_result.safety_intervened),
+            'terminal': bool(action_result.terminal),
+        }
+        self.event_outbox.complete_recovery(command.command_id, payload)
+        self.link.send(payload)
 
     def _goal_response(self, message_id: str, future: object) -> None:
         """action server의 goal 수락 여부를 Control Tower ACK로 전달한다."""

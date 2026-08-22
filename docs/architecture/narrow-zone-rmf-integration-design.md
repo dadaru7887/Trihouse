@@ -209,5 +209,5 @@ desired = self.dock if self.dock is not None else self.nav
 관련 문서
 - 마커 도킹: [marker-docking-design.md](marker-docking-design.md)
 - 협로 규칙 주행: [narrow-zone-pilot-design.md](narrow-zone-pilot-design.md)
-- 공백·결정: [2026-08-20-hardware-readiness-gaps.md](../claude/2026-08-20-hardware-readiness-gaps.md)
+- 현재 통합 설계: [narrow-zone module integration](../superpowers/specs/2026-08-22-narrow-zone-module-integration-design.md)
 - 협로 실측: [p0-narrow-zone-measurement.md](../runbooks/p0-narrow-zone-measurement.md)

@@ -17,13 +17,58 @@ SKILL_NAMES = (
     "WAIT_REOBSERVE",
     "REJOIN",
 )
-SKILL_TO_ACTION_TYPE = {
+SKILL_TO_ACTION_FAMILY = {
     0: "retreat",
     1: "detour",
     2: "detour",
     3: "wait",
     4: "rejoin",
 }
+# Backward-compatible import for older completion senders. New code must use
+# the family name because left/right remain distinct model skills.
+SKILL_TO_ACTION_TYPE = SKILL_TO_ACTION_FAMILY
+
+
+@dataclass(frozen=True)
+class RecoveryStateV1:
+    """Named external contract for the frozen nine-value model state."""
+
+    robot_x_m: float
+    robot_y_m: float
+    robot_yaw_rad: float
+    goal_x_m: float
+    goal_y_m: float
+    risk_bbox_center_x_norm: float
+    risk_bbox_center_y_norm: float
+    risk_confidence: float
+    vlm_uncertainty: float
+    state_schema_id: str = field(default="trihouse.recovery-state.v1", init=False)
+
+    def __post_init__(self) -> None:
+        values = self.to_vector()
+        if not all(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            for value in values
+        ):
+            raise ValueError("RecoveryStateV1 values must be finite numbers")
+        normalized = values[5:]
+        if any(value < 0.0 or value > 1.0 for value in normalized):
+            raise ValueError("normalized RecoveryStateV1 values must be within 0..1")
+
+    def to_vector(self) -> tuple[float, ...]:
+        return (
+            self.robot_x_m,
+            self.robot_y_m,
+            self.robot_yaw_rad,
+            self.goal_x_m,
+            self.goal_y_m,
+            self.risk_bbox_center_x_norm,
+            self.risk_bbox_center_y_norm,
+            self.risk_confidence,
+            self.vlm_uncertainty,
+        )
 
 
 @dataclass(frozen=True)

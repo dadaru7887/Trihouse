@@ -133,7 +133,7 @@ Low 항목은 현재 목표에서 제외하므로 구현 시작 파일을 만들
 | SR_49 | `trihouse_pinky/trihouse_pinky_io/trihouse_pinky_io/destination_display.py` | `FMS destination code → LCD label`; 위험 LED는 `indicator.py`; `test_pinky_sr_policies.py` |
 | SR_50 | `control_tower/task_manager/outbound_result.py` | `operator item result → order outcome → inventory finalize`; `test_outbound_result.py` |
 | SR_51 | `control_tower/fleet_manager/inventory_workflow.py` | `delivered lots only → finalize_outbound once → return assignment`; `test_outbound_result.py` |
-| SR_52 | `docs/validation/sr52_research_plan.md` | 조사 계획: tracker/pose → temporal verifier → operator approval. **코드 작성 보류** |
+| SR_52 | `docs/superpowers/specs/2026-08-22-vision-vlm-rl-recovery-integration-design.md` | 현재 설계: tracker/pose → temporal verifier → operator approval. 남은 간극은 설계 3.2절에서 관리 |
 | SR_53 | `control_tower/gateway/operations_feed.py` | `incident open → priority event → UI alert`; `test_operations_feed.py` |
 | SR_54 | `control_tower/task_manager/emergency_workflow.py` | `incident polygon → deny target → Pinky emergency/keep-out`; `test_emergency_workflow.py` |
 | SR_55 | `control_tower/task_manager/lifecycle.py` | `emergency hold → cargo/state 확인 → reassign or admin intervention`; `test_task_lifecycle.py` |

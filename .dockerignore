@@ -7,6 +7,31 @@
 !control_tower/task_manager/outbound_planner.py
 !control_tower/task_manager/outbound_sequence.py
 
+# Gateway recovery API가 공유하는 action/skill 계약만 이미지 문맥에 포함한다.
+!model/
+!model/__init__.py
+!model/vlm_rl/
+!model/vlm_rl/__init__.py
+!model/vlm_rl/shared/
+!model/vlm_rl/shared/**
+!model/vlm_rl/inference/
+!model/vlm_rl/inference/**
+!model/vlm_rl/recovery_memory/
+!model/vlm_rl/recovery_memory/**
+!model/vlm_rl/safety/
+!model/vlm_rl/safety/**
+!model/worker/
+!model/worker/**
+!model/perception/
+!model/perception/__init__.py
+!model/perception/segmentation/
+!model/perception/segmentation/__init__.py
+!model/perception/segmentation/runtime/
+!model/perception/segmentation/runtime/**
+!docker/
+!docker/ai/
+!docker/ai/requirements.inference.txt
+
 # Gateway 의 런타임 프로파일이 해시하는 두 개의 고정 소스
 # (fms_gateway/app/runtime_profiles.py). 이게 없으면
 # `/api/v1/runtime-profiles/pinky-pro-simulation` 이 500 을 내고, 지도 초안

@@ -84,16 +84,25 @@ Pinky camera
 → JSONL offline training export
 ```
 
-### 3.2 현재 간극
+### 3.2 구현 상태와 남은 물리 간극
 
-- 5080 runtime은 recovery completion 재전송만 하며 실제 VLM 모델을 로드하지 않는다.
-- segmentation 결과와 navigation undecidable 상태를 결합하는 trigger가 없다.
-- Gateway에 proposal·승인·승인 명령 outbox 계약이 없다.
-- Pinky TCP protocol과 ROS interface에 recovery 명령이 없다.
-- 기존 팀원 executor는 `dy`를 실행에 사용하지 않고 REJOIN의 상대/절대 의미가 Safety와 다르다.
-- 기존 safety gate는 학습 모드 상수로 꺼져 있고 현재 namespaced Pinky launch에 연결되지 않는다.
-- AI Docker build context에서 `model/`이 `.dockerignore`에 의해 제외된다.
-- 개발 TestClient는 Starlette 1.6의 deprecated `httpx` fallback을 사용한다.
+구현된 소프트웨어 경로는 RTSP segmentation, Nav2 정체 trigger, 실제 Qwen loader,
+원본 TGRPO `K=3` × SAC `M=2` 후보 생성, proposal/승인/outbox, device TCP,
+`ExecuteRecovery`, 결과 회신, 실제 reward와 trainable transition 저장까지다. Pinky의
+SQLite command ledger와 Gateway open-recovery 조회로 ACK 유실과 5080/Pinky 재시작 때도
+같은 이동을 반복하거나 완료 대상을 잃지 않게 했다.
+
+남은 간극은 코드 누락과 실물 미검증을 구분한다.
+
+- 원본 6C-Lite의 geometric costmap 검사와 Nav2 planner 검사를 5080 후보 선정 전에
+  실 ROS 데이터로 호출하는 adapter는 아직 연결되지 않았다. 현재는 0.25m/±π/3
+  envelope, 좌우 방향 계약, 운영자 승인, Pinky sensor health, Nav2 실행 검사와
+  Safety Supervisor의 연속 veto가 방어선이다.
+- 5080 실제 GPU에서 7B 4-bit 모델 load, latency와 VRAM은 아직 측정하지 않았다.
+- Pinky의 WAIT/BACKUP/detour/REJOIN 및 Safety veto는 자동 테스트와 ROS build만
+  통과했으며, E-stop 담당자가 있는 실물 측정은 남아 있다.
+- recovery 승인 만료 시간은 아직 wire 계약에 없다. 승인 직후 전송을 운영 절차로
+  제한하고 있으며, 장시간 대기 proposal의 자동 `expired` 전이는 후속 구현 대상이다.
 
 ## 4. 5080 inference runtime
 
@@ -104,7 +113,8 @@ Pinky camera
 - `RecoveryTrigger`: detection만으로 발동하지 않는다. Nav2 반복 실패 또는 진행 정체와 person/obstacle이 함께 있을 때만 발동한다.
 - `VlmInterpreter`: 원본 Qwen2.5-VL prompt/JSON 계약을 사용하고 JSON·bbox·confidence·uncertainty를 검증한다.
 - `StateAdapter`: 가장 위험한 객체 하나를 State V1에 넣고 전체 detection은 evidence로 보존한다.
-- `PolicyRuntime`: 승인된 checksum의 기존 HighLevel/LowLevel checkpoint만 로드한다.
+- `PolicyRuntime`: 승인된 checksum의 기존 HighLevel/LowLevel checkpoint만 로드하고
+  원본과 같이 `K=3 × M=2` 후보를 만든다. 전체 후보와 탈락 사유는 proposal에 보존한다.
 - `ProposalClient`: 후보와 evidence lineage를 Gateway로 보내며 어떤 ROS 또는 velocity 명령도 발행하지 않는다.
 - `CompletionSender`: 기존 durable queue와 application ACK를 유지한다.
 
@@ -129,7 +139,10 @@ Pinky camera
 
 Nav2의 `backup`, `spin`, `drive_on_heading`, `wait`, `navigate_to_pose` action을 사용한다. Nav2 출력은 기존 remap을 통해 `cmd_vel_nav`로 들어가고 Safety Supervisor만 실제 `cmd_vel`을 발행한다.
 
-ROS namespace는 선택적이다. launch argument 기본값은 빈 문자열이며, 빈 값이면 root 상대 이름(`navigate_to_pose`, `odom`, `scan`)을 사용하고 `pinky_01`이면 해당 namespace 안에서 같은 상대 이름을 사용한다. 코드에 `/odom`·`/scan` 같은 절대 이름을 넣지 않는다.
+ROS namespace는 선택적이다. launch argument를 생략하면 `pinky_01`이 적용되고,
+`namespace:=`로 빈 값을 명시하면 root 상대 이름(`navigate_to_pose`, `odom`, `scan`)을
+사용한다. `pinky_01`을 주면 해당 namespace 안에서 같은 상대 이름을 사용한다.
+코드에 `/odom`·`/scan` 같은 절대 이름을 넣지 않는다.
 
 ## 7. Safety gate
 

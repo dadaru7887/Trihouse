@@ -361,5 +361,5 @@ grep -A2 BOTTLENECK .trihouse/p0/nav_graph.yaml | grep -E 'mutex|name'
 
 관련 문서
 - 실행 절차: [p0-hardware-quick-run.md](p0-hardware-quick-run.md)
-- 공백·결정: [2026-08-20-hardware-readiness-gaps.md](../claude/2026-08-20-hardware-readiness-gaps.md)
+- 설계 결정: [new-map-2 waypoint refresh design](../superpowers/specs/2026-08-22-new-map-2-waypoint-refresh-design.md)
 - 협로 실측: [p0-narrow-zone-measurement.md](p0-narrow-zone-measurement.md)

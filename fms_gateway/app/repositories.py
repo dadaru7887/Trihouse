@@ -41,6 +41,8 @@ class FmsRepository(Protocol):
 
     def list_devices(self) -> list[dict[str, object]]: ...
 
+    def get_recovery_navigation_context(self, device_id: str) -> dict[str, Any] | None: ...
+
     def list_inventory(self) -> list[dict[str, object]]: ...
 
     def list_jobs(self) -> list[dict[str, object]]: ...
@@ -1332,6 +1334,39 @@ class MySqlFmsRepository:
             navigation = details.get("navigation_state")
             row["navigation_state"] = navigation if isinstance(navigation, int) else None
         return rows
+
+    def get_recovery_navigation_context(self, device_id: str) -> dict[str, Any] | None:
+        rows = self._all(
+            """
+            SELECT ds.device_id, ds.pose_x, ds.pose_y, ds.pose_yaw, ds.state,
+                   ds.observed_at, ds.details, l.map_name,
+                   l.pose_x AS goal_x, l.pose_y AS goal_y
+            FROM device_states ds
+            LEFT JOIN job_steps js ON js.job_step_id = ds.current_job_step_id
+            LEFT JOIN locations l ON l.location_id = js.target_location_id
+            WHERE ds.device_id = %s
+            """,
+            (device_id,),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        details = _json(row["details"]) or {}
+        if any(row[name] is None for name in ("pose_x", "pose_y", "pose_yaw", "goal_x", "goal_y")):
+            return None
+        nav_code = details.get("navigation_state")
+        navigation_state = {
+            1: "navigating", 2: "succeeded", 3: "cancelled", 4: "failed"
+        }.get(nav_code, "blocked" if row["state"] == "blocked" else "idle")
+        return {
+            "device_id": device_id,
+            "map_name": row["map_name"],
+            "map_revision": details.get("map_revision", ""),
+            "robot_pose": [row["pose_x"], row["pose_y"], row["pose_yaw"]],
+            "goal_pose": [row["goal_x"], row["goal_y"]],
+            "navigation_state": navigation_state,
+            "observed_at": row["observed_at"],
+        }
 
     def list_registered_robot_ids(self) -> set[str]:
         return {
@@ -7048,6 +7083,38 @@ class InMemoryFmsRepository:
     def get_device_state(self, robot_id: str) -> dict[str, Any] | None:
         state = self._device_states.get(robot_id)
         return deepcopy(state) if state else None
+
+    def get_recovery_navigation_context(self, device_id: str) -> dict[str, Any] | None:
+        state = self._device_states.get(device_id)
+        if state is None or state["current_job_step_id"] is None:
+            return None
+        step = self._steps.get(state["current_job_step_id"])
+        if step is None or step.get("target_location_id") is None:
+            return None
+        location = next(
+            (
+                item for item in self._locations.values()
+                if item.get("location_id") == step["target_location_id"]
+            ),
+            None,
+        )
+        if location is None:
+            return None
+        details = state["details"]
+        nav_code = details.get("navigation_state")
+        return {
+            "device_id": device_id,
+            "map_name": location.get("map_name", "new_map_2"),
+            "map_revision": details.get("map_revision", ""),
+            "robot_pose": [
+                details["pose"]["x"], details["pose"]["y"], details["pose"]["yaw"]
+            ],
+            "goal_pose": [location["pose_x"], location["pose_y"]],
+            "navigation_state": {
+                1: "navigating", 2: "succeeded", 3: "cancelled", 4: "failed"
+            }.get(nav_code, "blocked" if state["state"] == "blocked" else "idle"),
+            "observed_at": details["received_at"],
+        }
 
     def ingest_task_event(self, event: dict[str, Any]) -> dict[str, Any]:
         existing = self._task_events.get(event["event_id"])

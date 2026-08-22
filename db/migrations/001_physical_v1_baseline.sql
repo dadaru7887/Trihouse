@@ -1,4 +1,4 @@
--- ============================================================================
+-- ==============================================================================================
 -- FMS MySQL physical v1 baseline
 --
 -- 목적
@@ -9,13 +9,10 @@
 -- 운영 원칙
 --   * MySQL 8.0 이상, InnoDB, Asia/Seoul DATETIME(6)을 사용한다.
 --   * Gateway는 연결 직후 SET time_zone = '+09:00'을 실행한다.
---   * EN: This baseline creates database objects only; environment-specific initial rows come from a separate seed file.
---   * KO: 이 기준선은 DB 구조만 생성하며, 환경별 초기 위치·장비·재고·작업 행은 별도 seed 파일에서 넣는다.
---   * EN: Control UI and device adapters call the FMS API and receive no direct MySQL credentials or write privileges.
---   * KO: Control UI와 장비 어댑터는 FMS API로만 요청하며 MySQL 계정이나 직접 쓰기 권한을 받지 않는다.
---   * VLM/RL의 관측과 복구 제안은 기록 대상이며, 전역 배차·최종 안전 권한은
---     FMS와 Safety Supervisor에 남긴다.
--- ============================================================================
+--   * DB 구조만 생성하며, 환경별 초기 위치·장비·재고·작업 행은 별도 seed 파일에서 넣는다.
+--   * Control UI와 장비 어댑터는 FMS API로만 요청하며 MySQL 계정이나 직접 쓰기 권한을 받지 않는다.
+--   * VLM/RL의 관측과 복구 제안은 기록 대상이며, 전역 배차·최종 안전 권한은 FMS와 Safety Supervisor에 남긴다.
+-- =============================================================================================
 
 CREATE DATABASE IF NOT EXISTS `trihouse_fms`
   DEFAULT CHARACTER SET utf8mb4

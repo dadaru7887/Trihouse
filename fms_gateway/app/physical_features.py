@@ -11,6 +11,10 @@ from typing import Any
 
 CANONICAL_P0_MAP_NAME = "trihouse_test_01"
 CANONICAL_P0_COUNTS = (8, 2, 3)
+CANONICAL_COUNTS_BY_MAP = {
+    CANONICAL_P0_MAP_NAME: CANONICAL_P0_COUNTS,
+    "new_map_2": (10, 2, 3),
+}
 CANONICAL_P0_FIDUCIAL_TARGETS = frozenset(
     {
         "WH-AMB-01-DOCK-01",
@@ -587,7 +591,13 @@ class PhysicalFeatureImporter:
                 _unique(location_code, "location_code", business_codes, line_number)
                 _unique(rmf_name, "rmf_waypoint_name", rmf_names, line_number)
                 role = _identifier(record, "operational_role", line_number)
-                if role not in {"loading_dock", "safety_zone", "charging_station"}:
+                if role not in {
+                    "loading_dock",
+                    "safety_zone",
+                    "charging_station",
+                    "bottleneck_waiting_point",
+                    "parking_spot",
+                }:
                     raise PhysicalFeatureImportError(
                         f"line {line_number}: unsupported operational_role: {role}"
                     )
@@ -599,11 +609,16 @@ class PhysicalFeatureImporter:
                     raise PhysicalFeatureImportError(
                         f"line {line_number}: unsupported temperature_zone: {temperature}"
                     )
-                if role == "loading_dock" and (parent is None or temperature is None):
+                parent_scoped_roles = {"loading_dock", "bottleneck_waiting_point"}
+                if role in parent_scoped_roles and (
+                    parent is None or temperature is None
+                ):
                     raise PhysicalFeatureImportError(
-                        f"line {line_number}: loading_dock requires parent_location_code and temperature_zone"
+                        f"line {line_number}: {role} requires parent_location_code and temperature_zone"
                     )
-                if role != "loading_dock" and (parent is not None or temperature is not None):
+                if role not in parent_scoped_roles and (
+                    parent is not None or temperature is not None
+                ):
                     raise PhysicalFeatureImportError(
                         f"line {line_number}: {role} forbids parent_location_code and temperature_zone"
                     )
@@ -719,10 +734,14 @@ class PhysicalFeatureImporter:
             )
 
         counts = (len(waypoints), len(bottlenecks), len(fiducials))
-        if counts != CANONICAL_P0_COUNTS:
+        expected_counts = CANONICAL_COUNTS_BY_MAP.get(
+            map_name, CANONICAL_P0_COUNTS
+        )
+        if counts != expected_counts:
             raise PhysicalFeatureImportError(
-                "P0 physical features require exactly 8 waypoints, 2 bottlenecks, "
-                "and 3 fiducials"
+                "P0 physical features require exactly "
+                f"{expected_counts[0]} waypoints, {expected_counts[1]} bottlenecks, "
+                f"and {expected_counts[2]} fiducials for {map_name}"
             )
         if any(
             not math.isclose(feature.radius_m, 0.10, rel_tol=0.0, abs_tol=1e-12)

@@ -41,8 +41,9 @@ Vision 또는 FMS 정책은 Pinky의 `/cmd_vel`을 직접 발행하지 않는다
 | H.264 녹화·보존 | `model/worker/media/recording/recorder.py` | `catalog.py` | `test_recorder.py`, `test_recording_catalog.py` |
 | 독립 Trihouse 관제 UI | `control_tower/ui/operations/index.html` | `operations.js → gateway/http_server.py → operations_feed.py` | `test_operations_http_server.py` |
 
-SR_52 쓰러짐 감지는 이 표의 구현 흐름에 넣지 않는다. 시작점과 승인 전 단계는
-`docs/validation/sr52_research_plan.md`의 조사 계획을 따른다.
+SR_52 쓰러짐 감지와 승인 전 단계는
+`docs/superpowers/specs/2026-08-22-vision-vlm-rl-recovery-integration-design.md`의
+현재 통합 설계를 따른다.
 
 ## Pinky를 조정할 때
 

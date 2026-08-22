@@ -97,3 +97,7 @@ def test_recovery_route_is_registered_on_the_gateway_app() -> None:
             paths.update(getattr(child, "path", None) for child in included.routes)
     assert "/internal/v1/recovery/episodes/{episode_uuid}/steps/{step_no}/complete" in paths
     assert "/internal/v1/recovery/training-export.jsonl" in paths
+    assert "/internal/v1/recovery/proposals" in paths
+    assert "/api/v1/recovery/proposals/{proposal_id}/decision" in paths
+    assert "/internal/v1/recovery/proposals/{proposal_id}/execution" in paths
+    assert "/internal/v1/recovery/devices/{device_id}/open" in paths

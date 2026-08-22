@@ -558,5 +558,6 @@ ps -eo pid,args | rg 'gz sim|ros_gz_bridge|safety_supervisor|sim_hardware' \
 | OMX 인계 | cargo lock/unlock과 handover 상태 | 아직 미검증 |
 | GUI | Gazebo 3D 창 또는 서버 PC 화면 | 현재 PC 차단 |
 
-오늘 실제 실행 결과와 차단점은
-[`runs/2026_08_10_pinky_demo_validation.md`](runs/2026_08_10_pinky_demo_validation.md)에 기록한다.
+현재 구현·검증 판정은 [implementation_map.md](implementation_map.md)에 반영한다.
+과거 실행 출력은 Git 이력에서 확인하고, 새 원시 출력은 해당 실행의 CI artifact나
+시험 기록에 보관한다.

@@ -17,6 +17,9 @@ PHYSICAL_JSONL = (
     / "import"
     / "trihouse_test_01_physical_features.jsonl"
 )
+NEW_MAP_2_PHYSICAL_JSONL = PHYSICAL_JSONL.with_name(
+    "trihouse_test_01_physical_features.new_map_2.jsonl"
+)
 
 
 def _importer():
@@ -91,6 +94,15 @@ def test_physical_fixture_is_the_only_pose_source() -> None:
             assert result.marker(record["marker_id"]).recognition_pose == MapPose(
                 **record["recognition_pose"]
             )
+
+
+def test_new_map_2_physical_fixture_is_publishable() -> None:
+    result = _importer().parse(NEW_MAP_2_PHYSICAL_JSONL)
+
+    assert result.map_name == "new_map_2"
+    assert result.waypoint("WH-FRZ-01-DOCK-01").pose.x == pytest.approx(
+        1.3314581184
+    )
 
 
 def test_import_is_independent_of_upload_filename_and_project_filename(tmp_path: Path) -> None:

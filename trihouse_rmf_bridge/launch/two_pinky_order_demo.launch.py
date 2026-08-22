@@ -33,7 +33,7 @@ from launch.substitutions import (
     LaunchConfiguration,
     PathJoinSubstitution,
 )
-from launch_ros.actions import Node, PushRosNamespace
+from launch_ros.actions import Node, PushRosNamespace, SetRemap
 from launch_ros.parameter_descriptions import ParameterValue
 
 
@@ -319,15 +319,21 @@ def _robot_group(
         # 띄우면 "executable not found" 로 죽는다. 반드시 include 해야 한다.
         # 파라미터는 로봇마다 프레임/토픽을 갈라 둔 파생본을 쓴다
         # (control_tower/bringup/p0_runtime_assets.py).
-        IncludeLaunchDescription(
-            AnyLaunchDescriptionSource(
-                str(
-                    Path(get_package_share_directory("nav2_bringup"))
-                    / "launch"
-                    / "bringup_launch.py"
-                )
-            ),
-            launch_arguments={
+        # upstream Nav2의 collision_monitor와 docking_server도 기본값으로
+        # `cmd_vel`을 발행한다. Nav2 include 전체에만 remap을 걸어 모든 주행
+        # 후보를 `cmd_vel_nav`로 모으고, 아래 safety supervisor만 실제
+        # `cmd_vel`을 소유하게 한다.
+        GroupAction([
+            SetRemap(src="cmd_vel", dst="cmd_vel_nav"),
+            IncludeLaunchDescription(
+                AnyLaunchDescriptionSource(
+                    str(
+                        Path(get_package_share_directory("nav2_bringup"))
+                        / "launch"
+                        / "bringup_launch.py"
+                    )
+                ),
+                launch_arguments={
                 # `namespace` 는 두 가지를 정하는데 여기서 필요한 것은 두 번째다.
                 # 이름을 입히는 쪽은 bringup 안의 `PushROSNamespace` 이고 그것은
                 # `IfCondition(use_namespace)` 로 묶여 있다. 그래서
@@ -360,9 +366,10 @@ def _robot_group(
                 # 넣는다. 그래서 `true` 가 아니라 파이썬 리터럴 `True` 여야
                 # 하고, 아니면 launch 전체가 NameError 로 죽는다.
                 "slam": "True" if _enabled(context, "nav2_slam") else "False",
-            }.items(),
-            condition=IfCondition(LaunchConfiguration("start_nav2")),
-        ),
+                }.items(),
+                condition=IfCondition(LaunchConfiguration("start_nav2")),
+            ),
+        ]),
         Node(
             package="trihouse_pinky_fleet",
             executable="status_node",

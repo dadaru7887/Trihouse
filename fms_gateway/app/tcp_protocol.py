@@ -6,6 +6,7 @@ import inspect
 import json
 import logging
 import math
+import re
 from typing import Any, Collection, Iterable, Mapping
 from uuid import UUID
 
@@ -152,6 +153,10 @@ class ProtocolSession:
         if message_type == "heartbeat":
             self._base(message)
             return ProcessedMessage("heartbeat", self._robot_id or "", dict(message))
+        if message_type == "recovery_command_ack":
+            return self._recovery_command_ack(message)
+        if message_type == "recovery_execution_result":
+            return self._recovery_execution_result(message)
         _reject("MESSAGE_TYPE_UNSUPPORTED")
 
     def _base(self, message: Mapping[str, Any]) -> None:
@@ -242,6 +247,61 @@ class ProtocolSession:
         if message["task_context"]["active"] is not True:
             _reject("SCHEMA_INVALID")
         return ProcessedMessage("task_event", self._robot_id or "", dict(message))
+
+    def _recovery_command_ack(self, message: Mapping[str, Any]) -> ProcessedMessage:
+        """Bind a motion acknowledgement to the authenticated robot session."""
+        self._base(message)
+        _require_fields(
+            message,
+            ("command_id", "proposal_sha256", "accepted", "reason_code"),
+        )
+        _uuid(message["command_id"])
+        digest = message["proposal_sha256"]
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            _reject("SCHEMA_INVALID")
+        if not isinstance(message["accepted"], bool):
+            _reject("SCHEMA_INVALID")
+        reason = message["reason_code"]
+        if not isinstance(reason, str) or not reason.strip():
+            _reject("SCHEMA_INVALID")
+        return ProcessedMessage("recovery_command_ack", self._robot_id or "", dict(message))
+
+    def _recovery_execution_result(self, message: Mapping[str, Any]) -> ProcessedMessage:
+        """Validate a completed ROS action result against its approved command identity."""
+        self._base(message)
+        _require_fields(message, (
+            "command_id", "proposal_sha256", "success", "status", "detail",
+            "pre_pose", "post_pose", "clearance_before_m", "clearance_after_m",
+            "elapsed_seconds", "safety_intervened", "terminal",
+        ))
+        _uuid(message["command_id"])
+        if not isinstance(message["proposal_sha256"], str) or re.fullmatch(
+            r"[0-9a-f]{64}", message["proposal_sha256"]
+        ) is None:
+            _reject("SCHEMA_INVALID")
+        if message["status"] not in {"succeeded", "failed", "cancelled"}:
+            _reject("SCHEMA_INVALID")
+        if not isinstance(message["success"], bool) or not isinstance(message["terminal"], bool):
+            _reject("SCHEMA_INVALID")
+        if not isinstance(message["safety_intervened"], bool):
+            _reject("SCHEMA_INVALID")
+        if not isinstance(message["detail"], str):
+            _reject("SCHEMA_INVALID")
+        for pose_name in ("pre_pose", "post_pose"):
+            pose = message[pose_name]
+            if not isinstance(pose, Mapping):
+                _reject("SCHEMA_INVALID")
+            _require_fields(pose, ("x", "y", "yaw"))
+            for value in pose.values():
+                if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+                    _reject("SCHEMA_INVALID")
+        for name in ("clearance_before_m", "clearance_after_m", "elapsed_seconds"):
+            value = message[name]
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+                _reject("SCHEMA_INVALID")
+        return ProcessedMessage(
+            "recovery_execution_result", self._robot_id or "", dict(message)
+        )
 
     @staticmethod
     def _validate_context(context: object) -> None:

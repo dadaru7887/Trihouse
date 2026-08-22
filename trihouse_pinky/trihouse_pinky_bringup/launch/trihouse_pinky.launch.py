@@ -34,6 +34,7 @@ def generate_launch_description():
     docking_enabled = LaunchConfiguration('docking_enabled')
     narrow_zones_file = LaunchConfiguration('narrow_zones_file')
     narrow_map_name = LaunchConfiguration('narrow_map_name')
+    allow_narrow_calibration = LaunchConfiguration('allow_narrow_calibration')
     marker_docks_file = LaunchConfiguration('marker_docks_file')
     vision_config = LaunchConfiguration('vision_config_file')
     vendor_bringup = PathJoinSubstitution([FindPackageShare('pinky_bringup'), 'launch', 'bringup_robot.launch.xml'])
@@ -61,6 +62,7 @@ def generate_launch_description():
         DeclareLaunchArgument('docking_enabled', default_value='false'),
         DeclareLaunchArgument('narrow_zones_file', default_value=''),
         DeclareLaunchArgument('narrow_map_name', default_value=''),
+        DeclareLaunchArgument('allow_narrow_calibration', default_value='false'),
         DeclareLaunchArgument('marker_docks_file', default_value=''),
         DeclareLaunchArgument('omx_station_id', default_value='station-1'),
         DeclareLaunchArgument('font_path', default_value=''),
@@ -93,6 +95,7 @@ def generate_launch_description():
                 'map_revision': map_revision,
                 'narrow_zones_file': narrow_zones_file,
                 'narrow_map_name': narrow_map_name,
+                'allow_narrow_calibration': allow_narrow_calibration,
             }]),
             Node(
                 package='trihouse_pinky_docking',
@@ -106,7 +109,7 @@ def generate_launch_description():
             Node(package='trihouse_pinky_fleet', executable='fleet_gateway', parameters=[{'robot_id': robot_id, 'control_host': control_host, 'control_port': control_port}]),
             # 카메라는 ROS 토픽으로 나가지 않는다. 이 노드는 ffmpeg 로
             # MediaMTX(PC1) 에 RTSP 를 밀고, 서버가 그것을 읽어 QR·ArUco 를
-            # 인식한다(`vision_edge/perception.py`). namespace 안에 두어야 두
+            # 인식한다(`model/worker/marker/edge_perception.py`). namespace 안에 두어야 두
             # 로봇의 카메라 노드가 섞이지 않는다.
             IncludeLaunchDescription(
                 AnyLaunchDescriptionSource(vision),

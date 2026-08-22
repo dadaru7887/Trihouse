@@ -4,12 +4,17 @@
 
 - YOLO 실시간 streaming/inference
 - VLM 상황 해석
-- RL 학습과 복구 후보 평가
-- GPU memory replay buffer와 로컬 NVMe cache
+- 승인된 RL checkpoint를 사용한 복구 후보 추론과 평가
+- 추론 artifact와 전송 재시도용 로컬 NVMe cache
 - Gateway ACK 전 recovery record 재전송 queue
 
 5080은 MySQL 계정과 3306 접근 권한을 갖지 않는다. 실시간 안전 행동은 DB 응답을
 기다리지 않으며, 기록은 `message_id`를 포함해 Gateway로 비동기 전송한다.
+
+실물 운용 컨테이너는 학습 코드를 실행하지 않는다. 학습은 Gateway가 export한
+`state[9], skill, coord[3], reward, next_state[9], done` JSONL을 별도
+`compose.ai_training.yaml`에서 오프라인으로 수행하고, 검증된 checkpoint만 다시
+추론 컨테이너의 `/models`에 배치한다.
 
 ## 호스트 전제조건
 
@@ -39,6 +44,16 @@ docker compose -f compose.ai_5080.yaml ps
 
 4060과 5080은 서로 다른 호스트이므로 Docker bridge network를 공유하지 않는다.
 5080의 `FMS_GATEWAY_URL`은 4060의 실제 LAN 주소와 Gateway port로 설정한다.
+현재 DHCP 예약 기준은 `http://192.168.0.9:8080`이다. `host.docker.internal`은
+4060과 5080이 같은 PC일 때의 smoke test에만 사용한다.
+
+필수 모델 값은 다음처럼 실제 파일과 hash로 확인한다.
+
+```bash
+ls -lh runtime/ai/models
+sha256sum runtime/ai/models/<approved-policy-checkpoint.pt>
+docker compose -f compose.ai_5080.yaml config --quiet
+```
 
 ## 장애 시 기록
 

@@ -196,3 +196,15 @@ def test_marker_docking_is_wired_inside_the_robot_namespace() -> None:
         and str(node.node_executable) == "marker_dock"
         for node in nodes
     )
+
+
+def test_narrow_calibration_is_an_explicit_launch_argument() -> None:
+    description = _module().generate_launch_description()
+    declared = {
+        action.name: action
+        for action in description.entities
+        if isinstance(action, DeclareLaunchArgument)
+    }
+
+    assert "allow_narrow_calibration" in declared
+    assert declared["allow_narrow_calibration"].default_value[0].text == "false"

@@ -18,7 +18,7 @@ H.264 recorder, 실제 REST/WebSocket 서버가 필요한 항목은 별도 런�
 | 14 | `object_worker/basket_correction.py` | 제한 보정·재정차 요청 테스트 | YOLO OBB/camera calibration 정확도 |
 | 17, 18 | `marker_worker/policy.py` | QR·marker ID·오차 gate 테스트 | OpenCV QR/ArUco 입력 변환 |
 | 19, 20, 44 | `person_worker/policy.py` | 쓰러짐 로직과 분리한 ROI·연속 프레임·작업자 존재 테스트 | YOLO tracker/RTSP와 실제 좌표·FPS |
-| 52 | **계획 단계, 구현 보류**; `sr52-fall-detection-research-plan.md` | 쓰러짐 감지 코드를 완료 근거로 사용하지 않음 | 데이터·오경보/지연 수용 기준·운영자 승인 흐름 확정 후 shadow mode 평가 |
+| 52 | `../superpowers/specs/2026-08-22-vision-vlm-rl-recovery-integration-design.md`의 현재 설계와 부분 구현 | 쓰러짐 감지 코드를 완료 근거로 사용하지 않음 | 데이터·오경보/지연 수용 기준·운영자 승인 흐름 확정 후 shadow mode 평가 |
 | 21 | `pick_failure_report.py` | 실패 물품 보류·증거 세그먼트 테스트 | UI evidence 링크와 FMS task hold |
 | 23, 24, 25, 45, 48, 49, 54, 57 | `trihouse_pinky/*` | 안전 gate·운반·복귀·표시·비상 정책 테스트 | ROS/Jazzy·Nav2·Pinky 실물/Gazebo |
 | 27 | `battery_policy.py` | 정상/작업제한/복귀필요·거리/여유 기반 판단 테스트 | 실제 소비계수와 threshold 보정 |

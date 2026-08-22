@@ -10,9 +10,17 @@ from uuid import UUID
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
-from .recovery_models import RecoveryStepAcknowledgement, RecoveryStepCompletion
+from .recovery_models import (
+    RecoveryProposalCreate,
+    RecoveryProposalDecision,
+    RecoveryStepAcknowledgement,
+    RecoveryStepCompletion,
+)
 from .recovery_repository import (
+    RecoveryApprovalForbidden,
     RecoveryIdempotencyConflict,
+    RecoveryProposalConflict,
+    RecoveryProposalNotFound,
     RecoveryRepository,
     RecoveryStepConflict,
     RecoveryStepNotFound,
@@ -22,6 +30,46 @@ from .recovery_export import iter_training_jsonl
 
 def recovery_router(repository: RecoveryRepository) -> APIRouter:
     router = APIRouter()
+
+    @router.post("/internal/v1/recovery/proposals", status_code=201)
+    def create_recovery_proposal(
+        proposal: RecoveryProposalCreate,
+        idempotency_key: Annotated[UUID, Header(alias="Idempotency-Key")],
+    ) -> dict[str, object]:
+        payload = proposal.model_dump(mode="json")
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        digest = hashlib.sha256(canonical).hexdigest()
+        try:
+            return repository.create_proposal(payload, str(idempotency_key), digest)
+        except RecoveryProposalConflict as exc:
+            raise HTTPException(status_code=409, detail="recovery proposal conflict") from exc
+
+    @router.post("/api/v1/recovery/proposals/{proposal_id}/decision")
+    def decide_recovery_proposal(
+        proposal_id: UUID,
+        request: RecoveryProposalDecision,
+    ) -> dict[str, object]:
+        try:
+            return repository.decide_proposal(
+                str(proposal_id), request.worker_id, request.decision, request.reason
+            )
+        except RecoveryProposalNotFound as exc:
+            raise HTTPException(status_code=404, detail="recovery proposal not found") from exc
+        except RecoveryApprovalForbidden as exc:
+            raise HTTPException(status_code=403, detail="safety_manager role required") from exc
+        except RecoveryProposalConflict as exc:
+            raise HTTPException(status_code=409, detail="recovery proposal decision conflict") from exc
+
+    @router.get("/internal/v1/recovery/proposals/{proposal_id}/execution")
+    def get_recovery_execution(proposal_id: UUID) -> dict[str, object]:
+        try:
+            return repository.get_proposal_execution(str(proposal_id))
+        except RecoveryProposalNotFound as exc:
+            raise HTTPException(status_code=404, detail="recovery proposal not found") from exc
+
+    @router.get("/internal/v1/recovery/devices/{device_id}/open")
+    def list_open_recoveries(device_id: str) -> list[dict[str, object]]:
+        return repository.list_open_recoveries(device_id)
 
     @router.post(
         "/internal/v1/recovery/episodes/{episode_uuid}/steps/{step_no}/complete",

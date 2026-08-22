@@ -110,7 +110,7 @@ DB는 이 판단들을 **기록**하고, 그 기록이 나중에 학습 데이�
 | --- | --- | --- | --- | --- |
 | `mysql` | `mysql:8.4` | — | 없음 | 자기 자신 |
 | `gateway` | slim Python 3.12 + [requirements.txt](../../fms_gateway/requirements.txt) | FastAPI / uvicorn | 없음 | **읽기 + 쓰기 (유일)** |
-| `web` (관제) | 기존 [rmf-web-dashboard Dockerfile](../../control_system/openrmf/docker/rmf-web-dashboard/Dockerfile) (nginx) | 정적 자산 | 없음 | **없음** |
+| `web` (관제) | 외부 기준 코드 `control_system/openrmf/docker/rmf-web-dashboard/Dockerfile` (nginx) | 정적 자산 | 없음 | **없음** |
 | `vision` (VLM/RL) | `compose.ai_5080.yaml`에서 고정한 CUDA/Python image | model runtime | **필요** | **없음** |
 
 한 이미지에 합치면 안 되는 이유는 여전히 유효하지만, 컨테이너를 나누면 **애초에 마주칠 일이 없다.**
@@ -1485,8 +1485,8 @@ job은 `completed`, step은 `succeeded`다. 공용 상태 매핑 함수를 만�
 - 기준 스키마 파일은 [db/migrations/001_physical_v1_baseline.sql](../../db/migrations/001_physical_v1_baseline.sql) 하나이며 첫 실물 테스트 이후 수정하지 않는다.
 - 이후 변경은 `002_<purpose>.sql`, `003_<purpose>.sql` 순서로 추가하고 적용 파일의 SHA-256을 `schema_migrations`에 기록한다.
 - `db/archive/pre_physical_v1/`의 `004`~`012`는 `001`에 합쳐진 과거 개발 DB 업그레이드 이력이므로 신규 DB에 실행하지 않는다.
-- [control_system/db/schema.sql](../../control_system/db/schema.sql)은 기존 SQLite v2에 대응하는 **별도 스키마**다. 새 연동에 사용하지 않는다.
-- [control_system/db/migrate_sqlite_to_mysql.py](../../control_system/db/migrate_sqlite_to_mysql.py)는 `robosapiens` 스키마 전용이다. `trihouse_fms`에 실행하지 않는다.
+- 외부 기준 코드 `control_system/db/schema.sql`은 기존 SQLite v2에 대응하는 **별도 스키마**다. 새 연동에 사용하지 않는다.
+- 외부 기준 코드 `control_system/db/migrate_sqlite_to_mysql.py`는 `robosapiens` 스키마 전용이다. `trihouse_fms`에 실행하지 않는다.
 
 ### 12.2 열거값 추가
 

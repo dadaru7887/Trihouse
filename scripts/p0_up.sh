@@ -21,11 +21,24 @@ MYSQL_PW="$(grep -E '^MYSQL_ROOT_PASSWORD=' .env | cut -d= -f2-)"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/require_docker.sh"
 require_docker || exit 1
 
+# EN: The reset marker binds the published revision to the exact Nav2 map source.
+# KO: reset 마커를 먼저 읽어 발행 revision과 Nav2 지도 원본을 같은 지도에 묶는다.
+if [[ ! -s .trihouse/map_yaml ]]; then
+  echo "[up] .trihouse/map_yaml 이 없습니다. 먼저 scripts/p0_reset.sh 를 돌리세요." >&2
+  exit 1
+fi
+NAV2_MAP="$(cat .trihouse/map_yaml)"
+if [[ ! -f "$NAV2_MAP" ]]; then
+  echo "[up] SLAM 지도가 없습니다: $NAV2_MAP" >&2
+  exit 1
+fi
+MAP_NAME="$(basename "$NAV2_MAP" .yaml)"
+
 REVISION="$(docker exec trihouse-mysql mysql -uroot -p"$MYSQL_PW" -N -B -e \
   "SELECT map_revision FROM trihouse_fms.map_revisions
    WHERE state='published' ORDER BY published_at DESC LIMIT 1;" 2>/dev/null || true)"
 
-if [[ "$REVISION" != trihouse_test_01:* ]]; then
+if [[ "$REVISION" != "$MAP_NAME":* ]]; then
   echo "[up] 발행된 지도 revision 이 없습니다. 먼저 scripts/p0_reset.sh 를 돌리세요." >&2
   exit 1
 fi
@@ -44,20 +57,6 @@ fi
 
 echo "[up] 지도 revision: $REVISION"
 
-# 지도는 **reset 이 발행한 것과 같아야 한다.** 좌표는 지도마다 다른 프레임 위의
-# 값이라, 갈라지면 로봇이 "도착했다"고 말하는 자리가 원장이 아는 자리와 어긋나
-# 도착 판정이 구조적으로 실패한다. 그래서 여기서 다시 고르지 않고 reset 이
-# `.trihouse/map_yaml` 에 적어 둔 것을 읽는다.
-if [[ ! -s .trihouse/map_yaml ]]; then
-  echo "[up] .trihouse/map_yaml 이 없습니다. 먼저 scripts/p0_reset.sh 를 돌리세요." >&2
-  exit 1
-fi
-NAV2_MAP="$(cat .trihouse/map_yaml)"
-if [[ ! -f "$NAV2_MAP" ]]; then
-  echo "[up] SLAM 지도가 없습니다: $NAV2_MAP" >&2
-  exit 1
-fi
-MAP_NAME="$(basename "$NAV2_MAP" .yaml)"
 echo "[up] 지도: $MAP_NAME  ($NAV2_MAP)"
 
 # Nav2 지도와 RMF graph waypoint는 반드시 같은 지도 좌표계여야 한다. 기본 파일은

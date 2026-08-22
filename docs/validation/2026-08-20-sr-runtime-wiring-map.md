@@ -207,7 +207,6 @@ for f in $(find . -name setup.py -not -path "./build/*" -not -path "./install/*"
 ---
 
 관련 문서
-- 실물 준비 공백: [2026-08-20-hardware-readiness-gaps.md](../claude/2026-08-20-hardware-readiness-gaps.md)
 - 실행 절차: [p0-hardware-quick-run.md](../runbooks/p0-hardware-quick-run.md)
 - 협로 ↔ RMF: [narrow-zone-rmf-integration-design.md](../architecture/narrow-zone-rmf-integration-design.md)
 - 요구사항 정본: [system_requirements.md](../requirements/system_requirements.md)

@@ -176,6 +176,75 @@ def test_heartbeat_is_accepted_after_hello():
     assert accepted.action == "heartbeat"
 
 
+def test_recovery_command_ack_is_bound_to_the_session_device_and_proposal_hash():
+    session = ProtocolSession(registered_robot_ids={"PK_01"})
+    session.process(hello())
+    command_id = str(uuid.uuid4())
+
+    accepted = session.process(
+        {
+            "type": "recovery_command_ack",
+            "schema_version": 3,
+            "robot_id": "PK_01",
+            "session_id": SESSION_ID,
+            "command_id": command_id,
+            "proposal_sha256": "a" * 64,
+            "accepted": True,
+            "reason_code": "ACTION_ACCEPTED",
+        }
+    )
+
+    assert accepted.action == "recovery_command_ack"
+    assert accepted.robot_id == "PK_01"
+    assert accepted.payload["command_id"] == command_id
+
+
+def test_recovery_command_ack_rejects_an_invalid_hash():
+    session = ProtocolSession(registered_robot_ids={"PK_01"})
+    session.process(hello())
+
+    with pytest.raises(ProtocolRejected, match="SCHEMA_INVALID"):
+        session.process(
+            {
+                "type": "recovery_command_ack",
+                "schema_version": 3,
+                "robot_id": "PK_01",
+                "session_id": SESSION_ID,
+                "command_id": str(uuid.uuid4()),
+                "proposal_sha256": "not-a-hash",
+                "accepted": False,
+                "reason_code": "SAFETY_VETO",
+            }
+        )
+
+
+def test_recovery_execution_result_is_bound_to_authenticated_robot() -> None:
+    session = ProtocolSession({"PK_01"})
+    session.process(hello())
+
+    processed = session.process({
+        "type": "recovery_execution_result",
+        "schema_version": 3,
+        "robot_id": "PK_01",
+        "session_id": SESSION_ID,
+        "command_id": "11111111-1111-4111-8111-111111111111",
+        "proposal_sha256": "a" * 64,
+        "success": True,
+        "status": "succeeded",
+        "detail": "completed",
+        "pre_pose": {"x": 1.0, "y": 2.0, "yaw": 0.0},
+        "post_pose": {"x": 1.1, "y": 2.0, "yaw": 0.1},
+        "clearance_before_m": 0.4,
+        "clearance_after_m": 0.5,
+        "elapsed_seconds": 1.2,
+        "safety_intervened": False,
+        "terminal": True,
+    })
+
+    assert processed.action == "recovery_execution_result"
+    assert processed.robot_id == "PK_01"
+
+
 def test_tcp_server_acknowledges_ndjson_and_rejects_bad_schema():
     async def scenario():
         accepted = []

@@ -110,7 +110,7 @@ class Detector:
             return self._device
         from ultralytics import YOLOE
 
-        from vision_system.inference_common.device import resolve_device
+        from model.worker.common.device import resolve_device
 
         self._device = resolve_device(self.config.device)
         self._model = YOLOE(str(self.weights))

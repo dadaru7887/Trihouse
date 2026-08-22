@@ -111,6 +111,7 @@ from .recovery_repository import (
     MySqlRecoveryRepository,
     RecoveryRepository,
 )
+from .recovery_dispatch import dispatch_loop
 from .recovery_routes import recovery_router
 from .repositories import (
     CommandClaimConflict,
@@ -212,6 +213,7 @@ def create_app(
     async def lifespan(_app: FastAPI):
         """운영 앱 시작/종료와 TCP 서버 시작/종료를 정확히 대응시킨다."""
         tcp_server = None
+        recovery_dispatch_task = None
         source_staging.reconcile_startup(repo)
         deployments.reconcile_startup()
         tcp_settings = get_tcp_settings()
@@ -221,14 +223,24 @@ def create_app(
                 port=tcp_settings.port,
                 max_line_bytes=tcp_settings.max_line_bytes,
                 registered_robot_ids=repo.list_registered_robot_ids,
-                on_message=RepositoryIngestion(repo),
+                on_message=RepositoryIngestion(repo, recovery_repo),
             )
             await tcp_server.start()
             # 관제가 로봇에게 먼저 말을 거는 통로. 사람 관측이 이 장부를 쓴다.
             _app.state.robot_links = tcp_server.links
+            recovery_dispatch_task = asyncio.create_task(
+                dispatch_loop(recovery_repo, tcp_server.links),
+                name="recovery-command-dispatch",
+            )
         try:
             yield
         finally:
+            if recovery_dispatch_task is not None:
+                recovery_dispatch_task.cancel()
+                try:
+                    await recovery_dispatch_task
+                except asyncio.CancelledError:
+                    pass
             if tcp_server is not None:
                 await tcp_server.stop()
 
@@ -322,6 +334,16 @@ def create_app(
     @app.get("/api/v1/devices", response_model=list[DeviceView])
     def devices():
         return repo.list_devices()
+
+    @app.get("/internal/v1/recovery/navigation-context/{device_id}")
+    def recovery_navigation_context(device_id: str):
+        context = repo.get_recovery_navigation_context(device_id)
+        if context is None:
+            raise HTTPException(
+                status_code=409,
+                detail="device has no active map-frame recovery context",
+            )
+        return context
 
     @app.get("/api/v1/inventory/lots", response_model=list[InventoryLotView])
     def inventory():

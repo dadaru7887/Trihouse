@@ -2,7 +2,9 @@
 
 from dataclasses import dataclass
 import math
+import re
 from typing import Any
+from uuid import UUID
 
 
 class ProtocolError(ValueError):
@@ -67,6 +69,86 @@ class ClearKeepOutZoneCommand:
     message_id: str
     zone_id: str
     operator_id: str
+
+
+@dataclass(frozen=True)
+class RecoveryCommand:
+    command_id: str
+    proposal_id: str
+    proposal_sha256: str
+    approval_id: str
+    approval_worker_id: str
+    device_id: str
+    map_name: str
+    map_revision: str
+    recovery_episode_uuid: str
+    step_no: int
+    selected_skill_id: int
+    selected_skill_name: str
+    canonical_coord: tuple[float, float, float]
+    map_target: tuple[float, float, float] | None
+
+
+RECOVERY_SKILL_NAMES = (
+    "BACKUP", "REROUTE_LEFT", "REROUTE_RIGHT", "WAIT_REOBSERVE", "REJOIN"
+)
+
+
+def parse_recovery_command(payload: dict[str, Any]) -> RecoveryCommand:
+    required = (
+        "command_id", "proposal_id", "proposal_sha256", "approval_id",
+        "approval_worker_id", "device_id", "map_name", "map_revision",
+        "recovery_episode_uuid", "step_no", "selected_skill_id",
+        "selected_skill_name", "canonical_action",
+    )
+    if (
+        payload.get("type") != "recovery_command"
+        or payload.get("schema_version") != 1
+        or any(payload.get(name) in (None, "") for name in required)
+    ):
+        raise ProtocolError("recovery_command has missing required fields")
+    try:
+        for name in ("command_id", "proposal_id", "approval_id", "recovery_episode_uuid"):
+            UUID(str(payload[name]))
+        skill = int(payload["selected_skill_id"])
+        step_no = int(payload["step_no"])
+        canonical = payload["canonical_action"]
+        raw_coord = canonical["coord"]
+        coord = tuple(float(value) for value in raw_coord)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ProtocolError("recovery_command identity or coordinate is invalid") from error
+    if len(coord) != 3 or not all(math.isfinite(value) for value in coord):
+        raise ProtocolError("recovery coordinate must contain three finite values")
+    if math.hypot(coord[0], coord[1]) > 0.250001 or abs(coord[2]) > math.pi / 3 + 1e-6:
+        raise ProtocolError("recovery coordinate exceeds the physical envelope")
+    skill_name = str(payload["selected_skill_name"])
+    if not 0 <= skill < len(RECOVERY_SKILL_NAMES) or skill_name != RECOVERY_SKILL_NAMES[skill]:
+        raise ProtocolError("recovery skill id and name do not match")
+    digest = str(payload["proposal_sha256"])
+    if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ProtocolError("recovery proposal hash is invalid")
+    map_target = canonical.get("map_target")
+    target: tuple[float, float, float] | None = None
+    if map_target is not None:
+        try:
+            target = tuple(float(map_target[name]) for name in ("x_m", "y_m", "yaw_rad"))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ProtocolError("recovery map target is invalid") from error
+        if not all(math.isfinite(value) for value in target):
+            raise ProtocolError("recovery map target must be finite")
+    if skill == 4 and target is None:
+        raise ProtocolError("REJOIN requires an absolute map target")
+    if step_no <= 0:
+        raise ProtocolError("recovery step_no must be positive")
+    return RecoveryCommand(
+        command_id=str(payload["command_id"]), proposal_id=str(payload["proposal_id"]),
+        proposal_sha256=digest, approval_id=str(payload["approval_id"]),
+        approval_worker_id=str(payload["approval_worker_id"]), device_id=str(payload["device_id"]),
+        map_name=str(payload["map_name"]), map_revision=str(payload["map_revision"]),
+        recovery_episode_uuid=str(payload["recovery_episode_uuid"]), step_no=step_no,
+        selected_skill_id=skill, selected_skill_name=skill_name,
+        canonical_coord=coord, map_target=target,
+    )
 
 
 def parse_transport_command(payload: dict[str, Any]) -> TransportCommand:

@@ -1,8 +1,17 @@
-ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:26.07-py3
+ARG BASE_IMAGE=pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
 FROM ${BASE_IMAGE}
 
 WORKDIR /opt/trihouse
-ENV PYTHONPATH=/opt/trihouse
+ENV PYTHONPATH=/opt/trihouse \
+    YOLO_CONFIG_DIR=/tmp/ultralytics
+
+COPY docker/ai/requirements.inference.txt /tmp/requirements.inference.txt
+RUN python -m pip install --no-cache-dir -r /tmp/requirements.inference.txt
+# EN: Ultralytics pulls GUI OpenCV; restore the headless wheel after resolution.
+# KO: Ultralytics가 GUI OpenCV를 설치하므로 의존성 해석 뒤 headless wheel로 복원한다.
+RUN python -m pip uninstall -y opencv-python \
+    && python -m pip install --no-cache-dir --force-reinstall --no-deps \
+       opencv-python-headless==4.11.0.86
 
 COPY model/__init__.py model/__init__.py
 COPY model/vlm_rl/__init__.py model/vlm_rl/__init__.py

@@ -61,6 +61,20 @@ class EventOutbox:
                 )
                 """
             )
+            # TRIHOUSE EXTENSION — EN: Prevent re-execution after an ACK-loss restart.
+            # TRIHOUSE 확장 — KO: ACK 유실 후 재시작 시 같은 이동의 재실행을 막는다.
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS recovery_commands (
+                  command_id TEXT PRIMARY KEY,
+                  proposal_sha256 TEXT NOT NULL,
+                  status TEXT NOT NULL,
+                  runtime_id TEXT NOT NULL,
+                  result_payload TEXT NULL,
+                  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
             row = connection.execute(
                 "SELECT state_value FROM gateway_state WHERE state_key = 'session_id'"
             ).fetchone()
@@ -205,6 +219,63 @@ class EventOutbox:
                 (event_id, row[0], reason_code),
             )
             connection.execute("DELETE FROM pending_events WHERE event_id = ?", (event_id,))
+
+    def begin_recovery(self, command_id: str, proposal_sha256: str, runtime_id: str) -> None:
+        """Persist motion identity before sending the ROS action."""
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT proposal_sha256 FROM recovery_commands WHERE command_id = ?",
+                (command_id,),
+            ).fetchone()
+            if existing is not None and existing[0] != proposal_sha256:
+                raise ValueError("recovery command identity is immutable")
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO recovery_commands
+                  (command_id, proposal_sha256, status, runtime_id)
+                VALUES (?, ?, 'executing', ?)
+                """,
+                (command_id, proposal_sha256, runtime_id),
+            )
+
+    def complete_recovery(self, command_id: str, result_payload: dict[str, object]) -> None:
+        encoded = json.dumps(result_payload, ensure_ascii=False, separators=(",", ":"))
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE recovery_commands
+                SET status='completed', result_payload=?, updated_at=CURRENT_TIMESTAMP
+                WHERE command_id=?
+                """,
+                (encoded, command_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("unknown recovery command")
+
+    def reject_recovery(self, command_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE recovery_commands SET status='rejected',updated_at=CURRENT_TIMESTAMP "
+                "WHERE command_id=?", (command_id,),
+            )
+
+    def recovery_command(self, command_id: str) -> dict[str, object] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT proposal_sha256,status,runtime_id,result_payload
+                FROM recovery_commands WHERE command_id=?
+                """,
+                (command_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "proposal_sha256": row[0],
+            "status": row[1],
+            "runtime_id": row[2],
+            "result_payload": json.loads(row[3]) if row[3] else None,
+        }
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=5.0)

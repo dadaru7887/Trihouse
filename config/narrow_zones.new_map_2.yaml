@@ -17,6 +17,9 @@ zones:
     zone: null
     enter: []
     exit: []
+    dock_target: null
+    exit_target: null
+    measured: { entry_pose: false, dock_pose: false, enter: false, exit: false }
 
   chilled_storage_loading_dock_01:
     enabled: false
@@ -25,6 +28,9 @@ zones:
     zone: null
     enter: []
     exit: []
+    dock_target: null
+    exit_target: null
+    measured: { entry_pose: false, dock_pose: false, enter: false, exit: false }
 
   frozen_storage_loading_dock_01:
     # 2026-08-21 PK02 실측. Nav2는 이 입구까지만 오고, 아래 고정 규칙이
@@ -34,6 +40,7 @@ zones:
     # 도킹 뒤 로봇이 머무르는 직사각형. entry와 분리해야 다음 출발 명령에서
     # 역순 탈출 시퀀스를 선택할 수 있다.
     zone: { x: 1.3314581184, y: -0.8149269956, yaw: -1.572140, length: 0.20, width: 0.20 }
+    dock_target: { x: 1.3314581184, y: -0.8149269956, yaw: -1.572140 }
     enter:
       - [straight, 0.20]
       - [rotate, -1.572140]
@@ -44,15 +51,24 @@ zones:
       - [straight, 0.372569]
       - [rotate, 0.0109381190]
       - [straight, -0.20]
+    # 현재 exit는 입고 궤적을 역순으로 만든 후보값이다. 하드웨어 모듈 테스트가
+    # 이 좌표 복귀를 확인하기 전에는 일반 주문 배정을 열지 않는다.
+    exit_target: { x: 1.1792881155, y: -1.1896842748, yaw: 0.0109381190 }
     measured:
       source: waypoint.md
-      entry_pose: 2026-08-21
-      dock_pose: 2026-08-21
+      entry_pose: true
+      dock_pose: true
+      enter: true
+      exit: false
+      entry_pose_date: 2026-08-21
+      dock_pose_date: 2026-08-21
       note: >-
         PK02 냉동 입구에서 20 cm 전진 후 도킹 yaw(-1.572140 rad)로 회전하고,
         0.372569 m 후진한다. 최종 x 오차 약 4.8 cm는 현재 0.15 m 검증 범위 안이다.
 
   charging_station_01:
+    # 충전소는 귀환 Nav2 목표를 바꾸지 않고, 다음 주문을 시작할 때 탈출만 적용한다.
+    approach_required: false
     # 2026-08-21 PK02 AMCL 재측정 최종 자세. exit 길이는 아직 별도 실물 보정값을 유지한다.
     entry: { x: 0.0570244747, y: 0.1949666005, yaw: 0.1093261667 }
     zone: { length: 0.30, width: 0.30 }
@@ -65,6 +81,7 @@ zones:
       - [straight, 0.345]
     exit_target: { x: 0.7992961442, y: 0.0854053105, yaw: 0.0923642279 }
     measured:
+      exit: true
       date: 2026-08-21
       source: waypoint.md_pk02_amcl
       note: >-
@@ -72,6 +89,7 @@ zones:
         같으므로 독립 3회 측정으로 보지 않는다. 기존 0.68 m 저속 탈출 시퀀스는 유지한다.
 
   charging_station_02:
+    approach_required: false
     # 2026-08-21 PK02 AMCL 재측정 최종 자세. exit 길이는 아직 별도 실물 보정값을 유지한다.
     entry: { x: 0.1336554086, y: -0.0065562838, yaw: 0.1569596446 }
     zone: { length: 0.30, width: 0.30 }
@@ -83,6 +101,7 @@ zones:
       - [straight, 0.333]
     exit_target: { x: 0.7992961442, y: 0.0854053105, yaw: 0.0923642279 }
     measured:
+      exit: true
       date: 2026-08-21
       source: waypoint.md_pk02_amcl
       note: >-

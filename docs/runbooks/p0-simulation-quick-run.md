@@ -12,9 +12,8 @@
 70 mobile/return_home 로봇이 대기/충전소로 돌아온다
 ```
 
-원본 절차는 [2026-08-19-p0-b-run-runbook.md](../claude/2026-08-19-p0-b-run-runbook.md) 다.
-이 문서는 그것을 **이 PC(`cook2`, `/home/newuser/Trihouse`)에서 반복 실행**할 수 있게
-정리한 것이다. 경로·계정·실행 스크립트가 다르므로 두 문서를 섞어 쓰지 않는다.
+이 문서는 **이 PC(`cook2`, `/home/newuser/Trihouse`)에서 반복 실행**하는 현재 기준
+절차다. 다른 호스트의 경로·계정·실행 스크립트와 섞어 쓰지 않는다.
 
 ---
 
@@ -455,4 +454,5 @@ cd /home/newuser/Trihouse && source /opt/ros/jazzy/setup.bash && source pinky_pr
 | `GOAL_TOLERANCE_NOT_MET` | 정밀 정차 허용오차가 Nav2 의 goal tolerance 와 **같아서**(둘 다 0.10 m) 경계선 동전 던지기가 됐다. Nav2 는 허용오차 안에 들어오는 순간 멈추므로 로봇은 늘 경계에 선다. `0.15 m / 0.35 rad` 로 넓혔다 |
 | 지도 | 원본 B절 런북은 `TRIHOUSE_NAV2_MAP` 으로 `new_map_2` 를 덮어쓰지만 **발행하는 지도는 바꾸지 않아** 둘이 갈라진다. 여기서는 `p0_reset.sh` 의 인자 하나로 양쪽을 함께 정한다. 기본은 `trihouse_map_01` — [지도 선택](#지도-선택) |
 
-관련 문서: [p0-stack-reference.md](../claude/p0-stack-reference.md) — 결함 D1~D20 의 증상·근거·수정 내역
+현재 구성과 컴포넌트 경계는 [시스템 구성](../architecture/system_overview.md)과
+[환경 개요](../deployment/environment_overview.md)를 따른다.

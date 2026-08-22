@@ -46,6 +46,10 @@ RECOVERY_TABLES = {
     "recovery_steps",
     "recovery_learning_transitions",
     "recovery_ingestion_receipts",
+    "recovery_proposals",
+    "recovery_approval_decisions",
+    "recovery_command_outbox",
+    "recovery_execution_results",
 }
 
 

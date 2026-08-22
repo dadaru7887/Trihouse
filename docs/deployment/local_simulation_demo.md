@@ -45,8 +45,9 @@ python3 -m pytest -q \
   trihouse_pinky/test/test_integrated_bringup_contract.py
 ```
 
-성공한 테스트 이름과 commit SHA를 `validation/runs/`에 기록한다. 현재 기준은 34개이며,
-정적 테스트 성공을 Gazebo 또는 실기 검증으로 표현하지 않는다.
+성공한 테스트 이름, commit SHA와 원시 출력은 CI artifact나 해당 시험 기록에 보관하고,
+현재 판정 요약만 `validation/implementation_map.md`에 반영한다. 정적 테스트 성공을
+Gazebo 또는 실기 검증으로 표현하지 않는다.
 
 ## 3. Pinky Gazebo
 
@@ -70,9 +71,10 @@ ros2 launch trihouse_pinky_bringup trihouse_gazebo_demo.launch.py \
   map:=/home/syw/Trihouse/pinky_pro/pinky_navigation/map/my_map.yaml
 ```
 
-현재 실행 결과와 문제별 다음 조치는
-[2026-08-10 Pinky 검증 기록](../validation/runs/2026_08_10_pinky_demo_validation.md)에 있다.
-필수 package, GPU/display 또는 runtime 연결이 없으면 결과를 `blocked`로 기록하고 정적 증거와
+현재 판정 기준과 미검증 범위는
+[시뮬레이션 검증 계획](../validation/simulation_validation_plan.md)과
+[구현·검증 상태](../validation/implementation_map.md)를 따른다. 필수 package,
+GPU/display 또는 runtime 연결이 없으면 결과를 `blocked`로 기록하고 정적 증거와
 구분한다.
 
 ## 4. DB 스키마

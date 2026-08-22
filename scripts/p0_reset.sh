@@ -107,7 +107,7 @@ until curl -fsS -m 2 http://127.0.0.1:8080/ready >/dev/null 2>&1; do sleep 2; do
 
 echo "[reset] 5/5 지도를 다시 발행합니다"
 revision="$(python3 scripts/p0_publish_map.py "$MAP_YAML" | tail -1)"
-if [[ "$revision" != trihouse_test_01:* ]]; then
+if [[ "$revision" != "$MAP_NAME":* ]]; then
   echo "[reset] 지도 발행에 실패했습니다: $revision" >&2
   exit 1
 fi

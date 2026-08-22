@@ -36,7 +36,7 @@ SERVICE_FILES = {
     "ClearEmergency.srv",
     "EstimateTaskEnergy.srv",
 }
-ACTION_FILES = {"Dock.action", "ExecuteOmx.action", "ExecuteTransport.action"}
+ACTION_FILES = {"Dock.action", "ExecuteOmx.action", "ExecuteRecovery.action", "ExecuteTransport.action"}
 
 FORBIDDEN_OVER_SPLIT_FILES = {
     "TaskProgress.msg",
@@ -209,3 +209,29 @@ def test_execute_omx_carries_versioned_json_without_duplicating_domain_fields():
         "string result_json",
     ]
     assert feedback == ["string event_json"]
+
+
+def test_execute_recovery_binds_approval_device_map_and_selected_skill() -> None:
+    contract = (PACKAGE_ROOT / "action" / "ExecuteRecovery.action").read_text(
+        encoding="utf-8"
+    )
+    goal, result, feedback = [section for section in contract.split("---")]
+
+    for field in (
+        "string command_id",
+        "string proposal_id",
+        "string proposal_sha256",
+        "string approval_id",
+        "string approval_worker_id",
+        "string device_id",
+        "string map_name",
+        "string map_revision",
+        "string recovery_episode_uuid",
+        "uint8 selected_skill_id",
+        "string selected_skill_name",
+        "geometry_msgs/Vector3 canonical_coord",
+    ):
+        assert field in goal
+    assert "geometry_msgs/PoseStamped post_pose" in result
+    assert "bool safety_intervened" in result
+    assert "geometry_msgs/PoseStamped current_pose" in feedback

@@ -35,8 +35,14 @@ from pathlib import Path
 
 import requests
 
-BASE = "http://127.0.0.1:8080/api/v1/map-projects"
-MAP = "trihouse_test_01"
+from p0_map_publish_config import (
+    map_project_name,
+    map_projects_api_base,
+    physical_features_file,
+)
+
+BASE = map_projects_api_base(os.environ)
+MAP = map_project_name(os.environ)
 ROOT = Path(__file__).resolve().parents[1]
 MAPS = ROOT / "control_ui" / "rmf_control_ui" / "data" / "rmf_maps"
 
@@ -98,12 +104,20 @@ if upload_image_name != image_name:
 # 자리가 다른 숫자가 된다. 그래서 지도별 실측 파일을 먼저 찾고, 없을 때만 기본
 # 파일로 되돌아간다. 기본 파일은 trihouse_map_01 에서 잰 값이다.
 IMPORT_DIR = ROOT / "control_ui" / "rmf_control_ui" / "data" / "import"
-features_path = IMPORT_DIR / f"{MAP}_physical_features.{MAP_NAME}.jsonl"
-if not features_path.is_file():
-    features_path = IMPORT_DIR / f"{MAP}_physical_features.jsonl"
-    print(f"[주의] 지도 '{MAP_NAME}' 전용 실측 파일이 없어 기본 파일을 씁니다: {features_path.name}")
+features_override = physical_features_file(os.environ)
+if features_override is not None:
+    features_path = Path(features_override).expanduser().resolve()
+    print(f"[0/4] 실측: {features_path}")
 else:
-    print(f"[0/4] 실측: {features_path.name}")
+    # EN: The legacy facility prefix remains in the measured asset filename;
+    #     the operating map identity is carried inside each JSONL record.
+    # KO: 실측 파일명에는 기존 시설 prefix가 남고, 운영 지도 식별자는 JSONL 레코드가 가진다.
+    features_path = IMPORT_DIR / f"trihouse_test_01_physical_features.{MAP_NAME}.jsonl"
+    if not features_path.is_file():
+        features_path = IMPORT_DIR / "trihouse_test_01_physical_features.jsonl"
+        print(f"[주의] 지도 '{MAP_NAME}' 전용 실측 파일이 없어 기본 파일을 씁니다: {features_path.name}")
+    else:
+        print(f"[0/4] 실측: {features_path.name}")
 SOURCES = [
     ("slam_yaml", f"{MAP_NAME}.yaml", "application/x-yaml", yaml_bytes),
     ("slam_image", upload_image_name, image_mime, image_bytes),

@@ -1,40 +1,51 @@
-"""Pinky 운반 요청을 Nav2 action으로 바꾸는 단일 소유 adapter."""
+"""Pinky 운반 요청을 Nav2 action과 창고 협로 규칙 주행으로 바꾸는 adapter."""
 
+import copy
 import rclpy
-from math import atan2, cos, sin
+from math import atan2, cos, hypot, isfinite, sin
 
 import yaml
 from pathlib import Path
 from uuid import uuid4
-from nav2_msgs.action import NavigateToPose
-from geometry_msgs.msg import Twist
+from builtin_interfaces.msg import Duration
+from nav2_msgs.action import BackUp, DriveOnHeading, NavigateToPose, Spin, Wait
+from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import OccupancyGrid, Odometry
+from sensor_msgs.msg import LaserScan
 from rclpy.action import ActionClient, ActionServer
 from rclpy.action import CancelResponse
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.task import Future
 from std_msgs.msg import Bool, String
-from trihouse_interfaces.action import Dock, ExecuteTransport
+from trihouse_interfaces.action import Dock, ExecuteRecovery, ExecuteTransport
 from trihouse_interfaces.msg import HandoverState, NavigationState, Readiness, RobotHealth, RobotStatus, SafetyState, TaskEvent
+from trihouse_pinky_docking.narrow_zone import (
+    ENTER,
+    EXIT,
+    MotionLimits,
+    NarrowZoneConfigError,
+    NarrowZoneController,
+    Pose2D,
+    load_narrow_zones,
+)
 
 from .workflow import JobCommand, JobPhase, TransportWorkflow
-from .narrow_zone_pilot import (
-    NarrowZoneError,
-    NarrowZonePlan,
-    load_zones,
-    select_zone,
-    step_velocity,
-    verify_pose,
-    zone_containing,
-)
+from .narrow_zone_pilot import verify_pose
+from .narrow_zone_routing import departure_profile, select_approach
 from .arrival import may_report_arrival, within_tolerance
+from .recovery_execution import recovery_admission_block_reason
 
 
 def _complete_once(future: Future) -> None:
     """timer 가 두 번 발화해도 Future 를 한 번만 완료시킨다."""
     if not future.done():
         future.set_result(None)
+
+
+def _duration(seconds: float) -> Duration:
+    whole = int(seconds)
+    return Duration(sec=whole, nanosec=int((seconds - whole) * 1_000_000_000))
 
 
 # 정밀 정차 허용오차. **Nav2 의 goal tolerance 보다 좁으면 안 된다.**
@@ -106,8 +117,11 @@ class FleetNode(Node):
         # action 이 영원히 매달려 있는 것보다 낫다.
         self.declare_parameter('arrival_stop_timeout_s', 2.0)
         self.robot_id = self.get_parameter('robot_id').value
-        self.workflow = TransportWorkflow(robot_id=self.robot_id, expected_map_revision=self.get_parameter('map_revision').value)
+        self.map_revision = self.get_parameter('map_revision').value
+        self.workflow = TransportWorkflow(robot_id=self.robot_id, expected_map_revision=self.map_revision)
         self.ready = False; self.outbox_ready = False; self.emergency = False; self.stationary = False; self.recovery_health_ok = False; self.current_pose: tuple[float, float, float] | None = None
+        self.safety_seen = False
+        self.nearest_lidar_range_m: float | None = None
         # 정밀 정차 판정용 map 프레임 pose. odom 은 프레임이 달라 쓸 수 없다.
         self.map_pose: tuple[float, float, float] | None = None
         self.map_frame: str = ""
@@ -115,11 +129,9 @@ class FleetNode(Node):
         self.event_pub = self.create_publisher(TaskEvent, 'trihouse/task/events', 10)
         self.handover_pub = self.create_publisher(HandoverState, '/trihouse/handover/state', 10)
         self.display_pub = self.create_publisher(String, 'trihouse/display/destination_code', 10)
-        # 규칙 주행 속도는 `cmd_vel` 이 아니라 **Nav2 사슬 앞단**으로 넣는다.
-        #   cmd_vel_nav → velocity_smoother → cmd_vel_smoothed → collision_monitor → cmd_vel
-        # 그래야 가속 제한과 LiDAR 충돌 감시를 그대로 지난다. 원본 narrow3 은 맨 끝
-        # `cmd_vel` 에 직접 쏘아 "사람이 지켜보다가 Ctrl+C" 를 전제했다.
-        self.narrow_cmd_pub = self.create_publisher(Twist, 'cmd_vel_nav', 10)
+        # 규칙 주행은 Nav2와 발행자를 공유하지 않는다. docking 채널로 보내도 실제
+        # 모터 `cmd_vel`은 safety supervisor 하나만 발행한다.
+        self.narrow_cmd_pub = self.create_publisher(Twist, 'cmd_vel_dock', 10)
         self.create_subscription(Readiness, 'trihouse/readiness', self._on_readiness, 10)
         self.create_subscription(SafetyState, 'trihouse/safety/state', self._on_safety, 10)
         self.create_subscription(RobotHealth, 'trihouse/health', self._on_health, 10)
@@ -128,6 +140,7 @@ class FleetNode(Node):
         )
         self.create_subscription(RobotStatus, 'trihouse/status', self._on_status, 10)
         self.create_subscription(Odometry, 'odom', self._on_odom, 10)
+        self.create_subscription(LaserScan, 'scan', self._on_scan, 10)
         # 지도 범위를 알아야 "로봇이 지도 밖"을 판별할 수 있다. map 은 한 번만
         # latch 로 나가므로 transient_local 로 받아야 늦게 뜬 노드도 받는다.
         self.map_bounds: tuple[float, float, float, float] | None = None
@@ -143,10 +156,20 @@ class FleetNode(Node):
         # 협로 존 표. 값이 지도 좌표계에 묶여 있어 지도 이름이 맞지 않으면 거절한다.
         self.declare_parameter('narrow_zones_file', '')
         self.declare_parameter('narrow_map_name', '')
+        # 기본 false. hardware calibration client의 command_source까지 동시에 맞아야
+        # 미실측 후보값으로 한 번의 bounded attempt를 허용한다.
+        self.declare_parameter('allow_narrow_calibration', False)
         self.narrow_zones = self._load_narrow_zones()
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        self.backup_client = ActionClient(self, BackUp, 'backup')
+        self.spin_client = ActionClient(self, Spin, 'spin')
+        self.drive_client = ActionClient(self, DriveOnHeading, 'drive_on_heading')
+        self.wait_client = ActionClient(self, Wait, 'wait')
         self.dock_client = ActionClient(self, Dock, 'trihouse/dock')
         self.nav_goal_handles = {}
+        self.recovery_active = False
+        self.recovery_nav_goal_handle = None
+        self.recovery_cancel_requested = False
         self.server = ActionServer(
             self,
             ExecuteTransport,
@@ -154,11 +177,26 @@ class FleetNode(Node):
             self._execute,
             cancel_callback=self._cancel,
         )
+        self.recovery_server = ActionServer(
+            self,
+            ExecuteRecovery,
+            'trihouse/recovery/execute',
+            self._execute_recovery,
+            cancel_callback=self._cancel_recovery,
+        )
 
     def _on_readiness(self, message: Readiness) -> None:
         self.ready = message.state == Readiness.STATE_READY
 
+    def _on_scan(self, message: LaserScan) -> None:
+        valid = [
+            float(value) for value in message.ranges
+            if isfinite(value) and message.range_min <= value <= message.range_max
+        ]
+        self.nearest_lidar_range_m = min(valid) if valid else None
+
     def _on_safety(self, message: SafetyState) -> None:
+        self.safety_seen = True
         self.emergency = message.state == SafetyState.STATE_EMERGENCY
         if self.emergency:
             self.workflow.enter_emergency(message.detail)
@@ -197,6 +235,12 @@ class FleetNode(Node):
         goal = goal_handle.request
         context = goal.task_context
         result = ExecuteTransport.Result()
+        if self.recovery_active:
+            goal_handle.abort()
+            result.success = False
+            result.code = ExecuteTransport.Result.CODE_REJECTED
+            result.message = 'recovery motion is active'
+            return result
         outbox_block = transport_admission_block_reason(self.outbox_ready)
         if outbox_block is not None:
             goal_handle.abort()
@@ -215,16 +259,72 @@ class FleetNode(Node):
             if rmf_navigation
             else 'TRANSPORT'
         )
+        goal_orientation = goal.dropoff_pose.pose.orientation
+        requested_target = Pose2D(
+            float(goal.dropoff_pose.pose.position.x),
+            float(goal.dropoff_pose.pose.position.y),
+            atan2(
+                2 * (
+                    goal_orientation.w * goal_orientation.z
+                    + goal_orientation.x * goal_orientation.y
+                ),
+                1
+                - 2
+                * (
+                    goal_orientation.y * goal_orientation.y
+                    + goal_orientation.z * goal_orientation.z
+                ),
+            ),
+        )
+        calibration = bool(
+            self.get_parameter('allow_narrow_calibration').value
+            and context.command_source == 'hardware_calibration'
+        )
+        approach = select_approach(
+            self.narrow_zones,
+            goal.destination_code,
+            requested_target,
+            calibration=calibration,
+        )
+        if not approach.allowed:
+            goal_handle.abort()
+            result.success = False
+            result.code = ExecuteTransport.Result.CODE_REJECTED
+            result.message = (
+                f'{approach.reason_code}: {goal.destination_code} — {approach.reason}'
+            )
+            result.completed_at = self.get_clock().now().to_msg()
+            return result
+
         # 존 안에서 다음 이동 명령을 받으면 **먼저 규칙 주행으로 빠져나온다.**
         # 이 경로가 없어서 2026-08-19 에 로봇이 냉동창고에서 나오지 못했다 — Nav2 가
         # 통로 안에서 경로를 못 만들어 복구 동작만 반복했다.
         if self.map_pose is not None:
-            stuck_in = zone_containing(
-                self.narrow_zones, self.map_pose[0], self.map_pose[1]
+            stuck_in = departure_profile(
+                self.narrow_zones, Pose2D(*self.map_pose)
             )
             if stuck_in is not None:
-                left, detail = await self._run_narrow_plan(
-                    NarrowZonePlan(stuck_in, leaving=True)
+                exit_readiness = stuck_in.direction_readiness_code(EXIT)
+                if exit_readiness != 'READY' and not (
+                    calibration and stuck_in.calibration_ready(EXIT)
+                ):
+                    goal_handle.abort()
+                    result.success = False
+                    result.code = ExecuteTransport.Result.CODE_REJECTED
+                    result.message = (
+                        f'{exit_readiness}: {stuck_in.destination_code} '
+                        f'탈출 profile — {stuck_in.readiness_reason}'
+                    )
+                    result.completed_at = self.get_clock().now().to_msg()
+                    return result
+                left, detail = await self._run_narrow_controller(
+                    NarrowZoneController(
+                        stuck_in,
+                        direction=EXIT,
+                        limits=self._narrow_limits(),
+                        calibration=calibration,
+                    ),
+                    goal_handle,
                 )
                 if not left:
                     goal_handle.abort()
@@ -243,7 +343,11 @@ class FleetNode(Node):
                         return result
                     escaped, distance, yaw_error = verify_pose(
                         self.map_pose,
-                        stuck_in.exit_target,
+                        (
+                            stuck_in.exit_target.x,
+                            stuck_in.exit_target.y,
+                            stuck_in.exit_target.yaw,
+                        ),
                         xy_tolerance_m=PRECISE_STOP_XY_TOLERANCE_M,
                         yaw_tolerance_rad=PRECISE_STOP_YAW_TOLERANCE_RAD,
                     )
@@ -330,13 +434,19 @@ class FleetNode(Node):
             return result
         # 협로 도크면 Nav2 는 **존 진입점까지만** 데려간다. 통로 안은 규칙 주행이
         # 맡는다 — 통과 여유 0.03 m 에 AMCL 오차 0.08~0.11 m 라 Nav2 로는 못 지난다.
-        narrow_zone = select_zone(self.narrow_zones, goal.destination_code)
-        nav_goal = NavigateToPose.Goal(); nav_goal.pose = goal.dropoff_pose
+        narrow_zone = approach.profile
+        nav_goal = NavigateToPose.Goal()
+        nav_goal.pose = copy.deepcopy(goal.dropoff_pose)
         if narrow_zone is not None:
             nav_goal.pose.header.frame_id = 'map'
-            entry_x, entry_y, entry_yaw = narrow_zone.entry_pose
+            assert approach.nav_target is not None
+            entry_x = approach.nav_target.x
+            entry_y = approach.nav_target.y
+            entry_yaw = approach.nav_target.yaw
             nav_goal.pose.pose.position.x = entry_x
             nav_goal.pose.pose.position.y = entry_y
+            nav_goal.pose.pose.orientation.x = 0.0
+            nav_goal.pose.pose.orientation.y = 0.0
             nav_goal.pose.pose.orientation.z = sin(entry_yaw / 2.0)
             nav_goal.pose.pose.orientation.w = cos(entry_yaw / 2.0)
             self.get_logger().info(
@@ -385,8 +495,14 @@ class FleetNode(Node):
                     narrow_zone.marker_id, goal
                 )
             else:
-                ran, narrow_detail = await self._run_narrow_plan(
-                    NarrowZonePlan(narrow_zone, leaving=False)
+                ran, narrow_detail = await self._run_narrow_controller(
+                    NarrowZoneController(
+                        narrow_zone,
+                        direction=ENTER,
+                        limits=self._narrow_limits(),
+                        calibration=calibration,
+                    ),
+                    goal_handle,
                 )
             if not ran:
                 self._publish_event(
@@ -403,7 +519,9 @@ class FleetNode(Node):
             # 시퀀스가 "다 했다" 고 해도 그 자리가 도크라는 보장이 없다. 도크의 실측
             # 좌표·방향과 대조하는 것이 유일한 근거다. 방향이 틀리면 바구니가 반대쪽을
             # 본다 — 자리가 맞아도 팔이 물건을 넣지 못한다.
-            docked, distance, yaw_error = self._verify_narrow_dock(goal)
+            docked, distance, yaw_error = self._verify_narrow_target(
+                narrow_zone.dock_target
+            )
             self.get_logger().info(
                 f'{goal.destination_code}: 협로 진입 후 도크와 거리 {distance:.3f} m, '
                 f'yaw 차 {yaw_error:.3f} rad'
@@ -463,6 +581,141 @@ class FleetNode(Node):
             goal_handle.abort(); result.success = False; result.code = ExecuteTransport.Result.CODE_NAVIGATION_FAILED; result.message = arrived.detail
         result.completed_at = self.get_clock().now().to_msg()
         return result
+
+    def _recovery_pose(self) -> PoseStamped:
+        message = PoseStamped()
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.header.frame_id = 'map'
+        if self.map_pose is not None:
+            x_m, y_m, yaw_rad = self.map_pose
+            message.pose.position.x = x_m
+            message.pose.position.y = y_m
+            message.pose.orientation.z = sin(yaw_rad / 2.0)
+            message.pose.orientation.w = cos(yaw_rad / 2.0)
+        return message
+
+    async def _run_recovery_nav_action(self, client: ActionClient, goal: object) -> bool:
+        if not client.wait_for_server(timeout_sec=2.0):
+            return False
+        handle = await client.send_goal_async(goal)
+        if not handle.accepted:
+            return False
+        self.recovery_nav_goal_handle = handle
+        outcome = await handle.get_result_async()
+        self.recovery_nav_goal_handle = None
+        return outcome.status == 4
+
+    async def _execute_recovery(self, goal_handle: object) -> ExecuteRecovery.Result:
+        """Execute only the bounded action already bound to an operator approval."""
+        goal = goal_handle.request
+        result = ExecuteRecovery.Result()
+        result.pre_pose = self._recovery_pose()
+        clearance_before = self.nearest_lidar_range_m
+        block = recovery_admission_block_reason(
+            goal,
+            robot_id=self.robot_id,
+            map_revision=self.map_revision,
+            ready=self.ready,
+            recovery_health_ok=self.recovery_health_ok,
+            safety_available=self.safety_seen,
+            emergency=self.emergency,
+            stationary=self.stationary,
+            transport_active=self.workflow.phase is not JobPhase.IDLE or self.recovery_active,
+        )
+        if block is not None:
+            goal_handle.abort()
+            result.success = False
+            result.code = ExecuteRecovery.Result.CODE_REJECTED
+            result.status = 'rejected'
+            result.detail = block
+            result.post_pose = self._recovery_pose()
+            result.clearance_before_m = (
+                clearance_before if clearance_before is not None else -1.0
+            )
+            result.clearance_after_m = result.clearance_before_m
+            result.safety_intervened = self.emergency
+            result.terminal = True
+            return result
+
+        started_ns = self.get_clock().now().nanoseconds
+        self.recovery_active = True
+        self.recovery_cancel_requested = False
+        succeeded = False
+        try:
+            coord = goal.canonical_coord
+            if goal.selected_skill_id == ExecuteRecovery.Goal.SKILL_WAIT_REOBSERVE:
+                nav_goal = Wait.Goal()
+                nav_goal.time = _duration(1.0)
+                succeeded = await self._run_recovery_nav_action(self.wait_client, nav_goal)
+            elif goal.selected_skill_id == ExecuteRecovery.Goal.SKILL_BACKUP:
+                nav_goal = BackUp.Goal()
+                nav_goal.target.x = -abs(float(coord.x))
+                nav_goal.speed = 0.03
+                nav_goal.time_allowance = _duration(10.0)
+                succeeded = await self._run_recovery_nav_action(self.backup_client, nav_goal)
+            elif goal.selected_skill_id in (
+                ExecuteRecovery.Goal.SKILL_REROUTE_LEFT,
+                ExecuteRecovery.Goal.SKILL_REROUTE_RIGHT,
+            ):
+                heading = atan2(float(coord.y), float(coord.x))
+                spin_goal = Spin.Goal()
+                spin_goal.target_yaw = heading
+                spin_goal.time_allowance = _duration(10.0)
+                spun = await self._run_recovery_nav_action(self.spin_client, spin_goal)
+                if spun:
+                    drive_goal = DriveOnHeading.Goal()
+                    drive_goal.target.x = hypot(float(coord.x), float(coord.y))
+                    drive_goal.speed = 0.03
+                    drive_goal.time_allowance = _duration(10.0)
+                    succeeded = await self._run_recovery_nav_action(self.drive_client, drive_goal)
+            elif goal.selected_skill_id == ExecuteRecovery.Goal.SKILL_REJOIN and goal.has_map_target:
+                nav_goal = NavigateToPose.Goal()
+                nav_goal.pose = copy.deepcopy(goal.map_target)
+                succeeded = await self._run_recovery_nav_action(self.nav_client, nav_goal)
+        finally:
+            self.recovery_active = False
+
+        result.post_pose = self._recovery_pose()
+        # EN: -1 is explicit "not observed"; it must never be treated as safe clearance.
+        # KO: -1은 "관측되지 않음"이며 안전한 여유 거리로 해석하면 안 된다.
+        result.clearance_before_m = clearance_before if clearance_before is not None else -1.0
+        result.clearance_after_m = (
+            self.nearest_lidar_range_m if self.nearest_lidar_range_m is not None else -1.0
+        )
+        result.elapsed_seconds = (
+            self.get_clock().now().nanoseconds - started_ns
+        ) / 1_000_000_000
+        result.safety_intervened = self.emergency
+        result.terminal = True
+        if self.recovery_cancel_requested:
+            goal_handle.canceled()
+            result.success = False
+            result.code = ExecuteRecovery.Result.CODE_CANCELED
+            result.status = 'cancelled'
+            result.detail = 'approved recovery cancelled'
+        elif succeeded and not self.emergency:
+            goal_handle.succeed()
+            result.success = True
+            result.code = ExecuteRecovery.Result.CODE_OK
+            result.status = 'succeeded'
+            result.detail = 'approved recovery completed'
+        else:
+            goal_handle.abort()
+            result.success = False
+            result.code = (
+                ExecuteRecovery.Result.CODE_SAFETY_VETO
+                if self.emergency else ExecuteRecovery.Result.CODE_NAV2_FAILED
+            )
+            result.status = 'failed'
+            result.detail = 'Safety veto' if self.emergency else 'Nav2 recovery action failed'
+        return result
+
+    def _cancel_recovery(self, _: object) -> CancelResponse:
+        """Propagate cancellation to the currently executing Nav2 behavior."""
+        self.recovery_cancel_requested = True
+        if self.recovery_nav_goal_handle is not None:
+            self.recovery_nav_goal_handle.cancel_goal_async()
+        return CancelResponse.ACCEPT
 
     def _cancel(self, goal_handle: object) -> CancelResponse:
         """RMF stop을 현재 Nav2 goal 취소로 전달한다."""
@@ -527,25 +780,13 @@ class FleetNode(Node):
         future.add_done_callback(lambda _: self.destroy_timer(timer))
         return future
 
-    def _verify_narrow_dock(self, goal: ExecuteTransport.Goal) -> tuple[bool, float, float]:
-        """규칙 주행이 끝난 자리가 도크인가. 바구니 방향까지 본다.
-
-        `dropoff_pose` 는 원장이 준 도크의 실측 좌표와 방향이다. 그 방향은 실측 기록에
-        **"map_yaw=pinky 방향(바구니 방향 판단용, 중요)"** 으로 적혀 있다 — 로봇이 그
-        방향을 향하고 있어야 뒤쪽 바구니가 선반을 향한다. 자리만 맞고 방향이 반대면
-        팔이 물건을 넣지 못한다.
-        """
-        if self.map_pose is None or self.map_frame != 'map':
+    def _verify_narrow_target(self, target: Pose2D | None) -> tuple[bool, float, float]:
+        """규칙 진입/탈출 완료 pose를 실측 target과 비교한다."""
+        if self.map_pose is None or self.map_frame != 'map' or target is None:
             return False, float('inf'), float('inf')
-        orientation = goal.dropoff_pose.pose.orientation
-        target_yaw = atan2(
-            2 * (orientation.w * orientation.z + orientation.x * orientation.y),
-            1 - 2 * (orientation.y * orientation.y + orientation.z * orientation.z),
-        )
-        position = goal.dropoff_pose.pose.position
         return verify_pose(
             self.map_pose,
-            (position.x, position.y, target_yaw),
+            (target.x, target.y, target.yaw),
             xy_tolerance_m=PRECISE_STOP_XY_TOLERANCE_M,
             yaw_tolerance_rad=PRECISE_STOP_YAW_TOLERANCE_RAD,
         )
@@ -581,7 +822,7 @@ class FleetNode(Node):
         )
 
     def _load_narrow_zones(self) -> dict:
-        """협로 존 표를 읽는다. 없으면 빈 표 — 지금까지처럼 Nav2 가 끝까지 간다.
+        """협로 catalog를 읽는다. disabled 항목도 남겨 Nav2 폴백을 막는다.
 
         지도 이름이 맞지 않으면 **적재하지 않는다.** 값이 그 지도 좌표계에 묶여 있어,
         다른 지도에서 쓰면 로봇이 엉뚱한 자리에서 후진한다.
@@ -599,13 +840,15 @@ class FleetNode(Node):
         map_name = str(self.get_parameter('narrow_map_name').value or '').strip()
         try:
             document = yaml.safe_load(Path(path).read_text(encoding='utf-8'))
-            zones = load_zones(document, map_name=map_name)
-        except (OSError, yaml.YAMLError, NarrowZoneError) as error:
+            zones = load_narrow_zones(document, map_name=map_name)
+        except (OSError, yaml.YAMLError, NarrowZoneConfigError) as error:
             # 조용히 넘어가면 로봇이 협로에 Nav2 로 들어가려다 갇힌다. 크게 남긴다.
             self.get_logger().error(f'협로 존 표를 쓸 수 없습니다: {error}')
             return {}
         self.get_logger().info(
-            f'협로 존 {len(zones)}개 적재: {", ".join(sorted(zones))}'
+            f'협로 profile {len(zones)}개 적재 '
+            f'(운영 가능 {sum(profile.executable for profile in zones.values())}개): '
+            f'{", ".join(sorted(zones))}'
         )
         return zones
 
@@ -629,46 +872,53 @@ class FleetNode(Node):
             return False, f'ArUco 도킹 실패({dock_result.code}): {dock_result.message}'
         return True, dock_result.message
 
-    async def _run_narrow_plan(self, plan: NarrowZonePlan) -> tuple[bool, str]:
-        """시퀀스를 스텝 하나씩 실행한다. 되먹임이 없으므로 중단 조건이 안전의 전부다."""
-        label = 'exit' if plan.leaving else 'enter'
-        while not plan.done:
-            kind, value = plan.next_step()
-            started = self.map_pose
-            if started is None:
+    @staticmethod
+    def _narrow_limits() -> MotionLimits:
+        return MotionLimits(
+            max_linear_mps=NARROW_MAX_LINEAR_MPS,
+            max_angular_rps=NARROW_MAX_ANGULAR_RPS,
+            linear_tolerance_m=NARROW_POSITION_TOLERANCE_M,
+            angular_tolerance_rad=NARROW_YAW_TOLERANCE_RAD,
+            step_timeout_s=NARROW_STEP_TIMEOUT_S,
+        )
+
+    async def _run_narrow_controller(
+        self, controller: NarrowZoneController, goal_handle: object
+    ) -> tuple[bool, str]:
+        """한 번의 진입/탈출을 실행하고 모든 terminal 경로에서 0 속도를 보낸다."""
+        label = controller.direction
+        if self.map_pose is None:
+            self._stop_narrow_drive()
+            return False, 'map pose 를 모른다'
+        now_s = self.get_clock().now().nanoseconds / 1e9
+        if not controller.begin(Pose2D(*self.map_pose), now_s=now_s):
+            self._stop_narrow_drive()
+            return False, str(controller.failure)
+
+        while not controller.is_complete:
+            if goal_handle.is_cancel_requested:
+                controller.cancel('navigation canceled')
+            elif self.emergency:
+                controller.cancel('안전 정지')
+            elif self.map_pose is None:
+                controller.cancel('map pose 를 잃었다')
+            if controller.failure is not None:
                 self._stop_narrow_drive()
-                return False, 'map pose 를 모른다'
-            deadline = self.get_clock().now().nanoseconds / 1e9 + NARROW_STEP_TIMEOUT_S
-            self.get_logger().info(
-                f'협로 {label} {plan.progress} — {kind} {value}'
-            )
-            while True:
-                if self.emergency:
-                    self._stop_narrow_drive()
-                    return False, '안전 정지'
-                if self.get_clock().now().nanoseconds / 1e9 > deadline:
-                    self._stop_narrow_drive()
-                    return False, f'{kind} 스텝이 {NARROW_STEP_TIMEOUT_S:.0f}초를 넘겼다'
-                current = self.map_pose
-                if current is None:
-                    self._stop_narrow_drive()
-                    return False, 'map pose 를 잃었다'
-                linear, angular, done = step_velocity(
-                    kind, value, current, started,
-                    max_linear=NARROW_MAX_LINEAR_MPS,
-                    max_angular=NARROW_MAX_ANGULAR_RPS,
-                    yaw_tolerance=NARROW_YAW_TOLERANCE_RAD,
-                    position_tolerance=NARROW_POSITION_TOLERANCE_M,
-                    zone=plan.zone.geometry,
-                )
-                if done:
-                    self._stop_narrow_drive()
-                    break
-                command = Twist()
-                command.linear.x = linear
-                command.angular.z = angular
-                self.narrow_cmd_pub.publish(command)
-                await self._sleep(0.05)
+                return False, controller.failure
+
+            current = Pose2D(*self.map_pose)
+            now_s = self.get_clock().now().nanoseconds / 1e9
+            command_value = controller.advance(current, now_s=now_s)
+            if controller.failure is not None:
+                self._stop_narrow_drive()
+                return False, controller.failure
+            message = Twist()
+            message.linear.x = command_value.linear_x
+            message.angular.z = command_value.angular_z
+            self.narrow_cmd_pub.publish(message)
+            await self._sleep(0.05)
+
+        self._stop_narrow_drive()
         return True, f'협로 {label} 완료'
 
     def _at_precise_goal(self, goal: ExecuteTransport.Goal) -> bool:

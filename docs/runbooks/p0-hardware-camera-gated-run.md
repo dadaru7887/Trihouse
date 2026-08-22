@@ -1,12 +1,10 @@
 # P0 실물 촬영용 게이트 런북 — 카메라 송수신 → 1대 → 2대
 
 이 문서는 **앞 단계가 PASS일 때만 다음 단계로 넘어가는** 현장 실행 순서다.
-상세한 주문/DB 판정은 [p0-hardware-quick-run.md](p0-hardware-quick-run.md), 코드상
-공백의 근거는
-[2026-08-20-hardware-readiness-gaps.md](../claude/2026-08-20-hardware-readiness-gaps.md),
-영상 구현 위치는
-[2026-08-20-video-streaming-implementation-map.md](../claude/2026-08-20-video-streaming-implementation-map.md)를
-따른다.
+상세한 주문/DB 판정은 [p0-hardware-quick-run.md](p0-hardware-quick-run.md), 현재
+runtime 연결 상태는
+[SR runtime wiring map](../validation/2026-08-20-sr-runtime-wiring-map.md), 영상 계약은
+[vision data flow](../architecture/vision_data_flow.md)를 따른다.
 
 목표 순서는 다음과 같다.
 

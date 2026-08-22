@@ -59,3 +59,29 @@ def test_capacity_is_a_soft_safety_gate_for_new_work(tmp_path: Path):
     assert not outbox.is_full
     outbox.enqueue({"event_id": "event-1"})
     assert outbox.is_full
+
+
+def test_recovery_command_identity_and_result_survive_gateway_restart(tmp_path: Path):
+    path = tmp_path / "events.sqlite3"
+    outbox = EventOutbox(path)
+    command_id = "11111111-1111-4111-8111-111111111111"
+    outbox.begin_recovery(command_id, "a" * 64, "runtime-1")
+
+    reopened = EventOutbox(path)
+    assert reopened.recovery_command(command_id) == {
+        "proposal_sha256": "a" * 64,
+        "status": "executing",
+        "runtime_id": "runtime-1",
+        "result_payload": None,
+    }
+
+    result = {"type": "recovery_execution_result", "success": True}
+    reopened.complete_recovery(command_id, result)
+    assert EventOutbox(path).recovery_command(command_id)["result_payload"] == result
+
+
+def test_recovery_command_hash_is_immutable(tmp_path: Path):
+    outbox = EventOutbox(tmp_path / "events.sqlite3")
+    outbox.begin_recovery("command-1", "a" * 64, "runtime-1")
+    with pytest.raises(ValueError, match="immutable"):
+        outbox.begin_recovery("command-1", "b" * 64, "runtime-1")

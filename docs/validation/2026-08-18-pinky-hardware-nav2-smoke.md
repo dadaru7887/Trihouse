@@ -10,9 +10,8 @@
 | 온보드 패키지 | `trihouse_pinky_io` / `_safety` / `_fleet` / `_bringup` 가 실제 값을 낸다 |
 | 카메라 | RTSP 가 MediaMTX 에 도달하고 `stream_health` 가 healthy |
 
-확인하지 **않는** 것: 주문 → job → RMF dispatch → 완주. 그것은
-[2026-08-18-p0-manual-test.md](2026-08-18-p0-manual-test.md) 와
-[sim-to-hardware 계획서 Task 7](../claude/2026-08-18-sim-to-hardware-p0-order-completion.md) 이 다룬다.
+확인하지 **않는** 것: 주문 → job → RMF dispatch → 완주. 전체 주문 완주 검증은
+[P0 실기 빠른 실행 런북](../runbooks/p0-hardware-quick-run.md)이 다룬다.
 
 이 테스트에서 `control_link_offline` 오류가 나는 것은 **정상이다.** 관제를 안 켰기
 때문이다. 그 오류만 남고 나머지가 비어 있으면 통과다.

@@ -848,4 +848,4 @@ grep -aE '\[(ERROR|WARN)\]' /tmp/hw.log | tail -30 | cut -c1-200
 - `docs/runbooks/p0-new-map-waypoint-measurement.md`
 - `docs/runbooks/p0-narrow-zone-measurement.md`
 - `docs/validation/2026-08-18-pinky-hardware-nav2-smoke.md`
-- `docs/claude/p0-stack-reference.md`
+- `docs/validation/2026-08-20-sr-runtime-wiring-map.md`
