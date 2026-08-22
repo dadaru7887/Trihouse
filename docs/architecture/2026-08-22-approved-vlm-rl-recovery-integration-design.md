@@ -45,7 +45,7 @@ Pinky가 Nav2의 기본 재계획과 recovery로 해결하지 못한 사람·장
 | 3 | `WAIT_REOBSERVE` | `wait` |
 | 4 | `REJOIN` | `rejoin` |
 
-`skill`은 정책이 고르는 구체적인 방향 포함 행동이고 `action_type`은 DB 집계·상태기계가 사용하는 행동 계열이다. 좌·우 detour는 서로 다른 skill이므로 어느 항목도 삭제하지 않는다.
+`skill`은 정책이 고르는 구체적인 방향 포함 행동이고 `action_type`은 DB 집계·상태기계가 사용하는 행동 계열이다. `detour`는 ROS action 이름이 아니며 좌·우를 합산하기 위한 DB 분류다. 혼동을 줄이기 위해 코드 상수는 `SKILL_TO_ACTION_FAMILY`로 명명하고, proposal과 실행 기록에는 `selected_skill_id`와 `selected_skill_name`을 필수로 저장한다. 좌·우 detour는 서로 다른 skill이므로 어느 항목도 삭제하지 않는다.
 
 ### 2.3 Coord V1
 
@@ -112,7 +112,7 @@ Pinky camera
 
 ## 5. Gateway 승인과 DB
 
-`004_recovery_proposals_and_approvals.sql`은 immutable baseline 이후 추가 migration으로 만든다. proposal에는 episode, step, `device_id`, named pre-state, 전체 perception evidence, policy/VLM lineage, canonical candidates, 선택 후보, proposal hash를 기록한다. approval에는 `W-CONTROL-01`, 결정, 시각, 사유를 기록한다.
+`004_recovery_proposals_and_approvals.sql`은 immutable baseline 이후 추가 migration으로 만든다. proposal에는 episode, step, `device_id`, named pre-state, 전체 perception evidence, policy/VLM lineage, canonical candidates, `selected_skill_id`, `selected_skill_name`, 선택 후보, proposal hash를 기록한다. approval에는 `W-CONTROL-01`, 결정, 시각, 사유를 기록한다. 기존 `recovery_steps.action_type='detour'`는 집계용 action family로 유지하고 방향 판단에는 selected skill을 사용한다.
 
 - 5080은 proposal 생성과 completion 제출만 할 수 있다.
 - 승인 endpoint는 DB role이 `safety_manager`인 작업자만 허용한다.
@@ -133,7 +133,9 @@ ROS namespace는 선택적이다. launch argument 기본값은 빈 문자열이�
 
 ## 7. Safety gate
 
-Safety gate는 정책 후보가 실행되기 전에 형식, 정차, 센서 freshness, recovery envelope, costmap, footprint, Nav2 path, 사람 점유를 순서대로 검사하는 사전 차단 계층이다. 학습 탐색 다양성을 위해 원본에서 꺼졌지만 운영자 승인 실물 모드에서는 비활성화를 허용하지 않는다.
+Safety gate는 정책 후보가 실행되기 전에 형식, 정차, 센서 freshness, recovery envelope, costmap, footprint, Nav2 path, 사람 점유를 순서대로 검사하는 사전 차단 계층이다. `--safety-gate-enabled=true|false` CLI argument와 `VLM_RL_SAFETY_GATE_ENABLED` 환경 변수로 설정하고 기본값은 `true`다.
+
+`false`는 `runtime_mode=training_exploration`일 때만 허용한다. 이 모드에서도 운영자 개별 승인, Nav2 실행 중 충돌 검사, Safety Supervisor의 최종 veto, bounded motion은 유지하며 gate 비활성화 사실을 transition metadata와 operation event에 기록한다. `runtime_mode=physical`에서 false를 받으면 프로세스는 기동을 거절한다.
 
 사전 gate 통과는 실행 허가의 필요조건일 뿐 최종 안전 보장이 아니다. 실행 중 local costmap/Nav2 controller와 Safety Supervisor가 계속 veto할 수 있으며, emergency latch는 별도 관리자 절차 없이는 해제되지 않는다.
 
@@ -149,7 +151,7 @@ Safety gate는 정책 후보가 실행되기 전에 형식, 정차, 센서 fresh
 
 1. State V1 named/vector round-trip과 잘못된 범위·schema 거절
 2. 기존 `dy` 무시와 REJOIN frame mismatch를 재현하는 failing tests
-3. canonical motion plan과 동일 target의 Safety/executor 사용
+3. canonical motion plan과 동일 target의 Safety/executor 사용 및 runtime별 Safety gate argument 제한
 4. proposal·approval·outbox·idempotency의 Gateway/MySQL 통합 테스트
 5. optional namespace와 `ExecuteRecovery` ROS contract/launch 테스트
 6. fake detector/VLM/policy/Pinky를 사용한 Docker 종단 테스트
