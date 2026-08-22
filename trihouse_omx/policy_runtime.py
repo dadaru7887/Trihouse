@@ -40,7 +40,10 @@ try:  # 위와 같은 이유 — predict_action은 lerobot.common.control_utils�
 except ImportError:
     from lerobot.common.control_utils import predict_action
     from lerobot.policies import prepare_observation_for_inference
-from lerobot.utils.utils import get_safe_torch_device
+try:  # 위와 같은 이유 — lerobot.utils.utils -> lerobot.utils.device_utils.
+    from lerobot.utils.utils import get_safe_torch_device
+except ImportError:
+    from lerobot.utils.device_utils import get_safe_torch_device
 
 
 def build_dataset_features(robot: OmxFollower) -> dict:
