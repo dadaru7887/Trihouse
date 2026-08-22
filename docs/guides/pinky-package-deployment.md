@@ -314,3 +314,238 @@ map:=<map-yaml-path>
 
 이 조건을 만족하기 전에는 **코드 배포와 빌드 성공**만 확인된 것이며 **실물 주행 준비
 완료**로 판정하지 않는다.
+
+## 12. 업데이트 빌드 전 실행 프로세스 정리
+
+Python 노드는 시작할 때 모듈을 메모리에 읽는다. 실행 중에 소스 전송과 `colcon build`를
+마쳐도 기존 프로세스는 이전 코드를 계속 사용한다. 업데이트 검증 전에는 Pinky launch를
+정확히 하나만 남기거나 모두 종료한 뒤 새로 시작해야 한다.
+
+```bash
+pgrep -af '[r]os2 launch trihouse_pinky_bringup'
+```
+
+동일 launch가 둘 이상이면 먼저 foreground 터미널의 launch를 `Ctrl+C`로 종료한다.
+부모 launch가 사라졌는데 자식 노드가 남았는지도 확인한다.
+
+```bash
+pgrep -af \
+  '[b]attery_adapter|[r]eadiness_checker|[s]tatus_node|[f]leet_node|[r]ecovery_health'
+```
+
+고아 프로세스가 여러 개이거나 Fast DDS SHM 잠금 오류까지 반복되면 일부 PID를 추측해
+정리하지 않는다. 로봇을 정지시키고 주변을 비운 뒤 Pinky를 재부팅하는 것이 안전하다.
+
+```bash
+sudo reboot
+```
+
+재접속 후 위 두 `pgrep` 결과가 비어 있는지 확인한다. launch를 background와 foreground로
+동시에 시작하지 않는다.
+
+## 13. 실기 런타임 환경과 네트워크 값 확인
+
+Pinky의 모든 새 터미널에서 underlay부터 overlay 순서로 source한다. Fast DDS 공유 메모리
+포트가 이전 비정상 종료와 충돌할 수 있으므로 실기 점검에서는 UDPv4 transport를 명시한다.
+
+```bash
+source /opt/ros/<ros-distro>/setup.bash
+source <vendor-workspace>/install/setup.bash
+source <pinky-home>/trihouse_ws/install/setup.bash
+
+export ROS_DOMAIN_ID=<control-pc와-같은-domain-id>
+export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export FASTDDS_BUILTIN_TRANSPORTS=UDPv4
+```
+
+개발 PC와 Pinky가 같은 서브넷이고 실제 관제 주소로 통신하는지 확인한다.
+
+개발 PC:
+
+```bash
+ip -br addr
+ip route get <pinky-ip>
+```
+
+Pinky:
+
+```bash
+ip -br addr
+nc -vz <control-pc-ip> <control-tcp-port>
+```
+
+Docker/FMS가 특정 host IP에 bind되었다면 `control_host`에도 그 현재 IP를 사용한다. 유선과
+Wi-Fi가 바뀐 뒤 과거 IP를 재사용하지 않는다.
+
+## 14. 단일 Pinky 실기 launch
+
+아래는 namespace 없는 단일 Pinky smoke test 템플릿이다. 지도, revision, 관제 주소는
+각 장비와 현재 publish artifact에서 확인한 값으로 바꾼다.
+
+```bash
+NAV2_PARAMS="$(ros2 pkg prefix pinky_navigation)/share/pinky_navigation/params/nav2_params.yaml"
+
+ros2 launch trihouse_pinky_bringup trihouse_pinky.launch.py \
+  namespace:=/ \
+  robot_id:=<robot-id> \
+  map:=<map-yaml-path> \
+  map_revision:=<published-map-revision> \
+  nav2_params_file:="$NAV2_PARAMS" \
+  control_host:=<control-pc-ip> \
+  control_port:=<control-tcp-port> \
+  vision_enabled:=false \
+  docking_enabled:=false
+```
+
+이 launch는 OMX adapter를 시작하지 않는다. OMX는 별도 장비에서 실행하고 관제가 작업을
+연결한다. `namespace:=/`는 Trihouse launch가 벤더에 빈 namespace로 정규화하므로 벤더
+URDF frame이 `//base_link`처럼 만들어지지 않아야 한다.
+
+다중 Pinky에서 non-root namespace를 쓸 때는 Nav2 params의 root key, RMF adapter 토픽,
+지도 revision과 `robot_id` 매핑을 같은 namespace 계약으로 생성해야 한다. 단일 smoke test
+값을 그대로 복사하지 않는다.
+
+## 15. TF, localization과 Nav2 검증
+
+정적 TF에 이중 slash가 없는지 확인한다.
+
+```bash
+timeout 8 ros2 topic echo \
+  /tf_static tf2_msgs/msg/TFMessage \
+  --qos-reliability reliable \
+  --qos-durability transient_local \
+  --once | grep -E 'frame_id:|child_frame_id:'
+```
+
+정상 frame은 `base_footprint`, `base_link`, `rplidar_link`처럼 slash 없이 나온다.
+`//base_link`가 하나라도 있으면 주행하지 말고 설치된
+`trihouse_pinky_bringup`가 최신인지 다시 확인한다.
+
+localization lifecycle을 확인한다.
+
+```bash
+for node in map_server amcl
+do
+  echo "=== /$node ==="
+  timeout 8 ros2 lifecycle get "/$node"
+done
+```
+
+둘 다 `active [3]`일 때만 지도에서 실측한 현재 위치를 발행한다.
+
+```bash
+ros2 topic pub --once \
+  --qos-reliability best_effort \
+  /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
+  '{header: {frame_id: "map"}, pose: {pose: {position: {x: <x>, y: <y>, z: 0.0}, orientation: {z: <qz>, w: <qw>}}}}'
+```
+
+첫 discovery 경고가 아니라 실제 변환을 기다린다.
+
+```bash
+timeout 10 ros2 run tf2_ros tf2_echo map base_footprint 2>&1 \
+  | grep -m1 'Translation:'
+```
+
+Nav2 핵심 노드는 모두 `active [3]`이어야 한다.
+
+```bash
+for node in controller_server planner_server bt_navigator velocity_smoother
+do
+  echo "=== /$node ==="
+  timeout 8 ros2 lifecycle get "/$node"
+done
+```
+
+## 16. LiDAR QoS와 배터리 adapter 검증
+
+Pinky LiDAR는 `/scan`을 `BEST_EFFORT`로 발행한다. Trihouse readiness, status, fleet,
+recovery 노드도 sensor-data QoS로 구독해야 한다.
+
+```bash
+ros2 topic info /scan --verbose
+```
+
+`sllidar_node` 발행자와 위 네 Trihouse 구독자의 Reliability가 `BEST_EFFORT`인지 확인한다.
+구독자가 `RELIABLE`이면 코드는 전송됐어도 이전 프로세스가 실행 중일 수 있으므로 12절부터
+다시 수행한다.
+
+벤더 `/batt_state`는 전압만 채우고 `percentage: nan`, `present: false`를 낼 수 있다.
+Trihouse battery adapter는 별도 `/battery/percent`를 합쳐 `/trihouse/battery`를 만든다.
+벤더 퍼센트는 5초 주기이므로 launch 후 최소 7초 기다린다.
+
+```bash
+sleep 7
+timeout 12 ros2 topic echo /battery/percent std_msgs/msg/Float32 --once
+timeout 12 ros2 topic echo /trihouse/battery sensor_msgs/msg/BatteryState --once
+```
+
+`/trihouse/battery`의 정상 조건은 다음과 같다.
+
+- `voltage`가 유한한 양수
+- `percentage`가 `0.0`부터 `1.0` 사이의 유한한 값
+- `present: true`
+
+`percentage: 0.68`은 68%다. 임의의 퍼센트를 발행해 정책을 우회하지 않는다. 10% 이하는
+복귀 필요 상태이고, 20% 이하에서는 운영 정책을 확인한 뒤 제한 작업만 수행한다.
+
+## 17. 최종 Pinky readiness와 안전 판정
+
+```bash
+timeout 10 ros2 topic echo \
+  /trihouse/readiness trihouse_interfaces/msg/Readiness --once
+```
+
+합격값은 `state: 1`, `missing_interfaces: []`다.
+
+```bash
+timeout 10 ros2 topic echo \
+  /trihouse/status trihouse_interfaces/msg/RobotStatus --once
+```
+
+주문을 받을 수 있는 Pinky의 합격 조건은 다음과 같다.
+
+- `frame_id: map`
+- 실행 중인 지도와 동일한 `map_revision`
+- `telemetry_valid: true`
+- `execution_ready: true`
+- `dispatchable: true`
+- `ready: true`
+- `errors: []`
+- `battery_policy.ready: true`
+- `safety.detail: clear`
+
+모터 배선은 Nav2의 `/cmd_vel`을 safety supervisor가 받아 `/cmd_vel_safe`로 내보내고,
+벤더 `pinky_bringup`만 최종 토픽을 구독해야 한다.
+
+```bash
+ros2 topic info /cmd_vel --verbose
+ros2 topic info /cmd_vel_safe --verbose
+```
+
+`/cmd_vel_safe`의 발행자는 `safety_supervisor` 하나, 구독자는 `pinky_bringup` 하나여야 한다.
+
+## 18. 이 문서의 완료 경계
+
+1절부터 17절까지 통과하면 **다른 Pinky에 Trihouse 패키지를 배포하고 Pinky 자체를
+주문 수신 가능한 상태까지 검증**할 수 있다. 장비마다 다음 값은 반드시 다시 측정하거나
+조회한다.
+
+- Pinky 사용자·홈·IP·vendor workspace
+- ROS domain과 관제 PC IP/port
+- `robot_id`와 namespace
+- 지도 경로, publish revision, 초기 pose
+- 배터리와 센서 실측 상태
+
+이 문서 하나가 전체 주문 시스템을 기동하는 문서는 아니다. 다음은 관제 PC 또는 별도
+장비의 책임이며 Pinky 배포 범위 밖이다.
+
+- MySQL/FMS Gateway
+- Open-RMF core와 Pinky fleet adapter
+- job runner, executor worker, RMF gateway worker
+- OMX station adapter와 실제 로봇팔
+- 주문 POST, 진행 관측, 작업자 인계 완료 처리
+
+따라서 다른 Pinky의 **onboard 배포와 주행 준비**에는 이 문서를 정본으로 사용하고,
+냉동창고 주문의 end-to-end 실행에는 별도의 관제 runbook을 함께 사용한다.

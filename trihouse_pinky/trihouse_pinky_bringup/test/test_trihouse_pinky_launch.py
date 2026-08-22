@@ -46,6 +46,17 @@ def _remap(entity):
     )
 
 
+def _node_remappings(node):
+    """Node에 직접 지정한 상대 토픽 remap을 문자열 쌍으로 읽는다."""
+    def literal(parts):
+        return "".join(part.text for part in parts)
+
+    return {
+        (literal(source), literal(destination))
+        for source, destination in getattr(node, "_Node__remappings")
+    }
+
+
 def _declared_arguments(description):
     return {
         action.name
@@ -112,6 +123,27 @@ def test_the_vendor_bringup_is_not_pushed_into_the_namespace_twice() -> None:
         isinstance(child, PushRosNamespace)
         for child in _flatten(tf_groups[0].get_sub_entities())
     )
+
+
+def test_root_namespace_is_empty_when_forwarded_to_vendor_bringup() -> None:
+    """`namespace:=/`가 벤더 frame prefix `//...`를 만들지 않아야 한다."""
+    from launch import LaunchContext
+
+    description = _module().generate_launch_description()
+    vendor_includes = [
+        entity
+        for entity in _flatten(description.entities)
+        if isinstance(entity, IncludeLaunchDescription)
+        and "bringup_robot.launch.xml"
+        in str(entity.launch_description_source.location)
+    ]
+    assert len(vendor_includes) == 1
+
+    context = LaunchContext()
+    context.launch_configurations["namespace"] = "/"
+    arguments = dict(vendor_includes[0].launch_arguments)
+
+    assert arguments["namespace"].perform(context) == ""
 
 
 def test_vision_is_included_so_the_camera_reaches_mediamtx() -> None:
@@ -219,3 +251,40 @@ def test_mobile_robot_bringup_does_not_start_an_omx_station_adapter() -> None:
         str(node.node_package) == "trihouse_omx_adapter"
         for node in nodes
     )
+
+
+def test_single_robot_motor_input_is_owned_by_the_safety_supervisor() -> None:
+    """Nav2 /cmd_vel은 safety를 거쳐 /cmd_vel_safe로만 모터에 전달한다."""
+    description = _module().generate_launch_description()
+    nodes = [entity for entity in _flatten(description.entities) if isinstance(entity, Node)]
+    safety_nodes = [
+        node
+        for node in nodes
+        if str(node.node_package) == "trihouse_pinky_safety"
+        and str(node.node_executable) == "safety_supervisor"
+    ]
+
+    assert len(safety_nodes) == 1
+    assert {
+        ("cmd_vel_nav", "cmd_vel"),
+        ("cmd_vel", "cmd_vel_safe"),
+    } <= _node_remappings(safety_nodes[0])
+
+    vendor_groups = [
+        entity
+        for entity in description.entities
+        if isinstance(entity, GroupAction)
+        and any(
+            isinstance(child, IncludeLaunchDescription)
+            and "bringup_robot.launch.xml"
+            in str(child.launch_description_source.location)
+            for child in _flatten(entity.get_sub_entities())
+        )
+    ]
+
+    assert len(vendor_groups) == 1
+    assert ("cmd_vel", "cmd_vel_safe") in {
+        _remap(child)
+        for child in _flatten(vendor_groups[0].get_sub_entities())
+        if isinstance(child, SetRemap)
+    }

@@ -6,6 +6,7 @@ import rclpy
 from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 from trihouse_interfaces.msg import Readiness
@@ -20,7 +21,10 @@ class ReadinessChecker(Node):
         self.robot_id = self.get_parameter('robot_id').value
         self.timeout = float(self.get_parameter('sensor_timeout_s').value)
         self.last_scan, self.last_odom = 0.0, 0.0
-        self.create_subscription(LaserScan, 'scan', lambda _: self._mark('scan'), 10)
+        self.create_subscription(
+            LaserScan, 'scan', lambda _: self._mark('scan'),
+            qos_profile_sensor_data,
+        )
         self.create_subscription(Odometry, 'odom', lambda _: self._mark('odom'), 10)
         self.publisher = self.create_publisher(Readiness, 'trihouse/readiness', 10)
         self.nav = ActionClient(self, NavigateToPose, 'navigate_to_pose')

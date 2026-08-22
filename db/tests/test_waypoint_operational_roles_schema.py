@@ -12,7 +12,10 @@ LOADING_DOCK_MIGRATION_PATH = (
     ROOT / "db" / "archive" / "pre_physical_v1" / "011_unify_loading_dock_and_waiting_point.sql"
 )
 ROLE_GUIDE = (
-    ROOT / "docs" / "architecture" / "waypoint-operational-roles.md"
+    ROOT
+    / "docs_legacy_2026-08-23"
+    / "architecture"
+    / "waypoint-operational-roles.md"
 ).read_text(encoding="utf-8")
 
 

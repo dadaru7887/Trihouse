@@ -6,6 +6,7 @@ from rclpy.qos import (
     QoSHistoryPolicy,
     QoSProfile,
     QoSReliabilityPolicy,
+    qos_profile_sensor_data,
 )
 from rclpy.node import Node
 from rclpy.time import Time
@@ -110,7 +111,9 @@ class StatusNode(Node):
         self.safety = SafetyState()
         self.battery_policy = BatteryPolicyState()
 
-        self.create_subscription(LaserScan, 'scan', self._scan, 10)
+        self.create_subscription(
+            LaserScan, 'scan', self._scan, qos_profile_sensor_data,
+        )
         self.create_subscription(Odometry, 'odom', self._odom, 10)
         self.create_subscription(BatteryState, 'trihouse/battery', self._battery, 10)
         self.create_subscription(BatteryCondition, 'trihouse/battery/condition', self._battery_condition, 10)

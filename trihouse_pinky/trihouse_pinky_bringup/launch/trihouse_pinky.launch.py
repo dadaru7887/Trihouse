@@ -3,7 +3,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import AnyLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node, PushRosNamespace, SetRemap
 from launch_ros.substitutions import FindPackageShare
 
@@ -23,6 +23,10 @@ def generate_launch_description():
     """
     robot_id = LaunchConfiguration('robot_id')
     namespace = LaunchConfiguration('namespace')
+    # 벤더 upload_robot.launch.py는 namespace 뒤에 다시 '/'를 붙여 frame_prefix를
+    # 만든다. 루트 표기 '/'를 그대로 넘기면 TF frame이 '//base_link'처럼 되어
+    # /scan 및 /odom의 frame_id와 끊어지므로 벤더에만 양끝 '/'를 제거해 전달한다.
+    vendor_namespace = PythonExpression(["'", namespace, "'.strip('/')"])
     map_revision = LaunchConfiguration('map_revision')
     map_path = LaunchConfiguration('map')
     control_host = LaunchConfiguration('control_host')
@@ -70,8 +74,6 @@ def generate_launch_description():
         # 넘긴다. 두 번 감싸면 `/pinky_01/pinky_01/...` 이 된다.
         GroupAction([
             PushRosNamespace(namespace),
-            # 벤더 센서 노드도 같은 namespace 안에 둔다. 밖에 두면 batt_state 와
-            # us_sensor/range 가 루트에 남아 아래 adapter 들이 아무것도 못 받는다.
             Node(package='pinky_imu_bno055', executable='main_node'),
             Node(package='pinky_sensor_adc', executable='main_node'),
             Node(package='trihouse_pinky_io', executable='battery_adapter'),
@@ -79,7 +81,15 @@ def generate_launch_description():
             Node(package='trihouse_pinky_io', executable='led_indicator_client'),
             Node(package='trihouse_pinky_io', executable='buzzer_indicator_client'),
             Node(package='trihouse_pinky_io', executable='destination_display', parameters=[{'font_path': font_path}]),
-            Node(package='trihouse_pinky_safety', executable='safety_supervisor', parameters=[{'robot_id': robot_id}]),
+            Node(
+                package='trihouse_pinky_safety',
+                executable='safety_supervisor',
+                parameters=[{'robot_id': robot_id}],
+                remappings=[
+                    ('cmd_vel_nav', 'cmd_vel'),
+                    ('cmd_vel', 'cmd_vel_safe'),
+                ],
+            ),
             Node(package='trihouse_pinky_bringup', executable='readiness_checker', parameters=[{'robot_id': robot_id}]),
             Node(package='trihouse_pinky_fleet', executable='battery_condition', parameters=[{'robot_id': robot_id}]),
             Node(package='trihouse_pinky_fleet', executable='battery_policy'),
@@ -138,9 +148,12 @@ def generate_launch_description():
         GroupAction([
             SetRemap('/tf', 'tf'),
             SetRemap('/tf_static', 'tf_static'),
+            # 단일 Pinky smoke test에서는 Nav2의 기존 cmd_vel을 safety가 받고,
+            # 모터 드라이버만 safety가 내보내는 cmd_vel_safe를 구독한다.
+            SetRemap('cmd_vel', 'cmd_vel_safe'),
             IncludeLaunchDescription(
                 AnyLaunchDescriptionSource(vendor_bringup),
-                launch_arguments={'namespace': namespace}.items(),
+                launch_arguments={'namespace': vendor_namespace}.items(),
             ),
         ]),
     ])

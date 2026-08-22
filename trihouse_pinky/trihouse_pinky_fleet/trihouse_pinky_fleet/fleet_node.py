@@ -16,7 +16,13 @@ from sensor_msgs.msg import LaserScan
 from rclpy.action import ActionClient, ActionServer
 from rclpy.action import CancelResponse
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import (
+    DurabilityPolicy,
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from rclpy.task import Future
 from std_msgs.msg import Bool, String
 from trihouse_interfaces.action import Dock, ExecuteRecovery, ExecuteTransport
@@ -73,12 +79,9 @@ class NavApproachOutcome:
 # 주행으로 튜닝한 값이라 우리 편의로 조이지 않는다. AMCL 실측 stddev 가 10~12 cm
 # 이므로 그보다 좁은 허용오차는 위치추정 정확도로도 만족시킬 수 없다.
 #
-# **같게 두어도 안 된다.** Nav2 는 허용오차 *안에 들어오는 순간* 멈추므로 로봇은
-# 늘 그 경계선 위에 선다. 같은 값으로 다시 재면 AMCL 노이즈(실측 stddev 10~12 cm)
-# 에 따라 통과와 실패가 갈리는 동전 던지기가 된다. 2026-08-19 실측: 병목 구간이
-# 끝난 자리에서 목표까지 거리가 정확히 0.100 m 였고 step 20 이
-# `GOAL_TOLERANCE_NOT_MET` 으로 죽었다. Nav2 가 이미 0.1 을 보장하므로 여기서는
-# 그것을 다시 재는 것이 아니라 **크게 어긋나지 않았는지만** 본다.
+# 현재 벤더 Nav2 값은 0.25 m 이고 이 2차 판정도 같은 0.25 m 를 쓴다. 더 좁히면
+# Nav2 성공을 뒤집고, 더 넓히면 협로·도킹 인계에서 "도착"의 의미가 약해진다.
+# 벤더 튜닝값이 바뀌면 아래 계약 테스트가 먼저 실패해 함께 검토하게 한다.
 #
 # 두 값의 관계는 `test_precise_stop_matches_nav2_tolerance.py` 가 지킨다.
 # 규칙 주행 속도. 통로 폭 0.20 m 에 로봇 폭 0.12 m 라 여유가 편측 4 cm 다.
@@ -91,7 +94,7 @@ NARROW_POSITION_TOLERANCE_M = 0.02
 # 알 수 있다.
 NARROW_STEP_TIMEOUT_S = 25.0
 
-PRECISE_STOP_XY_TOLERANCE_M = 0.15
+PRECISE_STOP_XY_TOLERANCE_M = 0.25
 PRECISE_STOP_YAW_TOLERANCE_RAD = 0.35
 
 
@@ -153,7 +156,9 @@ class FleetNode(Node):
         )
         self.create_subscription(RobotStatus, 'trihouse/status', self._on_status, 10)
         self.create_subscription(Odometry, 'odom', self._on_odom, 10)
-        self.create_subscription(LaserScan, 'scan', self._on_scan, 10)
+        self.create_subscription(
+            LaserScan, 'scan', self._on_scan, qos_profile_sensor_data,
+        )
         # 지도 범위를 알아야 "로봇이 지도 밖"을 판별할 수 있다. map 은 한 번만
         # latch 로 나가므로 transient_local 로 받아야 늦게 뜬 노드도 받는다.
         self.map_bounds: tuple[float, float, float, float] | None = None

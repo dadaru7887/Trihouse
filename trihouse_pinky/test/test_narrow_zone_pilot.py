@@ -303,9 +303,12 @@ def _apply(steps, x, y, yaw):
 
 @pytest.mark.parametrize("zone_file", sorted((REPOSITORY / "config").glob("narrow_zones.*.yaml")))
 def test_every_shipped_zone_table_fits_its_own_map(zone_file) -> None:
-    map_name = zone_file.name[len("narrow_zones.") : -len(".yaml")]
     document = yaml.safe_load(zone_file.read_text(encoding="utf-8"))
-    assert document["map_name"] == map_name, "파일 이름과 map_name 이 갈라지면 아무도 못 알아챈다"
+    map_name = document["map_name"]
+    profile_name = zone_file.name[len("narrow_zones.") : -len(".yaml")]
+    assert profile_name == map_name or profile_name.startswith(f"{map_name}."), (
+        "파일 이름은 map_name 또는 map_name.profile 형식이어야 한다"
+    )
     if not (MAPS / f"{map_name}.yaml").is_file():
         pytest.skip(f"{map_name} 지도가 저장소에 없다")
 
