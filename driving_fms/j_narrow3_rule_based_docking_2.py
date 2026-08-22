@@ -19,6 +19,7 @@ zone마다 스텝 구성이 다름(오늘 사진 기준):
 from __future__ import annotations
 
 import math
+from platform import node
 import sys
 import time
 
@@ -42,6 +43,23 @@ MAX_ANG = 0.5
 YAW_TOL = 0.05
 POS_TOL = 0.02
 
+
+
+NARROW_2_PRE_GOAL = {
+    "x": 0.8530386389661134,
+    "y": -0.13133386981405296,
+    "yaw": 0.6447055490684942,
+}
+
+NARROW_2_FINAL_GOAL = {
+    "x": 0.9688723022230789,
+    "y": 0.010549628482954394,
+    "yaw": -2.7924721599272306,
+
+}
+
+
+
 NARROW_3_PRE_GOAL = {
     "x": 0.8198039894575488,
     "y": -1.1892528962848725,
@@ -53,6 +71,30 @@ NARROW_3_FINAL_GOAL = {
     "y": -1.187955905,
     "yaw": -0.03242978898931081,
 }
+
+def rotate_relative(node: Node, buf: Buffer, pub, delta_yaw: float) -> bool:
+    pose = get_pose(buf)
+
+    if pose is None:
+        print("!! 현재 yaw를 얻지 못함")
+        return False
+
+    _, _, current_yaw = pose
+
+    target_yaw = normalize(current_yaw + delta_yaw)
+
+    print(
+        f"현재 yaw={math.degrees(current_yaw):.1f}deg "
+        f"-> 목표 yaw={math.degrees(target_yaw):.1f}deg "
+        f"(상대회전 {math.degrees(delta_yaw):+.1f}deg)"
+    )
+
+    return rotate_to_yaw(
+        node,
+        buf,
+        pub,
+        target_yaw
+    )
 
 # ============================================================
 # zone별 설정 -- 전부 TODO, 오늘 노트/사진 실측값으로 채우기.
@@ -80,16 +122,22 @@ ZONES: dict[str, dict] = {
             ("exit_zone", None),
         ],
     },
+
     "narrow_2": {  # 냉장
         "geometry": {
-            # 2026-08-15 실측 시작점 (stddev x=11.5cm/y=6.9cm/yaw=13.0deg)
-            "cx": 1.1013315221281241, "cy": -0.10045055614140724, "yaw": 3.1029342608092607,
-            "length": 0.05, "width": 0.20,        # narrow_1과 동일
+            "cx": 0.9688723022230789,
+            "cy": 0.010549628482954394,
+            "yaw": -2.7924221599272306,
+            "length": 0.10,
+            "width": 0.20,
         },
-        # narrow_1과 시퀀스 동일(회전/거리값은 narrow_1 값 그대로 재사용, 미검증 -- 다음에 확인 필요)
         "sequence": [
-            ("rotate", 2.4189105956431427),
-            ("straight", -0.30),
+            ("straight", -0.337),              # 1) 약 37.7cm 후진
+            ("rotate", -2.6138892347277976)
+            # ("rotate", -2.4393563095283646)   # -20 도 회전
+            # ("rotate", -2.264823384328932), # -30 도 회전
+            # ("rotate", -2.296296680765125),    # 2) 절대 yaw 약 -131.57°
+            # ("straight", 0.119),               # 3) 약 11.9cm 전진
         ],
         "sequence_exit": [
             ("straight", 0.30),
@@ -103,7 +151,8 @@ ZONES: dict[str, dict] = {
             "cx": 0.9198039894575488, "cy": -1.1892528962848725, "yaw": -0.03242978898931081,
             "length": 0.10, "width": 0.20,        # 2026-08-15 실측: 세로(진행축) 10cm, 가로(양쪽벽사이) 20cm
         },
-        # 2026-08-15 실측 (재측정): 존 진입 -> 10cm 직진 -> 처음 각도로 회전 -> 31.5cm 후진.
+        # 2026-08-15 실측 (재측정): 존 진입 -> 10cm 직진 -> 처음 각도로 회전 -> 31.5c
+        # m 후진.
         "sequence": [  # 입고(냉동구역 안으로 들어가기)
             ("straight", 0.375),                # 1) 존 진입 후 0.40cm 직진
             ("rotate", -0.9057963267948966),   # 2) 처음 저장한 각도로 제자리 회전
@@ -111,8 +160,8 @@ ZONES: dict[str, dict] = {
         ],
         # 2026-08-15 실측: 출고(냉동구역에서 나오기) -- 입고의 역순.
         "sequence_exit": [
-            ("straight", 0.315),               # 1) 후진했던 만큼(31.5cm) 다시 전진
-            ("rotate", -2.999132807834344),    # 2) 출고 방향(-171.8deg)으로 제자리 회전
+            ("straight", 0.368),               # 1) 후진했던 만큼(31.5cm) 다시 전진
+            ("rotate", -2.476592653589793),   # -0.9058 rad 기준 시계방향 90도
             ("exit_zone", None),               # 3) in_oriented_zone()이 False될 때까지 전진(거리 사전측정 불필요)
         ],
     },
@@ -374,6 +423,124 @@ def set_nav2_goal_tolerance(
 
     return True
 
+def prepare_narrow_2(
+    node: Node,
+    buf: Buffer,
+    action_client: ActionClient,
+) -> bool:
+
+    print("")
+    print("======================================")
+    print(" narrow_2 진입 준비 시작")
+    print("======================================")
+
+    try:
+        # =================================================
+        # 0. 일반 tolerance 초기화
+        # =================================================
+        print("[0/3] Nav2 goal tolerance 일반 모드 초기화")
+
+        if not set_nav2_goal_tolerance(
+            node,
+            xy_tolerance=0.1,
+            yaw_tolerance=0.25,
+        ):
+            print("!! Nav2 기본 tolerance 설정 실패")
+            return False
+
+        time.sleep(1.0)
+
+        # =================================================
+        # 1. PRE 이동 전에 정밀 tolerance 적용
+        # =================================================
+        print("[1/3] PRE 이동 전 Nav2 정밀 tolerance 적용")
+
+        if not set_nav2_goal_tolerance(
+            node,
+            xy_tolerance=0.02,
+            yaw_tolerance=0.04,
+        ):
+            print("!! narrow_2 tolerance 변경 실패")
+            return False
+
+        print("[WAIT] 파라미터 적용 대기 1초")
+        time.sleep(1.0)
+
+        # =================================================
+        # 2. PRE 위치 접근
+        # =================================================
+        print("[2/3] narrow_2 PRE 위치로 이동")
+
+        if not navigate_to_pose(
+            node,
+            action_client,
+            NARROW_2_PRE_GOAL["x"],
+            NARROW_2_PRE_GOAL["y"],
+            NARROW_2_PRE_GOAL["yaw"],
+        ):
+            print("!! narrow_2 PRE 접근 실패")
+            return False
+
+        print("[WAIT] PRE 도착 후 2초 안정화")
+        time.sleep(2.0)
+
+        # =================================================
+        # 3. FINAL 위치 확인 / 필요할 때만 이동
+        # =================================================
+        print("[3/3] narrow_2 FINAL 위치 확인")
+
+        pose = get_pose(buf)
+
+        if pose is None:
+            print("!! 현재 pose 확인 실패")
+            return False
+
+        x, y, yaw = pose
+        geometry = ZONES["narrow_2"]["geometry"]
+
+        print(
+            f"[FINAL CHECK] 현재 위치: "
+            f"x={x:.3f}, y={y:.3f}, "
+            f"yaw={math.degrees(yaw):.1f}deg"
+        )
+
+        if in_oriented_zone(x, y, geometry):
+            print(
+                "[FINAL SKIP] 이미 narrow_2 geometry 안에 있음 "
+                "-> FINAL Nav2 이동 생략"
+            )
+
+        else:
+            print("[FINAL MOVE] geometry 밖 -> FINAL 위치로 이동")
+
+            if not navigate_to_pose(
+                node,
+                action_client,
+                NARROW_2_FINAL_GOAL["x"],
+                NARROW_2_FINAL_GOAL["y"],
+                NARROW_2_FINAL_GOAL["yaw"],
+            ):
+                print("!! narrow_2 FINAL 접근 실패")
+                return False
+
+        # =================================================
+        # FINAL 또는 SKIP 이후 안정화
+        # =================================================
+        print("[WAIT] narrow_2 sequence 시작 전 2초 안정화")
+        time.sleep(2.0)
+
+        print("=== narrow_2 Nav2 접근 완료 ===")
+        return True
+
+    finally:
+        print("[복구] Nav2 goal tolerance -> 0.1 / 0.25")
+
+        set_nav2_goal_tolerance(
+            node,
+            xy_tolerance=0.1,
+            yaw_tolerance=0.25,
+        )
+
 def prepare_narrow_3(
     node: Node,
     action_client: ActionClient,
@@ -584,6 +751,12 @@ def run_zone_sequence(node: Node, buf: Buffer, pub, zone_name: str, exit: bool =
                 print(f"{i}) zone 벗어날 때까지 전진...")
                 if not drive_until_outside_zone(node, buf, pub, geometry):
                     print(f"!! {i}단계 exit_zone 타임아웃"); return False
+
+            elif kind == "rotate_relative":
+                print(f"{i}) 현재 각도 기준 상대 회전 {math.degrees(value):+.1f}deg...")
+
+                if not rotate_relative(node, buf, pub, value):
+                 print(f"!! {i}단계 상대 회전 타임아웃"); return False    
             else:
                 print(f"!! 알 수 없는 스텝 종류: {kind}"); return False
 
@@ -653,6 +826,20 @@ def main() -> None:
     if target == "depart":
 
         depart_from_start_zone_1(node, buf, pub)
+
+    elif target == "narrow_2" and not exit_mode:
+
+        if prepare_narrow_2(node, buf, nav_client):
+            success = run_zone_sequence(
+                node,
+                buf,
+                pub,
+                "narrow_2",
+                exit=False
+            )
+
+            if not success:
+                print("!! narrow_2 시퀀스 실패")
 
     elif target == "narrow_3" and not exit_mode:
 
