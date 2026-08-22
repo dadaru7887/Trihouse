@@ -6,7 +6,7 @@ from .conftest import DEV_SEED_SQL, HARDWARE_SEED_SQL, REPOSITORY_ROOT
 
 FEATURES_JSONL = (
     REPOSITORY_ROOT
-    / "control_ui/rmf_control_ui/data/import"
+    / "data/map_authoring/import"
     / "trihouse_test_01_physical_features.new_map_2.jsonl"
 )
 SEED_PATHS = (DEV_SEED_SQL, HARDWARE_SEED_SQL)
@@ -33,6 +33,8 @@ EXPECTED_MEASURED_WAYPOINTS = {
     "charging_station_02": (0.1336554086, -0.0065562838, 0.1569596446),
     "charging_station_narrow_exit": (0.7992961442, 0.0854053105, 0.0923642279),
     "frozen_storage_narrow_entry": (1.1792881155, -1.1896842748, 0.0109381190),
+    "ambient_storage_narrow_entry": (1.010244055594586, 0.9167344977253539, -0.08675495954950327),
+    "chilled_storage_narrow_entry": (1.1013315221281241, -0.10045055614140724, 3.1029342608092607),
     "frozen_storage_loading_dock_01": (1.3314581184, -0.8149269956, -1.57214),
 }
 EXPECTED_BOTTLENECKS = {
@@ -66,13 +68,13 @@ def _sql_number(value: float) -> str:
 def test_physical_feature_source_uses_new_map_2_as_its_operating_map() -> None:
     records = _records()
 
-    assert len(records) == 15
+    assert len(records) == 14
     assert {record["target_map_name"] for record in records} == {"new_map_2"}
 
 
 def test_both_seeds_copy_all_measured_waypoint_poses_from_new_map_2() -> None:
     waypoints = [record for record in _records() if record["record_type"] == "waypoint"]
-    assert len(waypoints) == 10
+    assert len(waypoints) == 12
 
     for seed_path in SEED_PATHS:
         sql = seed_path.read_text(encoding="utf-8")

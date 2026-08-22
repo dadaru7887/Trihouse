@@ -44,15 +44,6 @@
 !pinky_pro/pinky_bringup/config/
 !pinky_pro/pinky_bringup/config/pinky_params.yaml
 
-# 관제 UI 이미지(control_ui/rmf_control_ui/Dockerfile)의 빌드 문맥.
-# 호스트의 빌드 산출물은 제외한다 — 컨테이너 안에서 다시 만들고, 그대로
-# 넣으면 문맥이 120MB 넘게 불어난다.
-!control_ui/
-!control_ui/rmf_control_ui/
-!control_ui/rmf_control_ui/**
-control_ui/rmf_control_ui/build/
-control_ui/rmf_control_ui/.dart_tool/
-
 # FMS Gateway 카메라 명부 의존성
 !control_tower/gateway/
 !control_tower/gateway/**

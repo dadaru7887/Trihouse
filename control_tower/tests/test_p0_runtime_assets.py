@@ -18,13 +18,14 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 ASSETS = ROOT / "control_tower" / "bringup" / "p0_runtime_assets.py"
 FEATURES = (
-    ROOT / "control_ui" / "rmf_control_ui" / "data" / "import"
+    ROOT / "data" / "map_authoring" / "import"
     / "trihouse_test_01_physical_features.jsonl"
 )
 NEW_MAP_2_FEATURES = (
-    ROOT / "control_ui" / "rmf_control_ui" / "data" / "import"
+    ROOT / "data" / "map_authoring" / "import"
     / "trihouse_test_01_physical_features.new_map_2.jsonl"
 )
+NEW_MAP_2_NARROW_ZONES = ROOT / "config" / "narrow_zones.new_map_2.yaml"
 
 
 def _module():
@@ -136,6 +137,22 @@ def test_new_map_2_keeps_two_independent_mutex_groups_at_measured_centres() -> N
     assert second[2]["mutex_group"] == "bottleneck_02"
 
 
+def test_simulation_profile_enables_only_complete_candidate_sequences(
+    tmp_path: Path,
+) -> None:
+    """P0는 실물 측정 원본을 바꾸지 않고 완성된 후보 궤적만 시험한다."""
+    module = _module()
+    destination = tmp_path / "narrow_zones.yaml"
+
+    module.derive_simulation_narrow_zones(NEW_MAP_2_NARROW_ZONES, destination)
+
+    original = yaml.safe_load(NEW_MAP_2_NARROW_ZONES.read_text(encoding="utf-8"))
+    derived = yaml.safe_load(destination.read_text(encoding="utf-8"))
+    assert original["zones"]["frozen_storage_loading_dock_01"]["measured"]["exit"] is False
+    assert derived["zones"]["frozen_storage_loading_dock_01"]["measured"]["exit"] is True
+    assert derived["zones"]["ambient_storage_loading_dock_01"]["measured"]["exit"] is False
+
+
 def test_the_derived_parameters_carry_the_initial_pose(tmp_path: Path) -> None:
     module = _module()
     source = tmp_path / "nav2.yaml"
@@ -188,6 +205,12 @@ def test_frames_are_split_per_robot_but_the_map_frame_is_shared(tmp_path: Path) 
                         "ros__parameters": {"robot_base_frame": "base_footprint"}
                     }
                 },
+                "behavior_server": {
+                    "ros__parameters": {
+                        "local_frame": "odom",
+                        "global_frame": "map",
+                    }
+                },
             }
         ),
         encoding="utf-8",
@@ -205,6 +228,9 @@ def test_frames_are_split_per_robot_but_the_map_frame_is_shared(tmp_path: Path) 
         derived["local_costmap"]["local_costmap"]["ros__parameters"]["robot_base_frame"]
         == "pinky_02/base_footprint"
     )
+    behavior = derived["behavior_server"]["ros__parameters"]
+    assert behavior["local_frame"] == "pinky_02/odom"
+    assert behavior["global_frame"] == "map"
 
 
 def test_omitting_the_initial_pose_leaves_the_source_untouched(tmp_path: Path) -> None:

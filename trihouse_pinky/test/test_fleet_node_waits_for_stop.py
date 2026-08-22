@@ -38,9 +38,7 @@ def test_fleet_node_waits_before_reporting_arrival():
     source = _source()
 
     wait_call = source.index("await self._settle_before_arrival()")
-    report_call = source.index(
-        "self.workflow.nav_result(succeeded=nav_result.status"
-    )
+    report_call = source.index("arrived = self.workflow.nav_result(")
 
     assert wait_call < report_call, "정차를 기다리기 전에 도착을 보고한다"
 

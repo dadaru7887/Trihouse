@@ -29,7 +29,7 @@ import yaml
 from control_tower.bringup.p0_runtime_assets import build_world_with_walls, read_map_grid
 
 ROOT = Path(__file__).resolve().parents[1]
-MAPS = ROOT / "control_ui" / "rmf_control_ui" / "data" / "rmf_maps"
+MAPS = ROOT / "pinky_pro_alpha" / "pinky_navigation" / "map"
 WORLD_SOURCE = ROOT / "control_tower" / "bringup" / "p0_world.sdf"
 
 # 라이다 평면의 높이. `pinky.urdf.xacro` 에서 base_footprint -> base_link 0.028,
@@ -96,7 +96,7 @@ def _write_map(directory: Path, rows: list[str], resolution: float = 0.05) -> Pa
 
 def test_walls_cover_exactly_the_occupied_cells(tmp_path: Path) -> None:
     """실제 지도로. 하나라도 빠지거나 더 생기면 물리와 costmap 이 갈라진다."""
-    map_yaml = MAPS / "trihouse_map_01.yaml"
+    map_yaml = MAPS / "new_map_2.yaml"
     destination = tmp_path / "world.sdf"
     build_world_with_walls(map_yaml, WORLD_SOURCE, destination)
 
@@ -123,7 +123,7 @@ def test_unknown_cells_do_not_become_walls(tmp_path: Path) -> None:
 
 def test_the_boxes_do_not_overlap(tmp_path: Path) -> None:
     """겹친 상자는 Gazebo 에서 접촉 계산을 늘리기만 하고 얻는 것이 없다."""
-    map_yaml = MAPS / "trihouse_map_01.yaml"
+    map_yaml = MAPS / "new_map_2.yaml"
     destination = tmp_path / "world.sdf"
     build_world_with_walls(map_yaml, WORLD_SOURCE, destination)
 
@@ -145,7 +145,7 @@ def test_the_boxes_do_not_overlap(tmp_path: Path) -> None:
 
 def test_the_walls_reach_the_lidar_plane(tmp_path: Path) -> None:
     """벽이 스캔 평면보다 낮으면 벽이 없는 것과 같다."""
-    map_yaml = MAPS / "trihouse_map_01.yaml"
+    map_yaml = MAPS / "new_map_2.yaml"
     destination = tmp_path / "world.sdf"
     build_world_with_walls(map_yaml, WORLD_SOURCE, destination)
 
@@ -157,7 +157,7 @@ def test_the_walls_reach_the_lidar_plane(tmp_path: Path) -> None:
 
 def test_the_source_world_survives(tmp_path: Path) -> None:
     """바닥면이 사라지면 로봇이 떨어진다. 원본은 읽기만 한다."""
-    map_yaml = MAPS / "trihouse_map_01.yaml"
+    map_yaml = MAPS / "new_map_2.yaml"
     destination = tmp_path / "world.sdf"
     before = WORLD_SOURCE.read_text(encoding="utf-8")
     build_world_with_walls(map_yaml, WORLD_SOURCE, destination)

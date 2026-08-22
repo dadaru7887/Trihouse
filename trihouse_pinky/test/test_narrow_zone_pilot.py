@@ -94,33 +94,13 @@ def test_a_disabled_unmeasured_marker_zone_is_not_executable() -> None:
     assert load_zones(document, map_name="new_map_2") == {}
 
 
-def test_new_map_2_has_calibrated_egress_plans_for_both_chargers() -> None:
-    """새 지도에서는 충전 베이 안에서 Nav2를 바로 시작하면 안 된다.
-
-    두 충전소 모두 먼저 저속 규칙 주행으로 병목 01까지 빠져나온 뒤에만 일반
-    Nav2 경로를 시작한다. 이 표가 없으면 같은 좌표계의 지도여도 초기 목표가 벽과
-    너무 가까워 Regulated Pure Pursuit가 즉시 충돌로 중단한다.
-    """
+def test_legacy_pilot_ignores_the_fleet_only_charging_departure_profile() -> None:
+    """구형 목적지별 pilot은 원형 출발 트리거를 잘못 entry로 해석하지 않는다."""
     assert NEW_MAP_2_ZONE_FILE.is_file(), "new_map_2 전용 협로 표가 없다"
     document = yaml.safe_load(NEW_MAP_2_ZONE_FILE.read_text(encoding="utf-8"))
     zones = load_zones(document, map_name="new_map_2")
-    chargers = {"charging_station_01", "charging_station_02"}
-    assert chargers <= set(zones)
-    measured_entries = {
-        "charging_station_01": (0.0570244747, 0.1949666005, 0.1093261667),
-        "charging_station_02": (0.1336554086, -0.0065562838, 0.1569596446),
-    }
-    for name in chargers:
-        zone = zones[name]
-        assert zone.entry_pose == pytest.approx(measured_entries[name])
-        # 충전 베이에서는 회전 외접원이 벽을 스친다. 먼저 현재 방향으로 저속
-        # 전진해 여유를 만든 다음에만 회전한다.
-        assert [kind for kind, _ in zone.exit] == [STRAIGHT, ROTATE, STRAIGHT]
-        assert zone.exit[0][1] > 0.40
-        assert zone.exit[-1][1] > 0.30
-        assert zone.exit_target == pytest.approx(
-            (0.7992961442, 0.0854053105, 0.0923642279)
-        )
+    assert "charging_narrow_departure" not in zones
+    assert FROZEN in zones
 
 
 def test_new_map_2_frozen_rule_uses_the_measured_entry_and_exact_dock_yaw() -> None:

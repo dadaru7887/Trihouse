@@ -28,7 +28,6 @@ def generate_launch_description():
     control_host = LaunchConfiguration('control_host')
     control_port = LaunchConfiguration('control_port')
     font_path = LaunchConfiguration('font_path')
-    omx_station_id = LaunchConfiguration('omx_station_id')
     nav2_params_file = LaunchConfiguration('nav2_params_file')
     vision_enabled = LaunchConfiguration('vision_enabled')
     docking_enabled = LaunchConfiguration('docking_enabled')
@@ -64,7 +63,6 @@ def generate_launch_description():
         DeclareLaunchArgument('narrow_map_name', default_value=''),
         DeclareLaunchArgument('allow_narrow_calibration', default_value='false'),
         DeclareLaunchArgument('marker_docks_file', default_value=''),
-        DeclareLaunchArgument('omx_station_id', default_value='station-1'),
         DeclareLaunchArgument('font_path', default_value=''),
         # 이 그룹 안의 모든 것이 `/<namespace>/...` 아래로 들어간다. 벤더
         # bringup 과 Nav2 는 자기 launch 가 `namespace` 인자를 받아 스스로
@@ -72,9 +70,6 @@ def generate_launch_description():
         # 넘긴다. 두 번 감싸면 `/pinky_01/pinky_01/...` 이 된다.
         GroupAction([
             PushRosNamespace(namespace),
-            # Nav2만 cmd_vel_nav로 remap하며 모터용 cmd_vel은 safety가 단독 소유한다.
-            # 상대 이름으로 적어야 namespace 안에서 해석된다.
-            SetRemap(src='cmd_vel', dst='cmd_vel_nav'),
             # 벤더 센서 노드도 같은 namespace 안에 둔다. 밖에 두면 batt_state 와
             # us_sensor/range 가 루트에 남아 아래 adapter 들이 아무것도 못 받는다.
             Node(package='pinky_imu_bno055', executable='main_node'),
@@ -148,7 +143,4 @@ def generate_launch_description():
                 launch_arguments={'namespace': namespace}.items(),
             ),
         ]),
-        # 실기 OMX endpoint는 검증 전 motion을 내보내지 않는 skeleton으로만 포함한다.
-        # 정거장은 로봇에 속하지 않으므로 namespace 밖에 둔다.
-        Node(package='trihouse_omx_adapter', executable='hardware_omx_adapter', parameters=[{'omx_id': omx_station_id}]),
     ])

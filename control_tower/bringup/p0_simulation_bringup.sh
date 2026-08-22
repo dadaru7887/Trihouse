@@ -18,7 +18,7 @@
 # 러너가 없으면 worker 는 claim 할 것이 없어 주문이 로봇을 움직이지 못한다.
 #
 # 이들은 rclpy/DDS/GPU 가 필요해 Docker 로 옮기지 않았다. MySQL, FMS Gateway,
-# MediaMTX, control_ui 는 `scripts/control_stack up` 이 Docker 로 먼저 띄운다.
+# MediaMTX와 control_system 기반 RMF Dashboard는 `scripts/control_stack up`이 먼저 띄운다.
 #
 # Ctrl+C 한 번으로 여기서 띄운 프로세스를 모두 정리한다.
 set -euo pipefail
@@ -54,8 +54,8 @@ done
 # 못 보게 된다. 두 곳의 기본값을 같은 값으로 적어 두면 그 사고가 나지 않는다.
 #
 # 이미 다른 domain 으로 떠 있는 Docker 층에 붙이려면 이 값을 넘겨라:
-#   ROS_DOMAIN_ID=0 control_tower/bringup/p0_simulation_bringup.sh
-: "${ROS_DOMAIN_ID:=52}"
+#   ROS_DOMAIN_ID=12 control_tower/bringup/p0_simulation_bringup.sh
+: "${ROS_DOMAIN_ID:=12}"
 export ROS_DOMAIN_ID
 # transport 도 domain 과 똑같은 이유로 못박는다. domain 이 같아도 전송 방식이
 # 어긋나면 서로를 못 본다.
@@ -78,7 +78,7 @@ export ROS_DOMAIN_ID
 : "${ROS_AUTOMATIC_DISCOVERY_RANGE:=SUBNET}"
 export RMW_IMPLEMENTATION FASTDDS_BUILTIN_TRANSPORTS ROS_AUTOMATIC_DISCOVERY_RANGE
 : "${FMS_BASE_URL:=http://127.0.0.1:8080}"
-: "${TRIHOUSE_PROJECT:=trihouse_test_01}"
+: "${TRIHOUSE_PROJECT:=new_map_2}"
 # fleet 이름은 `trihouse_rmf_bridge/config/pinky_fleet.yaml` 의 `rmf_fleet.name`
 # 과 반드시 같아야 한다. 다르면 dispatch worker 가 RMF 에 넘긴 작업을 어떤
 # adapter 도 집어 가지 않는다. 이 이름은 worker/orchestrator 의 기본값이기도
@@ -101,16 +101,12 @@ export RMW_IMPLEMENTATION FASTDDS_BUILTIN_TRANSPORTS ROS_AUTOMATIC_DISCOVERY_RAN
 # 좌표에서 오며 `p0_runtime_assets.py` 가 파생 파라미터에 심는다.
 #
 # 지도 없이 돌려야 하면 `TRIHOUSE_NAV2_SLAM=true` 로 되돌릴 수 있다.
-: "${TRIHOUSE_NAV2_MAP:=$ROOT/control_ui/rmf_control_ui/data/rmf_maps/trihouse_map_01.yaml}"
+: "${TRIHOUSE_NAV2_MAP:=$ROOT/pinky_pro_alpha/pinky_navigation/map/new_map_2.yaml}"
 : "${TRIHOUSE_NAV2_SLAM:=false}"
 : "${TRIHOUSE_START_NAV2:=true}"
-# 승인된 좌표 원본. `control_ui/` 쪽이 git 에 들어 있는 정본이고 지도 발행과
-# 자동 테스트가 모두 이 파일을 쓴다. `control_system_test/` 사본은 gitignore
-# 대상이라 새 클론에는 없으므로 되돌아갈 자리로만 남긴다.
-: "${PHYSICAL_FEATURES_FILE:=$ROOT/control_ui/rmf_control_ui/data/import/trihouse_test_01_physical_features.jsonl}"
-if [[ ! -f "$PHYSICAL_FEATURES_FILE" ]]; then
-  PHYSICAL_FEATURES_FILE="$ROOT/control_system_test/rmf_control_ui/data/import/trihouse_test_01_physical_features.jsonl"
-fi
+# EN: Measured features are repository runtime data and never fall back to a UI copy.
+# KO: 실측 feature는 저장소 런타임 데이터이며 UI 사본으로 fallback하지 않는다.
+: "${PHYSICAL_FEATURES_FILE:=$ROOT/data/map_authoring/import/trihouse_test_01_physical_features.new_map_2.jsonl}"
 
 if [[ ! -f "$ROS_DISTRO_SETUP" ]]; then
   echo "ROS 2 setup script not found: $ROS_DISTRO_SETUP" >&2
@@ -160,7 +156,7 @@ fi
 if [[ -z "$TRIHOUSE_MAP_REVISION" ]]; then
   echo "TRIHOUSE_MAP_REVISION 이 비어 있습니다." >&2
   echo "발행된 지도 revision 을 명시해야 작업 문맥이 일치합니다. 예:" >&2
-  echo "  TRIHOUSE_MAP_REVISION=trihouse_test_01:<hash> $0" >&2
+  echo "  TRIHOUSE_MAP_REVISION=new_map_2:<hash> $0" >&2
   exit 1
 fi
 
@@ -168,7 +164,11 @@ fi
 # Gateway 는 지도를 내용으로만 주는데 launch 는 경로를 받으므로 이 단계가 없으면
 # `nav_graph`/`world` 인자를 채울 수 없다.
 : "${TRIHOUSE_RUNTIME_DIR:=$ROOT/.trihouse/p0}"
-: "${PINKY_NAV2_PARAMS:=$ROOT/pinky_pro/pinky_navigation/params/nav2_params.yaml}"
+# EN: The vendor checkout is reproducible upstream input; Trihouse's measured
+# footprint and inflation values live in the tracked alpha overlay.
+# KO: 벤더 checkout은 재현 가능한 원본이고, Trihouse 실측 footprint와 inflation
+# 값의 정본은 추적되는 alpha overlay다.
+: "${PINKY_NAV2_PARAMS:=$ROOT/pinky_pro_alpha/pinky_navigation/params/nav2_params.yaml}"
 
 # pinky_pro 는 별도 colcon 워크스페이스다. Pinky 의 URDF·world·Gazebo plugin 을
 # 쓰려면 이 오버레이도 얹어야 한다. 이 저장소에서 고치는 파일은 없다.
@@ -185,6 +185,7 @@ fi
 
 : "${PINKY_WORLD:=$ROOT/control_tower/bringup/p0_world.sdf}"
 : "${TRIHOUSE_FLEET_CONFIG:=$(ros2 pkg prefix trihouse_rmf_bridge)/share/trihouse_rmf_bridge/config/pinky_fleet.yaml}"
+: "${P0_NARROW_ZONES_SOURCE:=$ROOT/config/narrow_zones.$TRIHOUSE_PROJECT.yaml}"
 
 echo "[bringup] 발행된 지도 revision 을 펼칩니다: $TRIHOUSE_MAP_REVISION"
 python3 "$ROOT/control_tower/bringup/p0_runtime_assets.py" \
@@ -194,6 +195,7 @@ python3 "$ROOT/control_tower/bringup/p0_runtime_assets.py" \
   --features "$PHYSICAL_FEATURES_FILE" \
   --nav2-source "$PINKY_NAV2_PARAMS" \
   --world-source "$PINKY_WORLD" \
+  --narrow-zones-source "$P0_NARROW_ZONES_SOURCE" \
   --output-dir "$TRIHOUSE_RUNTIME_DIR" \
   $([[ "$TRIHOUSE_NAV2_SLAM" == true ]] || echo --map-yaml "$TRIHOUSE_NAV2_MAP") \
   --robot PK_01:pinky_01 \
@@ -267,6 +269,7 @@ start "two pinky order demo" \
     world:="$TRIHOUSE_RUNTIME_DIR/world.sdf" \
     nav2_params_file:="$PINKY_NAV2_PARAMS" \
     nav2_params_dir:="$TRIHOUSE_RUNTIME_DIR/nav2" \
+    narrow_zones_file:="$TRIHOUSE_RUNTIME_DIR/narrow_zones.yaml" \
     runtime_state_dir:="$TRIHOUSE_RUNTIME_DIR" \
     robots:="$TRIHOUSE_ROBOTS" \
     nav2_slam:="$TRIHOUSE_NAV2_SLAM" \
@@ -305,8 +308,7 @@ if [[ "$START_EXECUTOR" == true ]]; then
   start "executor worker" \
     python3 -m control_tower.task_manager.executor_worker_node \
       --fms-base-url "$FMS_BASE_URL" \
-      --environment simulation \
-      --act-config "$TRIHOUSE_ACT_CONFIG"
+      --environment simulation
 fi
 
 # 6) RMF dispatch worker. Control Tower 가 고른 로봇으로만 작업을 넘긴다.

@@ -75,32 +75,6 @@ services:
       retries: 20
       start_period: 10s
 
-  control_ui:
-    # Flutter 웹 번들을 빌드해 nginx로 서빙한다. nginx가 같은 origin에서
-    # `/api/` 와 운영 WebSocket을 Gateway로 reverse proxy 하므로 브라우저는
-    # 주소 하나만 보면 된다. UI가 Gateway origin을 페이지 origin으로 정하기
-    # 때문에 이 구조가 필요하다.
-    build:
-      context: .
-      dockerfile: control_ui/rmf_control_ui/Dockerfile
-    image: trihouse_control_ui:local
-    restart: unless-stopped
-    environment:
-      TZ: Asia/Seoul
-    ports:
-      - "${CONTROL_UI_HOST:-127.0.0.1}:${CONTROL_UI_PORT:-3100}:80"
-    depends_on:
-      fms_gateway:
-        condition: service_healthy
-    networks:
-      - control_edge
-    healthcheck:
-      test: [CMD-SHELL, "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 5s
-
 networks:
   # Only MySQL and the Gateway sit here, so nothing else can reach the database.
   db_internal:

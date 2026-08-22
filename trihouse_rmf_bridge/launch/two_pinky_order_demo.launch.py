@@ -44,6 +44,9 @@ ROBOT_CHARGERS = (
     ("PK_02", "pinky_02", "TRIHOUSE-TEST-01-CHG-02"),
 )
 
+SIM_LIDAR_Z_OFFSET_M = 0.055
+SIM_LIDAR_MIN_RANGE_M = 0.19
+
 
 def selected_robots(context) -> tuple[tuple[str, str, str], ...]:
     """`robots:=PK_01` 로 고른 로봇만 낸다. 비어 있으면 전부.
@@ -191,6 +194,29 @@ def _robot_description(namespace: str) -> str:
     document = xacro.process_file(
         str(source), mappings={"namespace": f"{namespace}/", "is_sim": "True"}
     )
+    for sensor in document.getElementsByTagName("sensor"):
+        if sensor.getAttribute("type") != "gpu_lidar":
+            continue
+        # EN: Gazebo GPU lidar also renders collision geometry. The vendor ray
+        # plane intersects the simulated robot and reports its own body as an
+        # obstacle, so raise only the simulation sensor above the 0.125 m mount.
+        # KO: Gazebo GPU LiDAR는 collision 형상도 보며 벤더 광선면이 시뮬레이션
+        # 차체와 겹친다. 실물 TF는 건드리지 않고 센서만 장착점 위로 올린다.
+        pose = document.createElement("pose")
+        pose.appendChild(
+            document.createTextNode(f"0 0 {SIM_LIDAR_Z_OFFSET_M} 0 0 0")
+        )
+        sensor.appendChild(pose)
+        # EN: The simulated GPU lidar reports collision geometry inside the
+        # Pinky's body (observed up to 0.183 m). Mask only that impossible
+        # near-field in simulation; hardware safety thresholds stay unchanged.
+        # KO: 시뮬레이션 GPU LiDAR가 Pinky 차체 안쪽 collision 형상을 최대
+        # 0.183 m까지 반환한다. 실물 안전 임계값은 유지하고 시뮬레이션의
+        # 물리적으로 불가능한 근거리 반사만 제외한다.
+        for minimum in sensor.getElementsByTagName("min"):
+            if minimum.firstChild is not None:
+                minimum.firstChild.nodeValue = str(SIM_LIDAR_MIN_RANGE_M)
+
     description = document.toxml()
     link_names = set(re.findall(r'<link name="([^"]+)"', description))
 
@@ -201,7 +227,8 @@ def _robot_description(namespace: str) -> str:
             return f'<gazebo reference="{bare}"'
         return match.group(0)
 
-    return re.sub(r'<gazebo reference="([^"]+)"', _strip, description)
+    description = re.sub(r'<gazebo reference="([^"]+)"', _strip, description)
+    return description
 
 
 def _robot_group(
@@ -233,12 +260,14 @@ def _robot_group(
     # 빈 문자열을 넘겨 규칙 주행을 끈다(지금까지처럼 Nav2 가 끝까지 간다).
     nav2_map = Path(LaunchConfiguration("nav2_map").perform(context)).expanduser()
     narrow_map_name = nav2_map.stem if nav2_map.name else ""
+    configured_zones = LaunchConfiguration("narrow_zones_file").perform(context).strip()
     zones_path = (
         Path(get_package_share_directory("trihouse_rmf_bridge")).parents[2]
         / "config" / f"narrow_zones.{narrow_map_name}.yaml"
     )
     repository_zones = Path(__file__).resolve().parents[2] / "config" / f"narrow_zones.{narrow_map_name}.yaml"
     narrow_zones_file = str(
+        Path(configured_zones).expanduser().resolve() if configured_zones else
         zones_path if zones_path.is_file() else repository_zones
         if repository_zones.is_file() else ""
     )
@@ -450,9 +479,15 @@ def _robot_group(
                 # `trihouse/proximity/front` 하나이고 그것으로 충분하다. 켜 두면
                 # 센서 미달로 gate 가 계속 정지를 걸어 로봇이 못 움직인다.
                 "require_ultrasonic": False,
-                # 신선도 판정만 시뮬 주기에 맞춘다. 안전 임계(정지·감속 거리)는
-                # 실기와 같게 둔다. 기본 0.5초는 시뮬 센서 주기와 RTF<1 을 견디지
-                # 못해 gate 가 깜빡이고, 그 깜빡임이 로봇을 RMF 에서 빼낸다.
+                # EN: The diagonal turn into the measured 0.33 m corridor has
+                # 0.12-0.19 m forward clearance. Keep the physical 0.30 m
+                # default untouched and use 0.10 m only with Gazebo collision.
+                # KO: 실측 0.33 m 통로로 대각선 회전할 때 전방 여유는
+                # 0.12~0.19 m다. 실물 기본 0.30 m는 유지하고 Gazebo 충돌 물리가
+                # 있는 시뮬레이션에서만 0.10 m를 쓴다.
+                "stop_distance_m": 0.10,
+                # 기본 0.5초는 시뮬 센서 주기와 RTF<1 을 견디지 못해 gate가
+                # 깜빡이고, 그 깜빡임이 로봇을 RMF에서 빼낸다.
                 "sensor_timeout_s": 2.0,
             }],
         ),
@@ -707,9 +742,8 @@ def generate_launch_description() -> LaunchDescription:
     repository_root = Path(__file__).resolve().parents[2]
     default_features = (
         repository_root
-        / "control_system_test"
-        / "rmf_control_ui"
         / "data"
+        / "map_authoring"
         / "import"
         / "trihouse_test_01_physical_features.jsonl"
     )
@@ -721,6 +755,11 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("nav_graph"),
         DeclareLaunchArgument("world"),
         DeclareLaunchArgument("nav2_params_file"),
+        # EN: P0 may pass a runtime-derived profile; physical bringup leaves this
+        # empty and continues to use the measured repository profile.
+        # KO: P0는 런타임 파생 profile을 넘길 수 있고, 실물 bringup은 비워 두어
+        # 저장소의 실측 profile을 계속 사용한다.
+        DeclareLaunchArgument("narrow_zones_file", default_value=""),
         # 로봇별 파생 Nav2 파라미터가 있는 디렉터리 (`<namespace>.yaml`).
         DeclareLaunchArgument("nav2_params_dir", default_value=""),
         # Nav2 지도. `nav2_slam:=true` 면 지도 없이 slam_toolbox 로 돈다.

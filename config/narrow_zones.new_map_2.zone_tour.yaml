@@ -1,0 +1,83 @@
+# new_map_2 세 구역 순회 주행 전용 협로 표(도킹 없음).
+#
+# 이 파일은 `config/narrow_zones.new_map_2.yaml`의 대체본이 아니라, 창고 도킹
+# 실측이 끝나기 전에 "상온→냉장→냉동→충전소" 이동만 확인하려는 시험 전용이다.
+# 세 창고를 `approach_required: false`로 두면 fleet는 협로 규칙도 ArUco 도킹도
+# 실행하지 않고 Nav2가 실측 waypoint까지만 간다. 즉 로봇은 창고 앞 도크
+# waypoint에 정차하며 선반 안쪽으로 후진 도킹하지 않는다.
+#
+# 전제: 1절 waypoint 실측이 new_map_2 기준으로 끝났고
+# `scripts/p0_show_map.py new_map_2`에서 세 도크가 모두 통과 가능해야 한다.
+# 실제 도킹을 시험할 때는 이 파일이 아니라 운영 표를 쓴다.
+map_name: new_map_2
+
+zones:
+  # 창고 세 곳: Nav2 waypoint 정차까지만. 도크 진입 규칙과 marker_id는 일부러 비운다.
+  # 값이 있으면 아직 미검증인 규칙/ArUco 경로로 분기하기 때문이다.
+  ambient_storage_loading_dock_01:
+    enabled: true
+    approach_required: false
+    entry: null
+    zone: null
+    enter: []
+    exit: []
+    dock_target: null
+    exit_target: null
+    measured: { entry_pose: false, dock_pose: false, enter: false, exit: false }
+
+  chilled_storage_loading_dock_01:
+    enabled: true
+    approach_required: false
+    entry: null
+    zone: null
+    enter: []
+    exit: []
+    dock_target: null
+    exit_target: null
+    measured: { entry_pose: false, dock_pose: false, enter: false, exit: false }
+
+  frozen_storage_loading_dock_01:
+    enabled: true
+    approach_required: false
+    entry: null
+    zone: null
+    enter: []
+    exit: []
+    dock_target: null
+    exit_target: null
+    measured: { entry_pose: false, dock_pose: false, enter: false, exit: false }
+
+  # 충전소 두 곳은 운영 표와 같은 실측값이다. 출발 시 이 탈출 규칙이 없으면
+  # 로봇이 충전 베이 앞 벽 여유 안에서 Nav2로 빠져나오지 못한다.
+  charging_station_01:
+    approach_required: false
+    entry: { x: 0.0570244747, y: 0.1949666005, yaw: 0.1093261667 }
+    zone: { length: 0.30, width: 0.30 }
+    enter:
+      - [straight, 0.0]
+    exit:
+      - [straight, 0.730]
+      - [rotate, -1.4831306904]
+      - [straight, 0.1899399080]
+      - [rotate, 0.0923642279]
+    exit_target: { x: 0.7992961442, y: 0.0854053105, yaw: 0.0923642279 }
+    measured:
+      exit: true
+      date: 2026-08-21
+      source: waypoint.md_pk02_amcl
+
+  charging_station_02:
+    approach_required: false
+    entry: { x: 0.1336554086, y: -0.0065562838, yaw: 0.1569596446 }
+    zone: { length: 0.30, width: 0.30 }
+    enter:
+      - [straight, 0.0]
+    exit:
+      - [straight, 0.650]
+      - [rotate, -1.083]
+      - [straight, 0.333]
+    exit_target: { x: 0.7992961442, y: 0.0854053105, yaw: 0.0923642279 }
+    measured:
+      exit: true
+      date: 2026-08-21
+      source: waypoint.md_pk02_amcl

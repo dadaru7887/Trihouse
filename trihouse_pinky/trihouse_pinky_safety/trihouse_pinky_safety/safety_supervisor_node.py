@@ -55,6 +55,17 @@ CONNECTION_STATE_QOS = QoSProfile(
     durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
 )
 
+# EN: LaserScan is a current observation, not an event ledger. Under load,
+# RELIABLE delivery replays obsolete geometry and can keep the robot stopped.
+# KO: LaserScan은 사건 원장이 아니라 현재 관측이다. 부하 시 RELIABLE 재전송은
+# 과거 장애물을 재생해 로봇을 계속 정지시킬 수 있다.
+SAFETY_SCAN_QOS = QoSProfile(
+    depth=1,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    reliability=QoSReliabilityPolicy.BEST_EFFORT,
+    durability=QoSDurabilityPolicy.VOLATILE,
+)
+
 
 class SafetySupervisor(Node):
     """The only operational publisher for the motor `/cmd_vel` topic."""
@@ -124,7 +135,11 @@ class SafetySupervisor(Node):
         self.create_subscription(Twist, 'cmd_vel_manual', self._on_manual, 10)
         self.create_subscription(Twist, 'cmd_vel_dock', self._on_dock, 10)
         self.create_subscription(Range, 'trihouse/proximity/front', self._on_range, 10)
-        self.create_subscription(LaserScan, 'scan', self._on_scan, 10)
+        # EN: Safety must act on the newest scan. A reliable depth-10 queue can
+        # replay old wall returns after CPU contention and apply them at a new pose.
+        # KO: 안전 판정은 최신 scan만 사용해야 한다. depth 10 큐는 CPU 경합 뒤
+        # 예전 벽 반사를 새 pose에 적용할 수 있으므로 backlog를 만들지 않는다.
+        self.create_subscription(LaserScan, 'scan', self._on_scan, SAFETY_SCAN_QOS)
         self.create_subscription(PersonDetection, 'trihouse/vision/person_detection/base', self._on_person, 10)
         self.create_subscription(KeepOutZone, 'trihouse/safety/keep_out_zones', self._on_keep_out, 10)
         self.create_subscription(Odometry, 'odom', self._on_odom, 10)
@@ -152,6 +167,18 @@ class SafetySupervisor(Node):
         self.front_range = message.range; self.last_range_at = monotonic(); self.last_sensor_at = self.last_range_at
 
     def _on_scan(self, message: LaserScan) -> None:
+        stamp_ns = (
+            int(message.header.stamp.sec) * 1_000_000_000
+            + int(message.header.stamp.nanosec)
+        )
+        age_ns = self.get_clock().now().nanoseconds - stamp_ns
+        timeout_ns = int(self.sensor_timeout_s * 1_000_000_000)
+        # EN: DDS may deliver a reliable backlog after the robot has moved. The
+        # receive time cannot make that old geometry current at the new pose.
+        # KO: 로봇 이동 뒤 reliable DDS backlog가 도착할 수 있다. 수신 시각으로
+        # 과거 장애물을 새 pose의 현재 장애물처럼 되살려서는 안 된다.
+        if stamp_ns <= 0 or age_ns < -timeout_ns or age_ns > timeout_ns:
+            return
         # 한 스캔에서 필드 두 개를 뽑는다. 360 도 최솟값 하나를 STOP 판정에 쓰면
         # 2.20 x 2.70 m 방에서는 늘 stop_distance_m 안이라 로봇이 영구히 STOP 에
         # 걸린다 (2026-08-20 실측). 그리고 늘 울리는 경보는 정보가 0 이다.
@@ -236,14 +263,27 @@ class SafetySupervisor(Node):
             and nearby is not None
             and nearby <= self.swept_clearance_m
         )
+        path_distance = self._path_distance(desired.linear_x, desired.angular_z)
         inputs = SafetyInputs(sensor_fresh=scan_fresh and (range_fresh or not self.require_ultrasonic),
-                              front_distance_m=self._path_distance(desired.linear_x),
+                              front_distance_m=path_distance,
                               swept_blocked=swept_blocked,
                               person_detected=person_detected,
                               person_distance_m=self.person_distance if person_detected else None,
                               keep_out=self._in_keep_out_zone(), emergency_latched=self.emergency_latched,
                               control_link_fresh=(self.manual_mode_enabled or self.control_link_online))
         decision = apply_safety_gate(desired, inputs, self.config)
+        if decision.reason == "front_stop":
+            # EN: A rejected motion must expose the measured clearance in the
+            # runtime log; otherwise a sensor-model fault looks like Nav2 failure.
+            # KO: 주행 거부 시 측정 여유를 런타임 로그에 남겨야 센서 모델 결함을
+            # Nav2 실패로 오인하지 않는다.
+            self.get_logger().warning(
+                f"front_stop: desired=({desired.linear_x:.3f}, "
+                f"{desired.angular_z:.3f}) "
+                f"path_clearance={path_distance} "
+                f"scan_nearby={nearby} scan_age={now - self.last_scan_at:.3f}",
+                throttle_duration_sec=2.0,
+            )
         cmd = Twist(); cmd.linear.x = decision.command.linear_x; cmd.angular.z = decision.command.angular_z
         self.cmd_pub.publish(cmd)
         state = SafetyState(); state.stamp = self.get_clock().now().to_msg(); state.robot_id = self.robot_id
@@ -254,13 +294,21 @@ class SafetySupervisor(Node):
         indicator.source = 'safety_supervisor'; indicator.detail = decision.reason
         self.indicator_pub.publish(indicator)
 
-    def _path_distance(self, commanded_linear_x: float) -> float | None:
+    def _path_distance(
+        self, commanded_linear_x: float, commanded_angular_z: float
+    ) -> float | None:
         """진행 방향의 여유. 후진이면 뒤쪽 필드를 본다.
 
         초음파는 정면(`ultrasonic_link`)만 보므로 후진에는 근거가 되지 못한다.
         후진 여유는 라이다만으로 재고, 그 사실을 여기서 명시적으로 가른다 —
         섞으면 뒤가 막혔는데 초음파의 "정면 3 m" 가 이겨 통과해 버린다.
         """
+        # EN: Rotation has no forward/reverse path. Its complete collision
+        # envelope is already checked by the swept-radius field.
+        # KO: 제자리 회전에는 전진/후진 경로가 없고, 전체 충돌 영역은 위의
+        # 회전 외접반경 필드에서 이미 검사한다.
+        if rotating_in_place(commanded_linear_x, commanded_angular_z):
+            return None
         now = monotonic()
         reversing = commanded_linear_x < 0.0
         scan = self.reverse_clearance if reversing else self.forward_clearance

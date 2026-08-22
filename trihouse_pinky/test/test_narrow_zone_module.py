@@ -15,6 +15,7 @@ sys.path.insert(0, str(PINKY / "trihouse_pinky_docking"))
 from trihouse_pinky_docking.narrow_zone import (  # noqa: E402
     ENTER,
     EXIT,
+    EntryPoseController,
     MotionLimits,
     NarrowZoneConfigError,
     NarrowZoneController,
@@ -30,6 +31,13 @@ def _document(*, enabled: bool = True, measured: bool = True) -> dict:
             "frozen_storage_loading_dock_01": {
                 "enabled": enabled,
                 "entry": {"x": 1.0, "y": -1.0, "yaw": 0.0},
+                "entry_zone": {
+                    "x": 1.0,
+                    "y": -1.0,
+                    "yaw": 0.0,
+                    "length": 0.20,
+                    "width": 0.20,
+                },
                 "zone": {
                     "x": 1.2,
                     "y": -0.7,
@@ -128,6 +136,50 @@ def test_unmeasured_motion_requires_an_explicit_calibration_controller() -> None
     assert calibration.begin(profile.entry_pose, now_s=0.0) is True
 
 
+def test_entry_zone_is_distinct_from_the_docked_zone() -> None:
+    """입구 handoff 구역이 도크 체류 구역으로 잘못 대체되는 결함을 잡는다."""
+    profile = load_narrow_zones(_document(), map_name="new_map_2")[
+        "frozen_storage_loading_dock_01"
+    ]
+
+    assert profile.entry_zone is not None
+    assert profile.entry_zone.contains(Pose2D(0.91, -1.0, 2.0))
+    assert not profile.zone.contains(Pose2D(0.91, -1.0, 2.0))
+
+
+def test_entry_alignment_reaches_position_before_matching_entry_yaw() -> None:
+    """구역 경계에서 기존 enter 거리를 시작해 최종 도크가 어긋나는 결함을 잡는다."""
+    profile = load_narrow_zones(_document(), map_name="new_map_2")[
+        "frozen_storage_loading_dock_01"
+    ]
+    controller = EntryPoseController(
+        profile.entry_pose,
+        limits=MotionLimits(
+            max_linear_mps=0.06,
+            max_angular_rps=0.5,
+            linear_tolerance_m=0.02,
+            angular_tolerance_rad=0.05,
+        ),
+    )
+    assert controller.begin(Pose2D(0.91, -1.0, math.pi / 2), now_s=0.0)
+
+    face_entry = controller.advance(
+        Pose2D(0.91, -1.0, math.pi / 2), now_s=0.1
+    )
+    drive_entry = controller.advance(Pose2D(0.91, -1.0, 0.0), now_s=0.2)
+    match_entry_yaw = controller.advance(Pose2D(0.99, -1.0, 0.40), now_s=0.3)
+
+    assert face_entry.linear_x == 0.0
+    assert face_entry.angular_z < 0.0
+    assert drive_entry.linear_x > 0.0
+    assert match_entry_yaw.linear_x == 0.0
+    assert match_entry_yaw.angular_z < 0.0
+
+    stopped = controller.advance(Pose2D(0.99, -1.0, 0.01), now_s=0.4)
+    assert stopped.is_zero
+    assert controller.is_complete
+
+
 def test_controller_rotates_the_short_way_without_linear_motion() -> None:
     profile = load_narrow_zones(_document(), map_name="new_map_2")[
         "frozen_storage_loading_dock_01"
@@ -209,3 +261,25 @@ def test_timeout_and_cancel_are_terminal_zero_command_states() -> None:
     canceled.cancel("operator_cancel")
     assert canceled.failure == "operator_cancel"
     assert canceled.advance(profile.entry_pose, now_s=0.1).is_zero
+
+
+def test_timeout_is_a_no_progress_watchdog_not_a_total_step_deadline() -> None:
+    """안전 gate가 간헐 정지시켜도 실제로 전진 중이면 timeout하지 않는다."""
+    profile = load_narrow_zones(_document(), map_name="new_map_2")[
+        "frozen_storage_loading_dock_01"
+    ]
+    controller = NarrowZoneController.for_steps(
+        profile,
+        direction=ENTER,
+        steps=(("straight", 1.0),),
+        limits=MotionLimits(step_timeout_s=1.0, linear_tolerance_m=0.02),
+    )
+    controller.begin(Pose2D(0.0, 0.0, 0.0), now_s=0.0)
+
+    assert not controller.advance(Pose2D(0.05, 0.0, 0.0), now_s=0.9).is_zero
+    assert not controller.advance(Pose2D(0.10, 0.0, 0.0), now_s=1.8).is_zero
+    assert controller.failure is None
+
+    stopped = controller.advance(Pose2D(0.10, 0.0, 0.0), now_s=2.9)
+    assert stopped.is_zero
+    assert controller.failure == "step_timeout"

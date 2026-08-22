@@ -21,11 +21,13 @@ from trihouse_pinky_docking.narrow_zone import (  # noqa: E402
 )
 from trihouse_pinky_fleet.narrow_zone_routing import (  # noqa: E402
     departure_profile,
+    entry_handoff_reached,
     select_approach,
 )
 
 
 PROFILE_FILE = REPOSITORY / "config" / "narrow_zones.new_map_2.yaml"
+CHARGING_DEPARTURE = "charging_narrow_departure"
 
 
 def _profiles():
@@ -113,7 +115,7 @@ def test_explicit_calibration_may_approach_a_structurally_complete_candidate() -
     assert decision.nav_target == decision.profile.entry_pose
 
 
-def test_a_disabled_warehouse_is_rejected_instead_of_disappearing() -> None:
+def test_an_unmeasured_warehouse_is_rejected_instead_of_disappearing() -> None:
     decision = select_approach(
         _profiles(),
         "ambient_storage_loading_dock_01",
@@ -121,7 +123,7 @@ def test_a_disabled_warehouse_is_rejected_instead_of_disappearing() -> None:
     )
 
     assert decision.allowed is False
-    assert decision.reason_code == "NARROW_PROFILE_DISABLED"
+    assert decision.reason_code == "NARROW_PROFILE_UNMEASURED"
     assert decision.nav_target is None
 
 
@@ -136,19 +138,57 @@ def test_a_robot_docked_in_a_zone_must_depart_before_any_new_nav2_goal() -> None
     assert departure.exit_target == frozen.entry_pose
 
 
-def test_a_measured_charger_exit_is_operational_even_though_return_uses_nav2() -> None:
+def test_two_start_waypoints_share_one_measured_charging_departure() -> None:
     profiles = _profiles()
-    charger = profiles["charging_station_01"]
-    assert charger.entry_pose is not None
+    shared = profiles[CHARGING_DEPARTURE]
 
-    departure = departure_profile(profiles, charger.entry_pose)
-    controller = NarrowZoneController(departure, direction=EXIT)
+    for start in (Pose2D(0.171, 0.202, 0.0), Pose2D(0.076, -0.013, 0.0)):
+        departure = departure_profile(profiles, start)
+        assert departure == shared
+        controller = NarrowZoneController(departure, direction=EXIT)
+        assert controller.begin(start, now_s=0.0) is True
 
-    assert departure == charger
-    assert charger.approach_required is False
-    assert charger.direction_readiness_code(EXIT) == "READY"
-    assert controller.begin(charger.entry_pose, now_s=0.0) is True
+    assert shared.approach_required is False
+    assert shared.direction_readiness_code(EXIT) == "READY"
+    assert tuple((step.kind, step.value) for step in shared.exit) == (("straight", 0.7),)
+    assert shared.exit_target == Pose2D(0.7992961442, 0.0854053105, 0.0923642279)
+
+
+def test_charging_departure_trigger_uses_a_point_three_tenths_from_either_start() -> None:
+    profiles = _profiles()
+
+    assert departure_profile(profiles, Pose2D(0.171 + 0.299, 0.202, 1.2)) is profiles[
+        CHARGING_DEPARTURE
+    ]
+    assert departure_profile(profiles, Pose2D(0.076, -0.013 - 0.299, -2.0)) is profiles[
+        CHARGING_DEPARTURE
+    ]
+
+
+def test_charging_departure_stops_as_soon_as_the_measured_exit_radius_is_reached() -> None:
+    shared = _profiles()[CHARGING_DEPARTURE]
+    start = Pose2D(0.171, 0.202, -0.18)
+    assert shared.exit_target is not None
+    controller = NarrowZoneController(shared, direction=EXIT)
+
+    assert controller.begin(start, now_s=0.0) is True
+    command = controller.advance(shared.exit_target, now_s=1.0)
+
+    assert command.is_zero
+    assert controller.is_complete
 
 
 def test_a_robot_outside_every_zone_needs_no_rule_departure() -> None:
     assert departure_profile(_profiles(), Pose2D(5.0, 5.0, 0.0)) is None
+
+
+def test_nav2_handoff_uses_the_entry_zone_not_the_docked_zone() -> None:
+    """도크 zone까지 Nav2가 들어간 뒤에야 전환되는 결함을 잡는다."""
+    frozen = _profiles()["frozen_storage_loading_dock_01"]
+
+    assert entry_handoff_reached(
+        frozen, Pose2D(1.10, -1.19, -2.0)
+    ) is True
+    assert entry_handoff_reached(
+        frozen, Pose2D(1.3314581184, -0.8149269956, -1.572140)
+    ) is False

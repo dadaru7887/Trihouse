@@ -3002,12 +3002,10 @@ class MySqlFmsRepository:
             """
             SELECT map_name, manifest
             FROM map_revisions
-            WHERE map_name = %s AND state = 'published'
+            WHERE state = 'published'
             ORDER BY published_at DESC, map_revision DESC
-            LIMIT 1
             FOR UPDATE
-            """,
-            ("trihouse_test_01",),
+            """
         )
         publications = cursor.fetchall()
         for publication in publications:
@@ -3771,10 +3769,12 @@ class MySqlFmsRepository:
                     tuple(location_codes),
                 )
                 locations = {row["location_code"]: row for row in cursor.fetchall()}
-                if set(locations) != set(location_codes) or any(
-                    row["map_name"] != "trihouse_test_01" for row in locations.values()
-                ):
+                location_map_names = {
+                    row["map_name"] for row in locations.values() if row["map_name"]
+                }
+                if set(locations) != set(location_codes) or len(location_map_names) != 1:
                     raise ResourceAssignmentConflict("CANONICAL_MAP_RESOURCE_REQUIRED")
+                operational_map_name = location_map_names.pop()
                 packing = locations[assignment["packing_dock_code"]]
                 charger = locations[assignment["charger_code"]]
                 packing_metadata = _json(packing.get("metadata")) or {}
@@ -3782,9 +3782,10 @@ class MySqlFmsRepository:
                 cursor.execute(
                     """
                     SELECT manifest FROM map_revisions
-                    WHERE map_name = 'trihouse_test_01' AND state = 'published'
+                    WHERE map_name = %s AND state = 'published'
                     ORDER BY published_at DESC, map_revision DESC LIMIT 1
-                    """
+                    """,
+                    (operational_map_name,),
                 )
                 revision_row = cursor.fetchone()
                 manifest = _json(revision_row.get("manifest")) if revision_row else {}
@@ -5406,7 +5407,7 @@ class MySqlFmsRepository:
                 cursor.execute(
                     """
                     SELECT location_id FROM locations
-                    WHERE location_code = %s AND map_name = 'trihouse_test_01'
+                    WHERE location_code = %s
                     """,
                     (charger_code,),
                 )

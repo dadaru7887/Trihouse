@@ -53,6 +53,18 @@ class OrientedZone:
 
 
 @dataclass(frozen=True)
+class CircularTrigger:
+    """대기/충전 waypoint 주변에서 공통 탈출 규칙을 시작하는 원형 경계."""
+
+    x: float
+    y: float
+    radius: float
+
+    def contains(self, pose: Pose2D) -> bool:
+        return hypot(pose.x - self.x, pose.y - self.y) <= self.radius
+
+
+@dataclass(frozen=True)
 class MotionStep:
     kind: str
     value: float | None
@@ -85,6 +97,7 @@ class NarrowZoneProfile:
     enabled: bool
     approach_required: bool
     entry_pose: Pose2D | None
+    entry_zone: OrientedZone | None
     zone: OrientedZone | None
     enter: tuple[MotionStep, ...]
     exit: tuple[MotionStep, ...]
@@ -94,6 +107,8 @@ class NarrowZoneProfile:
     marker_id: str | None = None
     metadata: Mapping[str, Any] | None = None
     issues: tuple[str, ...] = ()
+    departure_triggers: tuple[CircularTrigger, ...] = ()
+    exit_completion_radius_m: float | None = None
 
     @property
     def readiness_code(self) -> str:
@@ -128,7 +143,7 @@ class NarrowZoneProfile:
             return self.readiness_code
         if direction == EXIT:
             if (
-                self.zone is None
+                (self.zone is None and not self.departure_triggers)
                 or not self.exit
                 or self.exit_target is None
                 or self.issues
@@ -146,7 +161,7 @@ class NarrowZoneProfile:
         검증하려면 후보 값으로 한 번은 움직여야 하지만, 그 상태가 일반 주문에 열리면
         안 된다. disabled profile은 보정도 명시적으로 켜기 전까지 거절한다.
         """
-        if not self.enabled or self.zone is None:
+        if not self.enabled or (self.zone is None and not self.departure_triggers):
             return False
         if direction == ENTER:
             return bool(self.entry_pose and self.enter and self.dock_target)
@@ -192,6 +207,116 @@ def normalize(angle: float) -> float:
     return atan2(sin(angle), cos(angle))
 
 
+class EntryPoseController:
+    """Nav2 handoff 위치에서 실측 entry pose까지 저속으로 정렬한다.
+
+    EN: The entry zone is only a control handoff boundary. This controller
+    closes the remaining position and yaw error before measured dock steps run.
+    KO: entry zone은 제어권 인계 경계일 뿐이다. 실측 도킹 스텝을 실행하기 전에
+    남은 위치와 yaw 오차를 이 제어기가 닫는다.
+    """
+
+    FACE_ENTRY = "face_entry"
+    DRIVE_ENTRY = "drive_entry"
+    MATCH_YAW = "match_yaw"
+    COMPLETE = "complete"
+
+    def __init__(
+        self, target: Pose2D | None, *, limits: MotionLimits | None = None
+    ) -> None:
+        self.target = target
+        self.limits = limits or MotionLimits()
+        self.phase = self.FACE_ENTRY
+        self.failure: str | None = None
+        self._started = False
+        self._last_progress_s = 0.0
+        self._best_error: float | None = None
+
+    @property
+    def is_complete(self) -> bool:
+        return self._started and self.failure is None and self.phase == self.COMPLETE
+
+    @property
+    def progress(self) -> str:
+        return self.phase
+
+    def begin(self, pose: Pose2D, *, now_s: float) -> bool:
+        if self.target is None:
+            self.failure = "entry_pose_missing"
+            return False
+        self._started = True
+        self._last_progress_s = now_s
+        self._best_error = None
+        if hypot(self.target.x - pose.x, self.target.y - pose.y) <= self.limits.linear_tolerance_m:
+            self.phase = self.MATCH_YAW
+        return True
+
+    def cancel(self, reason: str = "canceled") -> None:
+        if not self.is_complete:
+            self.failure = reason
+
+    def advance(self, pose: Pose2D, *, now_s: float) -> VelocityCommand:
+        if not self._started or self.failure is not None or self.is_complete:
+            return VelocityCommand()
+        assert self.target is not None
+
+        dx = self.target.x - pose.x
+        dy = self.target.y - pose.y
+        distance = hypot(dx, dy)
+        if self.phase == self.FACE_ENTRY:
+            if distance <= self.limits.linear_tolerance_m:
+                self._transition(self.MATCH_YAW, now_s)
+                return VelocityCommand()
+            error = normalize(atan2(dy, dx) - pose.yaw)
+            if abs(error) <= self.limits.angular_tolerance_rad:
+                self._transition(self.DRIVE_ENTRY, now_s)
+                return self.advance(pose, now_s=now_s)
+            if self._timed_out(abs(error), self.limits.angular_tolerance_rad, now_s):
+                return VelocityCommand()
+            return VelocityCommand(angular_z=self._angular_speed(error))
+
+        if self.phase == self.DRIVE_ENTRY:
+            if distance <= self.limits.linear_tolerance_m:
+                self._transition(self.MATCH_YAW, now_s)
+                return self.advance(pose, now_s=now_s)
+            heading_error = normalize(atan2(dy, dx) - pose.yaw)
+            if abs(heading_error) > self.limits.angular_tolerance_rad:
+                self._transition(self.FACE_ENTRY, now_s)
+                return VelocityCommand()
+            if self._timed_out(distance, self.limits.linear_tolerance_m, now_s):
+                return VelocityCommand()
+            speed = min(self.limits.max_linear_mps, 0.6 * distance)
+            return VelocityCommand(linear_x=speed)
+
+        yaw_error = normalize(self.target.yaw - pose.yaw)
+        if abs(yaw_error) <= self.limits.angular_tolerance_rad:
+            self.phase = self.COMPLETE
+            return VelocityCommand()
+        if self._timed_out(abs(yaw_error), self.limits.angular_tolerance_rad, now_s):
+            return VelocityCommand()
+        return VelocityCommand(angular_z=self._angular_speed(yaw_error))
+
+    def _transition(self, phase: str, now_s: float) -> None:
+        self.phase = phase
+        self._last_progress_s = now_s
+        self._best_error = None
+
+    def _timed_out(self, error: float, threshold: float, now_s: float) -> bool:
+        if self._best_error is None or error <= self._best_error - threshold:
+            self._best_error = error
+            self._last_progress_s = now_s
+        if now_s - self._last_progress_s <= self.limits.step_timeout_s:
+            return False
+        self.failure = "entry_alignment_timeout"
+        return True
+
+    def _angular_speed(self, error: float) -> float:
+        return max(
+            -self.limits.max_angular_rps,
+            min(self.limits.max_angular_rps, 1.2 * error),
+        )
+
+
 class NarrowZoneController:
     """pose 되먹임으로 한 번의 창고 진입 또는 탈출을 실행한다."""
 
@@ -215,6 +340,8 @@ class NarrowZoneController:
         self._started = False
         self._origin: Pose2D | None = None
         self._step_started_s = 0.0
+        self._last_progress_s = 0.0
+        self._best_progress = 0.0
 
     @classmethod
     def for_steps(
@@ -257,6 +384,8 @@ class NarrowZoneController:
         self._started = True
         self._origin = pose
         self._step_started_s = now_s
+        self._last_progress_s = now_s
+        self._best_progress = 0.0
         return True
 
     def cancel(self, reason: str = "canceled") -> None:
@@ -266,11 +395,31 @@ class NarrowZoneController:
     def advance(self, pose: Pose2D, *, now_s: float) -> VelocityCommand:
         if not self._started or self.failure is not None or self.is_complete:
             return VelocityCommand()
-        if now_s - self._step_started_s > self.limits.step_timeout_s:
+        if (
+            self.direction == EXIT
+            and self.profile.exit_target is not None
+            and self.profile.exit_completion_radius_m is not None
+            and hypot(
+                pose.x - self.profile.exit_target.x,
+                pose.y - self.profile.exit_target.y,
+            ) <= self.profile.exit_completion_radius_m
+        ):
+            # 충전 협로는 고정 거리의 끝보다 실측 탈출점 도달이 더 강한 완료 조건이다.
+            self.step_index = len(self.steps)
+            return VelocityCommand()
+        step = self.steps[self.step_index]
+        progress, threshold = self._step_progress(step, pose)
+        # EN: This is a no-progress watchdog, not a total step deadline. Safety
+        # stops may lengthen a narrow traversal while the robot still advances.
+        # KO: 이 timeout은 스텝 총시간이 아니라 무진전 감시다. 안전 정지가
+        # 반복되어도 로봇이 실제로 전진하면 협로 동작을 계속한다.
+        if progress >= self._best_progress + threshold:
+            self._best_progress = progress
+            self._last_progress_s = now_s
+        if now_s - self._last_progress_s > self.limits.step_timeout_s:
             self.failure = "step_timeout"
             return VelocityCommand()
 
-        step = self.steps[self.step_index]
         if step.kind == ROTATE:
             command, done = self._rotate(pose, float(step.value))
         elif step.kind == STRAIGHT:
@@ -283,7 +432,18 @@ class NarrowZoneController:
         self.step_index += 1
         self._origin = pose
         self._step_started_s = now_s
+        self._last_progress_s = now_s
+        self._best_progress = 0.0
         return VelocityCommand()
+
+    def _step_progress(self, step: MotionStep, pose: Pose2D) -> tuple[float, float]:
+        assert self._origin is not None
+        if step.kind == ROTATE:
+            initial_error = abs(normalize(float(step.value) - self._origin.yaw))
+            current_error = abs(normalize(float(step.value) - pose.yaw))
+            return max(0.0, initial_error - current_error), self.limits.angular_tolerance_rad
+        travelled = hypot(pose.x - self._origin.x, pose.y - self._origin.y)
+        return travelled, self.limits.linear_tolerance_m
 
     def _rotate(self, pose: Pose2D, target_yaw: float) -> tuple[VelocityCommand, bool]:
         error = normalize(target_yaw - pose.yaw)
@@ -332,25 +492,37 @@ def load_narrow_zones(
 def _parse_profile(destination: str, raw: Any) -> NarrowZoneProfile:
     if not isinstance(raw, Mapping):
         return NarrowZoneProfile(
-            destination,
-            False,
-            True,
-            None,
-            None,
-            (),
-            (),
-            None,
-            None,
-            MeasurementState(),
+            destination_code=destination,
+            enabled=False,
+            approach_required=True,
+            entry_pose=None,
+            entry_zone=None,
+            zone=None,
+            enter=(),
+            exit=(),
+            dock_target=None,
+            exit_target=None,
+            measurement=MeasurementState(),
             issues=("profile_not_mapping",),
         )
     issues: list[str] = []
     entry = _pose(raw.get("entry"), f"{destination}.entry", issues)
+    entry_zone = _zone(
+        raw.get("entry_zone"), entry, f"{destination}.entry_zone", issues
+    )
     zone = _zone(raw.get("zone"), entry, f"{destination}.zone", issues)
     enter = _steps(raw.get("enter"), f"{destination}.enter", issues)
     exit_steps = _steps(raw.get("exit"), f"{destination}.exit", issues)
     dock_target = _pose(raw.get("dock_target"), f"{destination}.dock_target", issues)
     exit_target = _pose(raw.get("exit_target"), f"{destination}.exit_target", issues)
+    departure_triggers = _circular_triggers(
+        raw.get("departure_triggers"), f"{destination}.departure_triggers", issues
+    )
+    exit_completion_radius_m = _positive_optional_float(
+        raw.get("exit_completion_radius"),
+        f"{destination}.exit_completion_radius",
+        issues,
+    )
     measured_raw = raw.get("measured")
     measured = measured_raw if isinstance(measured_raw, Mapping) else {}
     measurement = MeasurementState(
@@ -364,6 +536,7 @@ def _parse_profile(destination: str, raw: Any) -> NarrowZoneProfile:
         enabled=bool(raw.get("enabled", True)),
         approach_required=bool(raw.get("approach_required", True)),
         entry_pose=entry,
+        entry_zone=entry_zone,
         zone=zone,
         enter=enter,
         exit=exit_steps,
@@ -373,7 +546,54 @@ def _parse_profile(destination: str, raw: Any) -> NarrowZoneProfile:
         marker_id=str(raw["marker_id"]) if raw.get("marker_id") is not None else None,
         metadata=dict(measured),
         issues=tuple(issues),
+        departure_triggers=departure_triggers,
+        exit_completion_radius_m=exit_completion_radius_m,
     )
+
+
+def _positive_optional_float(
+    raw: Any, where: str, issues: list[str]
+) -> float | None:
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        issues.append(f"{where}_invalid")
+        return None
+    if value <= 0.0:
+        issues.append(f"{where}_not_positive")
+        return None
+    return value
+
+
+def _circular_triggers(
+    raw: Any, where: str, issues: list[str]
+) -> tuple[CircularTrigger, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        issues.append(f"{where}_not_list")
+        return ()
+    triggers: list[CircularTrigger] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, Mapping):
+            issues.append(f"{where}[{index}]_not_mapping")
+            continue
+        try:
+            trigger = CircularTrigger(
+                x=float(item["x"]),
+                y=float(item["y"]),
+                radius=float(item["radius"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            issues.append(f"{where}[{index}]_invalid")
+            continue
+        if trigger.radius <= 0.0:
+            issues.append(f"{where}[{index}]_radius_not_positive")
+            continue
+        triggers.append(trigger)
+    return tuple(triggers)
 
 
 def _pose(raw: Any, where: str, issues: list[str]) -> Pose2D | None:

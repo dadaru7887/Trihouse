@@ -118,19 +118,28 @@ def test_an_unknown_destination_is_rejected_before_ros_is_started() -> None:
     assert decision.reason_code == "NARROW_PROFILE_UNKNOWN"
 
 
-def test_disabled_warehouse_cannot_be_used_for_calibration() -> None:
+@pytest.mark.parametrize(
+    "destination",
+    [
+        "ambient_storage_loading_dock_01",
+        "chilled_storage_loading_dock_01",
+    ],
+)
+def test_measured_entry_warehouses_can_be_selected_for_calibration(
+    destination: str,
+) -> None:
     decision = validate_motion_request(
         MotionRequest(
             True,
             "pinky_01",
-            "ambient_storage_loading_dock_01",
+            destination,
             "enter",
         ),
         _profiles(),
     )
 
-    assert decision.allowed is False
-    assert decision.reason_code == "NARROW_CALIBRATION_NOT_READY"
+    assert decision.allowed is True
+    assert decision.reason_code == "READY"
 
 
 @pytest.mark.parametrize("phase", ["enter", "exit", "roundtrip"])

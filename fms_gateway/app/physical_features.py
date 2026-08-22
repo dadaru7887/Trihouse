@@ -13,7 +13,7 @@ CANONICAL_P0_MAP_NAME = "trihouse_test_01"
 CANONICAL_P0_COUNTS = (8, 2, 3)
 CANONICAL_COUNTS_BY_MAP = {
     CANONICAL_P0_MAP_NAME: CANONICAL_P0_COUNTS,
-    "new_map_2": (10, 2, 3),
+    "new_map_2": (12, 2, 0),
 }
 CANONICAL_P0_FIDUCIAL_TARGETS = frozenset(
     {
@@ -754,7 +754,7 @@ class PhysicalFeatureImporter:
                 "P0 bottlenecks require radius 0.10 m and diameter 0.20 m"
             )
         targets = frozenset(binding.target_location_code for binding in fiducials)
-        if targets != CANONICAL_P0_FIDUCIAL_TARGETS:
+        if expected_counts[2] > 0 and targets != CANONICAL_P0_FIDUCIAL_TARGETS:
             raise PhysicalFeatureImportError(
                 "canonical fiducial target_location_code bindings must cover "
                 "the three warehouse docks exactly once"

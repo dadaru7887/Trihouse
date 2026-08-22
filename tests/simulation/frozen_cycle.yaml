@@ -1,0 +1,17 @@
+simulation:
+  ros_domain_id: 0
+  map_name: new_map_2
+  gateway_url: http://127.0.0.1:8080
+  cycle_timeout_s: 300
+  poll_interval_s: 2
+
+order:
+  priority: normal
+  allow_partial_fulfillment: false
+  items:
+    - product_code: SKU-PORKBELLY
+      quantity: 1
+
+packing_worker_by_dock:
+  PACKING-01-DOCK-01: W-FIELD-01
+  PACKING-01-DOCK-02: W-FIELD-02

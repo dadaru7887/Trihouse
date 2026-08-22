@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """P0 스택 전체를 한 명령으로 다루는 lifecycle CLI.
 
-    ./scripts/control_stack up --mode simulation --project trihouse_test_01
+    ./scripts/control_stack up --mode simulation --project new_map_2
     ./scripts/control_stack status
     ./scripts/control_stack logs
     ./scripts/control_stack doctor --mode simulation
@@ -12,7 +12,7 @@
 스택은 두 층으로 나뉜다.
 
 - **Docker (`up`)**: 하나의 Compose project로 MySQL → FMS Gateway → MediaMTX
-  → RMF API → RMF Dashboard → control_ui 순서로 올린다.
+  → RMF API → `control_system` 기반 RMF Dashboard 순서로 올린다.
 - **호스트 ROS 2 (`ros`)**: RMF core, Gazebo, Pinky 두 대의 Nav2와 fleet
   adapter, OMX 시뮬레이터 두 개, RMF dispatch worker.
   rclpy/DDS/GPU 가 필요해 컨테이너에 넣지 않았다.
@@ -54,7 +54,6 @@ STARTUP_ORDER = (
     "mediamtx",
     "rmf_api",
     "rmf_dashboard",
-    "control_ui",
 )
 
 # 호스트 ROS 2 에서 도는 구성요소. rclpy/DDS/GPU 가 필요해 컨테이너로 옮기지
@@ -91,7 +90,7 @@ REQUIRED_CHECKS = (
     "nav2:PK_02",
     "omx:OMX_01",
     "omx:OMX_02",
-    "control_ui",
+    "rmf_dashboard",
     # 러너가 없으면 주문은 `queued` 에서 멈추고 outbox 가 비어 있어 로봇이
     # 움직이지 않는다. 스택이 "떠 있다"는 판정에 반드시 포함되어야 한다.
     "job_runner",
@@ -104,7 +103,7 @@ DOCKER_CHECKS = {
     "mysql": "mysql",
     "fms_gateway": "fms_gateway",
     "mediamtx": "mediamtx",
-    "control_ui": "control_ui",
+    "rmf_dashboard": "rmf_dashboard",
 }
 
 # 호스트 ROS 2 가 책임지는 점검 항목 -> 확인할 ROS 노드 이름 조각.
@@ -153,6 +152,9 @@ def cmd_up(args: argparse.Namespace) -> int:
         return 2
     environment = dict(os.environ)
     environment["TRIHOUSE_PROJECT"] = args.project
+    # EN: The simulation stack binds locally unless P0 explicitly exposes its TCP port.
+    # KO: 시뮬레이션 스택은 P0에서 TCP 포트를 명시적으로 열 때만 LAN에 바인딩한다.
+    environment["FMS_TCP_BIND"] = os.environ.get("P0_FMS_TCP_BIND", "127.0.0.1")
     # 기본은 headless. GUI/RViz는 명시적 플래그로만 켠다.
     environment["TRIHOUSE_HEADLESS"] = "false" if args.gui else "true"
     environment["TRIHOUSE_RVIZ"] = "true" if args.rviz else "false"
@@ -160,7 +162,9 @@ def cmd_up(args: argparse.Namespace) -> int:
     for service in STARTUP_ORDER:
         # compose 는 이미지가 이미 있으면 다시 빌드하지 않는다. 소스를 고친 뒤
         # `up` 만 다시 돌리면 예전 이미지가 그대로 뜨므로 `--build` 가 필요하다.
-        arguments = ["up", "-d", "--wait"]
+        # EN: Reconcile containers left by services removed from the Compose model.
+        # KO: Compose 모델에서 삭제된 서비스의 잔류 컨테이너도 함께 정리한다.
+        arguments = ["up", "-d", "--wait", "--remove-orphans"]
         if args.build:
             arguments.append("--build")
         completed = subprocess.run(
@@ -286,7 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     up = subparsers.add_parser("up", help="start the whole P0 stack in order")
     add_mode(up)
-    up.add_argument("--project", default="trihouse_test_01")
+    up.add_argument("--project", default="new_map_2")
     up.add_argument("--gui", action="store_true", help="show the Gazebo GUI")
     up.add_argument("--rviz", action="store_true", help="also start RViz")
     up.add_argument(
@@ -316,7 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ros = subparsers.add_parser("ros", help="start the host ROS 2 layer")
     add_mode(ros)
-    ros.add_argument("--project", default="trihouse_test_01")
+    ros.add_argument("--project", default="new_map_2")
     ros.add_argument("--gui", action="store_true", help="show the Gazebo GUI")
     ros.add_argument("--rviz", action="store_true", help="also start RViz")
     ros.add_argument("--fms-base-url", default="http://127.0.0.1:8080")

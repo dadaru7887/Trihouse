@@ -67,6 +67,9 @@ FRAME_KEYS = (
     "robot_base_frame",
     "base_frame",
     "fixed_frame",
+    # EN: Recovery behaviors also resolve odom through `local_frame`.
+    # KO: Nav2 복구 동작도 `local_frame`으로 odom 프레임을 찾는다.
+    "local_frame",
     # `local_costmap.global_frame` 이 `odom` 이다. 맨 이름으로 남으면 URDF 가 만든
     # `pinky_01/odom` 과 매칭되지 않아 costmap 이 `Invalid frame ID "odom" ...
     # frame does not exist` 로 변환을 영원히 기다리고, controller_server 가 경로를
@@ -237,6 +240,36 @@ def load_features(features_path: Path) -> tuple[dict[str, dict], dict[str, dict]
         elif record.get("record_type") == "bottleneck":
             bottlenecks[record["feature_code"]] = record
     return waypoints, bottlenecks
+
+
+def derive_simulation_narrow_zones(source: Path, destination: Path) -> None:
+    """완성된 후보 협로 궤적을 P0에서만 왕복 검증할 수 있게 파생한다."""
+    document = yaml.safe_load(source.read_text(encoding="utf-8"))
+    for profile in (document.get("zones") or {}).values():
+        if profile.get("approach_required", True) is False:
+            continue
+        complete = (
+            profile.get("entry") is not None
+            and profile.get("dock_target") is not None
+            and bool(profile.get("enter"))
+            and bool(profile.get("exit"))
+            and profile.get("exit_target") is not None
+        )
+        if not complete:
+            continue
+        # EN: This derived file lives only under .trihouse/p0. It authorizes a
+        # simulation round trip without claiming that physical exit was measured.
+        # KO: 이 파생 파일은 .trihouse/p0에만 둔다. 실물 탈출 실측을 완료했다고
+        # 주장하지 않으면서 시뮬레이션 왕복만 허용한다.
+        measured = profile.setdefault("measured", {})
+        measured.update(
+            {"entry_pose": True, "dock_pose": True, "enter": True, "exit": True}
+        )
+        measured["simulation_override"] = True
+    destination.write_text(
+        yaml.safe_dump(document, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
 
 
 def build_nav_graph(
@@ -536,11 +569,12 @@ def build_world_with_walls(map_yaml: Path, world_source: Path, destination: Path
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fms-base-url", default="http://127.0.0.1:8080")
-    parser.add_argument("--map-name", default="trihouse_test_01")
+    parser.add_argument("--map-name", default="new_map_2")
     parser.add_argument("--map-revision", default="")
     parser.add_argument("--features", type=Path, required=True)
     parser.add_argument("--nav2-source", type=Path, required=True)
     parser.add_argument("--world-source", type=Path, required=True)
+    parser.add_argument("--narrow-zones-source", type=Path, default=None)
     parser.add_argument(
         "--map-yaml",
         type=Path,
@@ -610,12 +644,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         nav2_files[robot_id] = str(destination)
 
+    narrow_zones_path: Path | None = None
+    if args.narrow_zones_source is not None:
+        narrow_zones_path = output / "narrow_zones.yaml"
+        derive_simulation_narrow_zones(args.narrow_zones_source, narrow_zones_path)
+
     summary = {
         "map_revision": published["map_revision"],
         "nav_graph": str(nav_graph_path),
         "world": str(world_path),
         "published_dir": str(published_dir),
         "nav2_params": nav2_files,
+        "narrow_zones": str(narrow_zones_path) if narrow_zones_path else None,
         "vertices": len(waypoints) + len(bottlenecks),
         "lanes": len(LANE_TOPOLOGY) * 2,
     }

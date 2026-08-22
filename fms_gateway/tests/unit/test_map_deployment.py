@@ -20,9 +20,8 @@ from fms_gateway.app.runtime_profiles import RuntimeProfileProvider
 ROOT = Path(__file__).resolve().parents[3]
 PHYSICAL_JSONL = (
     ROOT
-    / "control_ui"
-    / "rmf_control_ui"
     / "data"
+    / "map_authoring"
     / "import"
     / "trihouse_test_01_physical_features.jsonl"
 )
@@ -398,6 +397,38 @@ def test_physical_fixture_can_be_reused_by_a_differently_named_project(
     staged = coordinator.stage("another_project", draft["draft_revision"])
 
     assert coordinator.validate(staged) == ()
+
+
+def test_validation_accepts_mysql_json_roundoff_in_physical_coordinates(
+    tmp_path: Path,
+):
+    repository = _repository()
+    profiles = RuntimeProfileProvider(repository_root=ROOT)
+    draft = _saved_deployable_project(repository, profiles.load()["profile_hash"])
+    repository._map_projects["trihouse_test_01"]["payload"]["publicWaypoints"][0][
+        "x"
+    ] = 1.2340000000000002
+    coordinator = MapDeploymentCoordinator(repository, tmp_path, profiles)
+
+    staged = coordinator.stage("trihouse_test_01", draft["draft_revision"])
+
+    assert coordinator.validate(staged) == ()
+
+
+def test_validation_rejects_a_material_physical_coordinate_change(tmp_path: Path):
+    repository = _repository()
+    profiles = RuntimeProfileProvider(repository_root=ROOT)
+    draft = _saved_deployable_project(repository, profiles.load()["profile_hash"])
+    repository._map_projects["trihouse_test_01"]["payload"]["publicWaypoints"][0][
+        "x"
+    ] = 1.234001
+    coordinator = MapDeploymentCoordinator(repository, tmp_path, profiles)
+
+    staged = coordinator.stage("trihouse_test_01", draft["draft_revision"])
+
+    assert coordinator.validate(staged) == (
+        "PHYSICAL_FEATURE_RECORD_SET_MISMATCH",
+    )
 
 
 def test_activation_fence_rejects_save_after_validate_and_cleans_stage(

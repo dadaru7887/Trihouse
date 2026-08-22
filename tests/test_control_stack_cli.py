@@ -1,6 +1,7 @@
 """`scripts/control_stack` lifecycle 명령의 공개 계약."""
 
 import json
+import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -61,7 +62,7 @@ def test_simulation_doctor_lists_every_required_service(run_control_stack) -> No
     assert set(checks) >= {
         "mysql", "fms_gateway", "control_tower", "mediamtx", "rmf_schedule",
         "gazebo", "nav2:PK_01", "nav2:PK_02", "omx:OMX_01", "omx:OMX_02",
-        "control_ui",
+        "rmf_dashboard",
     }
 
 
@@ -80,7 +81,7 @@ def test_doctor_says_which_layer_owns_each_check(run_control_stack) -> None:
     report = json.loads(run_control_stack("doctor", "--mode", "simulation").stdout)
 
     assert set(report["layers"]) == {"docker", "host_ros"}
-    assert "control_ui" in report["layers"]["docker"]
+    assert "rmf_dashboard" in report["layers"]["docker"]
     assert "gazebo" in report["layers"]["host_ros"]
     assert set(report["layers"]["docker"]) | set(report["layers"]["host_ros"]) == set(
         report["checks"]
@@ -126,11 +127,34 @@ def test_docker_services_start_in_the_designed_dependency_order() -> None:
 
     assert order == (
         "mysql", "fms_gateway", "mediamtx", "rmf_api", "rmf_dashboard",
-        "control_ui",
     )
-    # UI 는 Gateway 를 reverse proxy 하므로 Gateway 뒤에 와야 한다.
+    # Web dashboard is observational and starts after the control services.
+    # 웹 대시보드는 관측 계층이며 관제 서비스 다음에 시작한다.
     assert order.index("mysql") < order.index("fms_gateway")
-    assert order.index("fms_gateway") < order.index("control_ui")
+    assert order.index("fms_gateway") < order.index("rmf_dashboard")
+
+
+def test_up_reconciles_services_removed_from_compose(monkeypatch) -> None:
+    module = _module()
+    commands: list[list[str]] = []
+    environments: list[dict[str, str]] = []
+
+    monkeypatch.setattr(module, "_docker_available", lambda: True)
+
+    def capture(command, **kwargs):
+        commands.append(command)
+        environments.append(kwargs["env"])
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(module.subprocess, "run", capture)
+    args = argparse.Namespace(
+        project="new_map_2", gui=False, rviz=False, build=False, mode="simulation"
+    )
+
+    assert module.cmd_up(args) == 0
+    assert commands
+    assert all("--remove-orphans" in command for command in commands)
+    assert all(environment["FMS_TCP_BIND"] == "127.0.0.1" for environment in environments)
 
 
 def test_the_ros_layer_is_started_by_the_control_tower_bringup() -> None:
@@ -183,7 +207,7 @@ def test_gazebo_is_headless_unless_a_flag_asks_for_the_gui() -> None:
 def test_up_defaults_to_the_canonical_p0_project() -> None:
     args = _module().build_parser().parse_args(["up"])
 
-    assert args.project == "trihouse_test_01"
+    assert args.project == "new_map_2"
     assert args.mode == "simulation"
 
 

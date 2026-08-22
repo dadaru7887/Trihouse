@@ -14,8 +14,8 @@
 # 발행한다. 이 스크립트가 끝나면 어느 회차든 같은 출발선이다.
 #
 # 사용법
-#   scripts/p0_reset.sh              기본 지도(trihouse_map_01)
-#   scripts/p0_reset.sh new_map_2    다른 SLAM 지도로
+#   scripts/p0_reset.sh              기본 지도(new_map_2)
+#   scripts/p0_reset.sh new_map_2    이름으로 선택
 #
 # 고른 지도의 yaml 경로는 `.trihouse/map_yaml` 에 적힌다. `scripts/p0_up.sh` 가 그것을
 # 읽어 Nav2 에 같은 지도를 준다 — **발행한 지도와 로봇이 도는 지도가 갈라지면**
@@ -30,21 +30,27 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 MYSQL_PW="$(grep -E '^MYSQL_ROOT_PASSWORD=' .env | cut -d= -f2-)"
+FMS_DB_USER="$(grep -E '^FMS_DB_USER=' .env | cut -d= -f2- || true)"
+FMS_DB_USER="${FMS_DB_USER:-fms_gateway}"
+if [[ ! "$FMS_DB_USER" =~ ^[a-zA-Z0-9_]+$ ]]; then
+  echo "[reset] FMS_DB_USER에는 영문, 숫자, 밑줄만 사용할 수 있습니다." >&2
+  exit 1
+fi
 
 # 지도는 이름으로도, yaml 경로로도 지정한다.
-#   scripts/p0_reset.sh                                  기본 trihouse_map_01
+#   scripts/p0_reset.sh                                  기본 new_map_2
 #   scripts/p0_reset.sh new_map_2                        이름
 #   scripts/p0_reset.sh /절대/경로/my_map.yaml            경로
-SELECTOR="${1:-${P0_MAP:-trihouse_map_01}}"
+SELECTOR="${1:-${P0_MAP:-new_map_2}}"
 if [[ "$SELECTOR" == *.yaml || "$SELECTOR" == */* ]]; then
   MAP_YAML="$(readlink -f "$SELECTOR" 2>/dev/null || echo "$SELECTOR")"
 else
-  MAP_YAML="$ROOT/control_ui/rmf_control_ui/data/rmf_maps/${SELECTOR}.yaml"
+  MAP_YAML="$ROOT/pinky_pro_alpha/pinky_navigation/map/${SELECTOR}.yaml"
 fi
 if [[ ! -f "$MAP_YAML" ]]; then
   echo "[reset] SLAM 지도가 없습니다: $MAP_YAML" >&2
   echo "[reset] 저장소에 있는 지도:" >&2
-  ls "$ROOT"/control_ui/rmf_control_ui/data/rmf_maps/*.yaml \
+  ls "$ROOT"/pinky_pro_alpha/pinky_navigation/map/*.yaml \
     | xargs -n1 basename | sed 's/\.yaml$//;s/^/          /' >&2
   exit 1
 fi
@@ -53,6 +59,9 @@ echo "[reset] 지도: $MAP_NAME  ($MAP_YAML)"
 
 source "$ROOT/scripts/lib/require_docker.sh"
 require_docker || exit 1
+source "$ROOT/scripts/lib/p0_environment.sh"
+configure_p0_simulation_environment
+configure_p0_ros_domain "$ROOT/.env"
 
 # 협로 존 표는 지도 좌표계에 묶여 있어 지도마다 따로 재야 한다. 없으면 규칙 주행이
 # 통째로 꺼지고, 로봇은 Nav2 로 협로에 들어가려다 갇힌다. 여기서 미리 말해 준다.
@@ -78,27 +87,49 @@ fi
 echo "[reset] 2/5 런타임 큐를 비웁니다"
 rm -f .trihouse/p0/pinky_0*_task_events.sqlite3
 
-echo "[reset] 3/5 컨테이너 6 개를 확인합니다"
+echo "[reset] 3/5 컨테이너 5 개를 현재 Compose 구성에 맞춥니다"
 
-running="$(docker ps --format '{{.Names}}' | grep -cE 'trihouse-mysql|trihouse_p0-' || true)"
-if [[ "$running" -lt 6 ]]; then
-  echo "[reset]     $running 개만 떠 있습니다. 올립니다."
-  docker compose -p trihouse_p0 \
-    -f compose.yaml -f compose.control.yaml \
-    -f compose.edge_4060.yaml -f compose.simulation.yaml up -d
-fi
+# Gateway의 지도 feature 계약은 이미지 안의 Python 코드다. 소스에서 waypoint
+# 개수나 fiducial 정책을 바꾼 뒤 예전 이미지를 재사용하면 publish가 구 계약으로
+# 422를 내므로, reset 때 Gateway만 먼저 현재 소스로 다시 빌드한다.
+docker compose -p trihouse_p0 \
+  -f compose.yaml -f compose.control.yaml \
+  -f compose.edge_4060.yaml -f compose.simulation.yaml \
+  build fms_gateway
+
+# EN: Always reconcile here so removed services cannot survive as orphan containers.
+# KO: 삭제된 서비스가 orphan 컨테이너로 남지 않도록 매번 현재 구성을 적용한다.
+docker compose -p trihouse_p0 \
+  -f compose.yaml -f compose.control.yaml \
+  -f compose.edge_4060.yaml -f compose.simulation.yaml \
+  up -d --remove-orphans
 until curl -fsS -m 2 http://127.0.0.1:8080/ready >/dev/null 2>&1; do
   echo "[reset]     gateway 를 기다립니다..."; sleep 3
 done
 
 echo "[reset] 4/5 DB 를 schema + seed 로 되돌립니다"
 docker exec -i trihouse-mysql mysql -uroot -p"$MYSQL_PW" \
-  -e "DROP DATABASE IF EXISTS trihouse_fms; CREATE DATABASE trihouse_fms
+  -e "DROP DATABASE IF EXISTS trihouse_fms;
+      DROP DATABASE IF EXISTS trihouse_recovery;
+      CREATE DATABASE trihouse_fms
       CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null
 docker exec -i trihouse-mysql mysql -uroot -p"$MYSQL_PW" trihouse_fms \
   < db/migrations/001_physical_v1_baseline.sql 2>/dev/null
+
+# EN: Recreate the migration ledger and apply every immutable post-baseline migration.
+# KO: migration 원장을 다시 만들고 기준선 이후의 불변 migration을 모두 적용한다.
+docker exec -e MYSQL_ROOT_PASSWORD="$MYSQL_PW" trihouse-mysql \
+  /docker-entrypoint-initdb.d/002_record_physical_baseline.sh >/dev/null
+docker exec -e MYSQL_ROOT_PASSWORD="$MYSQL_PW" trihouse-mysql \
+  /docker-entrypoint-initdb.d/003_apply_physical_migrations.sh >/dev/null
 docker exec -i trihouse-mysql mysql -uroot -p"$MYSQL_PW" trihouse_fms \
   < db/seeds/seed_dev.sql 2>/dev/null
+
+# EN: The Gateway uses the same runtime account for FMS and recovery ledgers.
+# KO: Gateway는 FMS 원장과 recovery 원장에 같은 런타임 계정을 사용한다.
+docker exec -i trihouse-mysql mysql -uroot -p"$MYSQL_PW" \
+  -e "GRANT SELECT, INSERT, UPDATE, DELETE ON trihouse_recovery.* TO '$FMS_DB_USER'@'%';" \
+  2>/dev/null
 
 # Gateway 는 기동 때 스키마를 확인하고 연결 풀을 잡는다. DB 를 갈아 끼웠으므로
 # 다시 띄워 예전 연결을 버리게 한다.

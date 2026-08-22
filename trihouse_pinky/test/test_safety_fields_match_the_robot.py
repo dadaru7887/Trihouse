@@ -39,7 +39,11 @@ PINKY = Path(__file__).resolve().parents[1]
 REPOSITORY = PINKY.parent
 URDF = REPOSITORY / "pinky_pro" / "pinky_description" / "urdf" / "pinky.urdf.xacro"
 NAV2_PARAMS = (
-    REPOSITORY / "pinky_pro" / "pinky_navigation" / "params" / "nav2_params.yaml"
+    REPOSITORY
+    / "pinky_pro_alpha"
+    / "pinky_navigation"
+    / "params"
+    / "nav2_params.yaml"
 )
 
 sys.path.insert(0, str(PINKY / "trihouse_pinky_safety"))
@@ -456,6 +460,11 @@ def test_the_direction_comes_from_the_command_not_the_scan() -> None:
     """스캔이 올 때는 어느 쪽으로 갈지 모른다. 명령이 정한다."""
     assert "commanded_linear_x < 0.0" in PATH_DISTANCE
     assert "reverse=False" in ON_SCAN and "reverse=True" in ON_SCAN
+
+
+def test_in_place_rotation_uses_only_the_swept_clearance_field() -> None:
+    """제자리 회전에 전진 정지거리를 겹치면 안전한 회전도 영구 정지한다."""
+    assert "rotating_in_place(commanded_linear_x, commanded_angular_z)" in PATH_DISTANCE
 
 
 def test_both_directions_are_measured_from_one_scan() -> None:

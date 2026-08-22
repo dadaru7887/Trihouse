@@ -160,6 +160,40 @@ def physical_import_to_public_records(
     return waypoints, features
 
 
+def _physical_records_equal(
+    left: object,
+    right: object,
+    *,
+    numeric_abs_tol: float = 1e-12,
+) -> bool:
+    """Compare persisted JSON records without rejecting harmless float roundoff."""
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(
+            _physical_records_equal(
+                left[key], right[key], numeric_abs_tol=numeric_abs_tol
+            )
+            for key in left
+        )
+    if isinstance(left, list) and isinstance(right, list):
+        return len(left) == len(right) and all(
+            _physical_records_equal(a, b, numeric_abs_tol=numeric_abs_tol)
+            for a, b in zip(left, right, strict=True)
+        )
+    if (
+        isinstance(left, (int, float))
+        and not isinstance(left, bool)
+        and isinstance(right, (int, float))
+        and not isinstance(right, bool)
+    ):
+        return math.isclose(
+            float(left),
+            float(right),
+            rel_tol=0.0,
+            abs_tol=numeric_abs_tol,
+        )
+    return left == right
+
+
 class MapSourceStaging:
     """Filesystem-only source uploads with opaque, expiring, project-bound tokens."""
 
@@ -894,8 +928,12 @@ class MapDeploymentCoordinator:
                         if value.get("origin") == "physical_features_import"
                     ]
                     if (
-                        physical_waypoints != imported_waypoints
-                        or physical_features != imported_features
+                        not _physical_records_equal(
+                            physical_waypoints, imported_waypoints
+                        )
+                        or not _physical_records_equal(
+                            physical_features, imported_features
+                        )
                     ):
                         errors.add("PHYSICAL_FEATURE_RECORD_SET_MISMATCH")
                 except PhysicalFeatureImportError:

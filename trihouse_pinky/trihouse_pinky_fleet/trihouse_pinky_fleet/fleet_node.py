@@ -2,6 +2,7 @@
 
 import copy
 import rclpy
+from dataclasses import dataclass
 from math import atan2, cos, hypot, isfinite, sin
 
 import yaml
@@ -23,6 +24,7 @@ from trihouse_interfaces.msg import HandoverState, NavigationState, Readiness, R
 from trihouse_pinky_docking.narrow_zone import (
     ENTER,
     EXIT,
+    EntryPoseController,
     MotionLimits,
     NarrowZoneConfigError,
     NarrowZoneController,
@@ -32,7 +34,11 @@ from trihouse_pinky_docking.narrow_zone import (
 
 from .workflow import JobCommand, JobPhase, TransportWorkflow
 from .narrow_zone_pilot import verify_pose
-from .narrow_zone_routing import departure_profile, select_approach
+from .narrow_zone_routing import (
+    departure_profile,
+    entry_handoff_reached,
+    select_approach,
+)
 from .arrival import may_report_arrival, within_tolerance
 from .recovery_execution import recovery_admission_block_reason
 
@@ -46,6 +52,13 @@ def _complete_once(future: Future) -> None:
 def _duration(seconds: float) -> Duration:
     whole = int(seconds)
     return Duration(sec=whole, nanosec=int((seconds - whole) * 1_000_000_000))
+
+
+@dataclass(frozen=True)
+class NavApproachOutcome:
+    result: object | None
+    handed_off: bool = False
+    error: str = ''
 
 
 # 정밀 정차 허용오차. **Nav2 의 goal tolerance 보다 좁으면 안 된다.**
@@ -466,7 +479,9 @@ class FleetNode(Node):
         self.nav_goal_handles[context.command_id] = nav_handle
         if goal_handle.is_cancel_requested:
             nav_handle.cancel_goal_async()
-        nav_result = await nav_handle.get_result_async()
+        nav_approach = await self._await_nav_or_entry_handoff(
+            nav_handle, goal_handle, narrow_zone
+        )
         self.nav_goal_handles.pop(context.command_id, None)
         if goal_handle.is_cancel_requested:
             canceled = self.workflow.cancel_navigation(context.command_id)
@@ -486,10 +501,60 @@ class FleetNode(Node):
             result.message = 'navigation canceled'
             result.completed_at = self.get_clock().now().to_msg()
             return result
-        # 진입점에 닿았으면 규칙 주행으로 통로를 지난다. Nav2 가 실패했으면 하지 않는다 —
-        # 엉뚱한 자리에서 후진하는 것이 가만히 있는 것보다 나쁘다.
+        if nav_approach.error or nav_approach.result is None:
+            detail = nav_approach.error or 'Nav2 접근 결과가 없다'
+            failed = self.workflow.nav_result(succeeded=False, stationary=self.stationary)
+            self._publish_navigation(goal, failed)
+            self._publish_event(
+                goal, TaskEvent.EVENT_FAILED, detail,
+                reason_code='NAV2_ABORTED',
+            )
+            goal_handle.abort()
+            result.success = False
+            result.code = ExecuteTransport.Result.CODE_NAVIGATION_FAILED
+            result.message = detail
+            result.completed_at = self.get_clock().now().to_msg()
+            return result
+        nav_result = nav_approach.result
+        nav_approach_completed = nav_result.status == 4 or nav_approach.handed_off
+        if nav_approach.handed_off and not await self._settle_before_rule_handoff():
+            detail = 'entry zone에서 Nav2 취소 후 로봇이 정차하지 않았다'
+            failed = self.workflow.nav_result(succeeded=False, stationary=False)
+            self._publish_navigation(goal, failed)
+            self._publish_event(
+                goal, TaskEvent.EVENT_FAILED, detail,
+                reason_code='ROBOT_NOT_STOPPED',
+            )
+            goal_handle.abort()
+            result.success = False
+            result.code = ExecuteTransport.Result.CODE_NAVIGATION_FAILED
+            result.message = detail
+            result.completed_at = self.get_clock().now().to_msg()
+            return result
+        # EN: After handoff, close the measured entry pose error before dock steps.
+        # A failed/unconfirmed Nav2 cancellation must never start local motion.
+        # KO: 제어권을 넘긴 뒤 실측 entry pose 오차부터 맞추고 도킹 스텝을 시작한다.
+        # Nav2 실패 또는 취소 미확인 상태에서는 로컬 주행을 절대 시작하지 않는다.
         narrow_detail = ''
-        if narrow_zone is not None and nav_result.status == 4:
+        if narrow_zone is not None and nav_approach_completed:
+            aligned, narrow_detail = await self._run_entry_alignment(
+                EntryPoseController(
+                    narrow_zone.entry_pose,
+                    limits=self._narrow_limits(),
+                ),
+                goal_handle,
+            )
+            if not aligned:
+                self._publish_event(
+                    goal, TaskEvent.EVENT_FAILED, narrow_detail,
+                    reason_code='GOAL_TOLERANCE_NOT_MET',
+                )
+                goal_handle.abort()
+                result.success = False
+                result.code = ExecuteTransport.Result.CODE_NAVIGATION_FAILED
+                result.message = narrow_detail
+                result.completed_at = self.get_clock().now().to_msg()
+                return result
             if narrow_zone.marker_id is not None:
                 ran, narrow_detail = await self._run_marker_dock(
                     narrow_zone.marker_id, goal
@@ -545,7 +610,10 @@ class FleetNode(Node):
         # idle" 로 거절된다. `await` 로 양보하므로 그 사이 odom 콜백이 계속 돌아
         # `self.stationary` 가 갱신된다.
         await self._settle_before_arrival()
-        arrived = self.workflow.nav_result(succeeded=nav_result.status == 4 and precise, stationary=self.stationary)
+        arrived = self.workflow.nav_result(
+            succeeded=nav_approach_completed and precise,
+            stationary=self.stationary,
+        )
         if arrived.phase is JobPhase.HEALTH_CHECK:
             arrived = self.workflow.finish_return(health_ok=self.recovery_health_ok, cargo_present=False)
         self._publish_navigation(goal, arrived)
@@ -561,7 +629,7 @@ class FleetNode(Node):
             self.display_pub.publish(String(data=''))
             reason_code = (
                 'GOAL_TOLERANCE_NOT_MET'
-                if nav_result.status == 4 and not precise
+                if nav_approach_completed and not precise
                 else 'ROBOT_NOT_STOPPED'
                 if arrived.detail == 'waiting for stop'
                 else 'NAV2_ABORTED'
@@ -752,6 +820,57 @@ class FleetNode(Node):
                 return
             await self._sleep(0.05)
 
+    async def _settle_before_rule_handoff(self) -> bool:
+        """Keep docking at zero until Nav2 cancellation produces a full stop.
+
+        Nav2 취소가 완전 정차로 이어질 때까지 docking 채널의 0속도를 유지한다.
+        """
+        timeout_s = float(self.get_parameter('arrival_stop_timeout_s').value)
+        started_ns = self.get_clock().now().nanoseconds
+        while True:
+            self._stop_narrow_drive()
+            if self.stationary:
+                return True
+            waited_s = (self.get_clock().now().nanoseconds - started_ns) / 1e9
+            if waited_s >= timeout_s:
+                return False
+            await self._sleep(0.05)
+
+    async def _await_nav_or_entry_handoff(
+        self,
+        nav_handle: object,
+        goal_handle: object,
+        profile: object | None,
+    ) -> NavApproachOutcome:
+        """Return whichever occurs first: Nav2 result or entry-zone handoff.
+
+        Nav2 결과와 entry zone 제어권 인계 중 먼저 발생한 경계를 반환한다.
+        """
+        result_future = nav_handle.get_result_async()
+        while not result_future.done():
+            if (
+                profile is not None
+                and self.map_pose is not None
+                and entry_handoff_reached(profile, Pose2D(*self.map_pose))
+            ):
+                self.get_logger().info(
+                    f'{profile.destination_code}: entry zone 진입, Nav2 제어권을 취소한다'
+                )
+                cancel_response = await nav_handle.cancel_goal_async()
+                if not getattr(cancel_response, 'goals_canceling', ()):
+                    if result_future.done():
+                        wrapped = result_future.result()
+                        if getattr(wrapped, 'status', None) == 4:
+                            return NavApproachOutcome(wrapped)
+                    return NavApproachOutcome(
+                        None,
+                        error='entry zone에서 Nav2 action 취소가 거절됐다',
+                    )
+                wrapped = await result_future
+                return NavApproachOutcome(wrapped, handed_off=True)
+            await self._sleep(0.05)
+        return NavApproachOutcome(result_future.result())
+
     def _sleep(self, seconds: float) -> Future:
         """executor 에 `seconds` 만큼 양보한다. 그 사이 odom 콜백이 계속 돈다.
 
@@ -885,8 +1004,21 @@ class FleetNode(Node):
     async def _run_narrow_controller(
         self, controller: NarrowZoneController, goal_handle: object
     ) -> tuple[bool, str]:
-        """한 번의 진입/탈출을 실행하고 모든 terminal 경로에서 0 속도를 보낸다."""
-        label = controller.direction
+        return await self._run_rule_controller(
+            controller, goal_handle, label=f'협로 {controller.direction}'
+        )
+
+    async def _run_entry_alignment(
+        self, controller: EntryPoseController, goal_handle: object
+    ) -> tuple[bool, str]:
+        return await self._run_rule_controller(
+            controller, goal_handle, label='entry pose 정렬'
+        )
+
+    async def _run_rule_controller(
+        self, controller: object, goal_handle: object, *, label: str
+    ) -> tuple[bool, str]:
+        """규칙 제어기를 실행하고 모든 terminal 경로에서 0 속도를 보낸다."""
         if self.map_pose is None:
             self._stop_narrow_drive()
             return False, 'map pose 를 모른다'
@@ -919,7 +1051,7 @@ class FleetNode(Node):
             await self._sleep(0.05)
 
         self._stop_narrow_drive()
-        return True, f'협로 {label} 완료'
+        return True, f'{label} 완료'
 
     def _at_precise_goal(self, goal: ExecuteTransport.Goal) -> bool:
         # 목표는 map 프레임이다(`protocol.py` 가 'map' 을 박는다). odom pose 와

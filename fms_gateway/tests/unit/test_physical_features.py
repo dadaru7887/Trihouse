@@ -11,9 +11,8 @@ from pydantic import ValidationError
 ROOT = Path(__file__).resolve().parents[3]
 PHYSICAL_JSONL = (
     ROOT
-    / "control_ui"
-    / "rmf_control_ui"
     / "data"
+    / "map_authoring"
     / "import"
     / "trihouse_test_01_physical_features.jsonl"
 )
@@ -100,6 +99,17 @@ def test_new_map_2_physical_fixture_is_publishable() -> None:
     result = _importer().parse(NEW_MAP_2_PHYSICAL_JSONL)
 
     assert result.map_name == "new_map_2"
+    assert len(result.waypoints) == 12
+    assert len(result.bottlenecks) == 2
+    assert len(result.fiducials) == 0
+    ambient = result.waypoint("WH-AMB-01-NARROW-ENTRY").pose
+    chilled = result.waypoint("WH-CHL-01-NARROW-ENTRY").pose
+    assert (ambient.x, ambient.y, ambient.yaw) == pytest.approx(
+        (1.010244055594586, 0.9167344977253539, -0.08675495954950327)
+    )
+    assert (chilled.x, chilled.y, chilled.yaw) == pytest.approx(
+        (1.1013315221281241, -0.10045055614140724, 3.1029342608092607)
+    )
     assert result.waypoint("WH-FRZ-01-DOCK-01").pose.x == pytest.approx(
         1.3314581184
     )

@@ -6,14 +6,14 @@ DB 를 seed 로 되돌리면 발행된 revision 도 사라지므로 매번 다�
 
 ## 어떤 SLAM 지도를 올리는가
 
-`P0_MAP` 환경변수 또는 첫 번째 인자로 고른다. 기본은 `trihouse_map_01` 이다 —
-waypoint 실측 기록의 `source_map_name` 이 그것이고 bringup 의 기본값도 그것이다.
+`P0_MAP` 환경변수 또는 첫 번째 인자로 고른다. 기본은 `new_map_2`이며 지도 정본은
+`pinky_pro_alpha/pinky_navigation/map/`에 있다.
 
     python3 scripts/p0_publish_map.py new_map_2
-    python3 scripts/p0_publish_map.py control_ui/rmf_control_ui/data/rmf_maps/new_map_2.yaml
+    python3 scripts/p0_publish_map.py pinky_pro_alpha/pinky_navigation/map/new_map_2.yaml
     P0_MAP=/절대/경로/my_map.yaml python3 scripts/p0_publish_map.py
 
-이름을 주면 `control_ui/rmf_control_ui/data/rmf_maps/<이름>.yaml` 을 쓴다. 경로를
+이름을 주면 `pinky_pro_alpha/pinky_navigation/map/<이름>.yaml` 을 쓴다. 경로를
 주면 그 파일을 쓰고, 이미지는 ROS 지도 규약대로 yaml 과 같은 디렉터리에서 찾는다.
 
 **여기서 고른 지도와 Nav2 가 도는 지도가 같아야 한다.** 좌표는 지도마다 다른
@@ -44,13 +44,13 @@ from p0_map_publish_config import (
 BASE = map_projects_api_base(os.environ)
 MAP = map_project_name(os.environ)
 ROOT = Path(__file__).resolve().parents[1]
-MAPS = ROOT / "control_ui" / "rmf_control_ui" / "data" / "rmf_maps"
+MAPS = ROOT / "pinky_pro_alpha" / "pinky_navigation" / "map"
 
 # 지도는 이름으로도, yaml 경로로도 지정할 수 있다.
-#   scripts/p0_publish_map.py trihouse_map_01
-#   scripts/p0_publish_map.py control_ui/rmf_control_ui/data/rmf_maps/new_map_2.yaml
+#   scripts/p0_publish_map.py new_map_2
+#   scripts/p0_publish_map.py pinky_pro_alpha/pinky_navigation/map/new_map_2.yaml
 #   P0_MAP=/절대/경로/my_map.yaml scripts/p0_publish_map.py
-SELECTOR = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("P0_MAP", "trihouse_map_01")).strip()
+SELECTOR = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("P0_MAP", "new_map_2")).strip()
 
 if SELECTOR.endswith(".yaml") or "/" in SELECTOR:
     yaml_path = Path(SELECTOR).expanduser()
@@ -102,8 +102,8 @@ if upload_image_name != image_name:
 
 # 웨이포인트 좌표는 **지도 좌표계에 묶여 있다.** 지도를 다시 그리면 같은 물리적
 # 자리가 다른 숫자가 된다. 그래서 지도별 실측 파일을 먼저 찾고, 없을 때만 기본
-# 파일로 되돌아간다. 기본 파일은 trihouse_map_01 에서 잰 값이다.
-IMPORT_DIR = ROOT / "control_ui" / "rmf_control_ui" / "data" / "import"
+# 파일로 되돌아간다. 실측 자산은 UI 소스와 독립된 data 디렉터리가 정본이다.
+IMPORT_DIR = ROOT / "data" / "map_authoring" / "import"
 features_override = physical_features_file(os.environ)
 if features_override is not None:
     features_path = Path(features_override).expanduser().resolve()

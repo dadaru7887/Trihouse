@@ -14,3 +14,18 @@ def pytest_addoption(parser):
         choices=("enter", "exit", "roundtrip"),
         default="enter",
     )
+    # 세 온도 구역 순회 주행 전용 옵션.
+    group.addoption("--device-id", default="PK_01")
+    group.addoption(
+        "--narrow-zones-file",
+        default="config/narrow_zones.new_map_2.yaml",
+        help="주행 gate가 읽을 협로 표. 도킹 실측 전에는 zone_tour 표를 쓴다",
+    )
+    group.addoption("--narrow-map-name", default="new_map_2")
+    group.addoption(
+        "--zone-items",
+        default="",
+        help="ambient=SKU-...,chilled=SKU-...,frozen=SKU-... (비우면 기본 품목)",
+    )
+    group.addoption("--packing-worker", default="W-FIELD-01")
+    group.addoption("--tour-artifacts", default="artifacts/zone_tour")

@@ -1,42 +1,75 @@
 # new_map_2 전용 저속 협로 표.
 #
 # 충전 베이는 시작점 바로 앞의 벽 여유가 작다. 따라서 어떤 주문이든 일반 Nav2 를
-# 먼저 보내지 않고, 아래 두 규칙 시퀀스로 bottleneck_zone_01 까지 빠져나온 다음에
-# Nav2 를 시작한다. 명령은 fleet_node -> cmd_vel_nav 로 나가므로 velocity_smoother와
-# collision_monitor 를 계속 통과한다.
+# 먼저 보내지 않고, 두 출발 waypoint가 공유하는 하나의 narrow_4 탈출 규칙을 실행한
+# 다음 Nav2를 시작한다. 규칙 속도는 fleet_node -> cmd_vel_dock -> safety supervisor를
+# 거쳐 최종 cmd_vel로 전달된다.
 map_name: new_map_2
 
 zones:
-  # 창고 세 곳은 아래 앞 공간을 실측한 뒤에만 enabled=true로 바꾼다. entry는 Nav2가
-  # 멈춰 ArUco 탐색을 시작할 map pose, zone은 도킹 뒤 로봇까지 포함해야 한다.
-  # marker_id가 있으면 enter 배열 대신 /trihouse/dock action을 호출한다.
+  # 창고 entry는 Nav2가 규칙 제어에 넘길 map pose이고, zone은 도킹 뒤 로봇을
+  # 포함하는 출발 감지 영역이다. ArUco marker 없이 enter/exit 고정 규칙만 사용한다.
   ambient_storage_loading_dock_01:
-    enabled: false
-    marker_id: '2'
-    entry: null
-    zone: null
-    enter: []
-    exit: []
-    dock_target: null
-    exit_target: null
-    measured: { entry_pose: false, dock_pose: false, enter: false, exit: false }
+    enabled: true
+    # 첨부 rule-based 코드 narrow_1의 new_map_2 실측 진입값. ArUco는 사용하지 않는다.
+    entry: { x: 1.010244055594586, y: 0.9167344977253539, yaw: -0.08675495954950327 }
+    entry_zone:
+      { x: 1.010244055594586, y: 0.9167344977253539, yaw: -0.08675495954950327, length: 0.05, width: 0.20 }
+    # entry에서 입고 시퀀스를 적용해 계산한 후보 도크 pose다. 실물 검증 전에는
+    # measured.dock_pose=false로 두어 일반 주문 배정을 닫는다.
+    zone: { x: 1.293481094178777, y: 1.0156120986977553, yaw: -2.805721254488808, length: 0.20, width: 0.20 }
+    dock_target: { x: 1.293481094178777, y: 1.0156120986977553, yaw: -2.805721254488808 }
+    enter:
+      - [rotate, -2.805721254488808]
+      - [straight, -0.30]
+    exit:
+      - [straight, 0.30]
+      - [rotate, -3.130293455959265]
+      - [exit_zone, null]
+    exit_target: { x: 1.010244055594586, y: 0.9167344977253539, yaw: -3.130293455959265 }
+    measured:
+      source: j_narrow3_rule_based_docking_1.py
+      entry_pose: true
+      dock_pose: false
+      enter: true
+      exit: true
+      note: dock_target은 narrow_1 실측 이동량으로 계산한 후보값이므로 calibration 주행이 필요하다.
 
   chilled_storage_loading_dock_01:
-    enabled: false
-    marker_id: '1'
-    entry: null
-    zone: null
-    enter: []
-    exit: []
-    dock_target: null
-    exit_target: null
-    measured: { entry_pose: false, dock_pose: false, enter: false, exit: false }
+    enabled: true
+    # 첨부 rule-based 코드 narrow_2의 new_map_2 실측 진입값. ArUco는 사용하지 않는다.
+    entry: { x: 1.1013315221281241, y: -0.10045055614140724, yaw: 3.1029342608092607 }
+    entry_zone:
+      { x: 1.1013315221281241, y: -0.10045055614140724, yaw: 3.1029342608092607, length: 0.05, width: 0.20 }
+    zone: { x: 1.3263418779273253, y: -0.2988701614809928, yaw: 2.4189105956431427, length: 0.20, width: 0.20 }
+    dock_target: { x: 1.3263418779273253, y: -0.2988701614809928, yaw: 2.4189105956431427 }
+    enter:
+      - [rotate, 2.4189105956431427]
+      - [straight, -0.30]
+    exit:
+      - [straight, 0.30]
+      - [rotate, -3.130293455959265]
+      - [exit_zone, null]
+    exit_target: { x: 1.1013315221281241, y: -0.10045055614140724, yaw: -3.130293455959265 }
+    measured:
+      source: j_narrow3_rule_based_docking_1.py
+      entry_pose: true
+      dock_pose: false
+      enter: false
+      exit: false
+      note: narrow_2 시퀀스는 narrow_1 규칙을 재사용한 미검증 후보라 calibration 주행이 필요하다.
 
   frozen_storage_loading_dock_01:
     # 2026-08-21 PK02 실측. Nav2는 이 입구까지만 오고, 아래 고정 규칙이
     # 냉동 도크까지 주차한다. marker_id는 일부러 비운다. 값이 있으면 고정
     # 시퀀스 대신 아직 미검증인 ArUco dock action으로 분기하기 때문이다.
     entry: { x: 1.1792881155, y: -1.1896842748, yaw: 0.0109381190 }
+    # EN: Nav2 yields control anywhere in this oriented box. Rule control then
+    # closes the remaining position and yaw error against `entry`.
+    # KO: Nav2는 이 회전 직사각형 안에서 제어권을 넘긴다. 남은 위치와 yaw 오차는
+    # 규칙 제어가 `entry` 값에 맞춘다.
+    entry_zone:
+      { x: 1.1792881155, y: -1.1896842748, yaw: 0.0109381190, length: 0.20, width: 0.20 }
     # 도킹 뒤 로봇이 머무르는 직사각형. entry와 분리해야 다음 출발 명령에서
     # 역순 탈출 시퀀스를 선택할 수 있다.
     zone: { x: 1.3314581184, y: -0.8149269956, yaw: -1.572140, length: 0.20, width: 0.20 }
@@ -66,44 +99,27 @@ zones:
         PK02 냉동 입구에서 20 cm 전진 후 도킹 yaw(-1.572140 rad)로 회전하고,
         0.372569 m 후진한다. 최종 x 오차 약 4.8 cm는 현재 0.15 m 검증 범위 안이다.
 
-  charging_station_01:
-    # 충전소는 귀환 Nav2 목표를 바꾸지 않고, 다음 주문을 시작할 때 탈출만 적용한다.
+  charging_narrow_departure:
+    # 두 대기/충전 waypoint는 하나의 narrow_4 탈출 상태를 공유한다. 아래 반경은
+    # 출발 트리거일 뿐 별개의 물리 협로 zone이 아니다.
+    enabled: true
     approach_required: false
-    # 2026-08-21 PK02 AMCL 재측정 최종 자세. exit 길이는 아직 별도 실물 보정값을 유지한다.
-    entry: { x: 0.0570244747, y: 0.1949666005, yaw: 0.1093261667 }
-    zone: { length: 0.30, width: 0.30 }
-    # 귀환 때는 Nav2가 충전 좌표까지 정차하고 이 0 m 스텝이 즉시 완료된다.
-    enter:
-      - [straight, 0.0]
+    departure_triggers:
+      - { name: start_zone_1, x: 0.171, y: 0.202, radius: 0.30 }
+      - { name: start_zone_2, x: 0.076, y: -0.013, radius: 0.30 }
+    entry: null
+    zone: null
+    enter: []
     exit:
-      - [straight, 0.680]
-      - [rotate, -1.276]
-      - [straight, 0.345]
+      - [straight, 0.70]
+    dock_target: null
     exit_target: { x: 0.7992961442, y: 0.0854053105, yaw: 0.0923642279 }
+    # 실측점 반경에 먼저 들어오면 0.70 m를 모두 채우기 전이라도 즉시 정지한다.
+    exit_completion_radius: 0.15
     measured:
       exit: true
-      date: 2026-08-21
-      source: waypoint.md_pk02_amcl
+      date: 2026-08-22
+      source: j_narrow3_rule_based_docking_1.py_and_waypoint.md_pk02_amcl
       note: >-
-        최종 pose는 PK02 AMCL 재측정값이다. 첨부 기록의 세 출력은 timestamp와 값이
-        같으므로 독립 3회 측정으로 보지 않는다. 기존 0.68 m 저속 탈출 시퀀스는 유지한다.
-
-  charging_station_02:
-    approach_required: false
-    # 2026-08-21 PK02 AMCL 재측정 최종 자세. exit 길이는 아직 별도 실물 보정값을 유지한다.
-    entry: { x: 0.1336554086, y: -0.0065562838, yaw: 0.1569596446 }
-    zone: { length: 0.30, width: 0.30 }
-    enter:
-      - [straight, 0.0]
-    exit:
-      - [straight, 0.650]
-      - [rotate, -1.083]
-      - [straight, 0.333]
-    exit_target: { x: 0.7992961442, y: 0.0854053105, yaw: 0.0923642279 }
-    measured:
-      exit: true
-      date: 2026-08-21
-      source: waypoint.md_pk02_amcl
-      note: >-
-        최종 pose는 PK02 AMCL 재측정값이다. 첨부 기록의 세 출력은 timestamp와 값이
-        같으므로 독립 3회 측정으로 보지 않는다. 기존 0.65 m 저속 탈출 시퀀스는 유지한다.
+        start_zone_1/2 반경 0.30 m 안에서 다음 주문을 받으면 0.70 m 저속 직진한 뒤,
+        실측 exit_target 허용 반경을 확인하고 원래 주문 목적지의 Nav2를 시작한다.

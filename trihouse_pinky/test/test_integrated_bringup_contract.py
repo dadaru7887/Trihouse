@@ -13,7 +13,7 @@ class IntegratedBringupContractTest(unittest.TestCase):
     def test_physical_and_sim_launch_expose_same_core_parameters(self) -> None:
         physical = (ROOT / "trihouse_pinky_bringup/launch/trihouse_pinky.launch.py").read_text()
         simulation = (ROOT / "trihouse_pinky_bringup/launch/trihouse_pinky_sim.launch.py").read_text()
-        required = ("robot_id", "map_revision", "map", "control_host", "control_port", "use_sim_time", "vision_enabled", "docking_enabled", "omx_station_id")
+        required = ("robot_id", "map_revision", "map", "control_host", "control_port", "use_sim_time", "vision_enabled", "docking_enabled")
         for name in required:
             self.assertIn(f"DeclareLaunchArgument('{name}'", physical)
             self.assertIn(f"DeclareLaunchArgument('{name}'", simulation)

@@ -22,6 +22,7 @@ services:
       - ./db/migrations:/trihouse-migrations:ro
       - ./db/init/003_apply_physical_migrations.sh:/docker-entrypoint-initdb.d/003_apply_physical_migrations.sh:ro
       - ./db/seeds/seed_hardware.sql:/docker-entrypoint-initdb.d/004_seed.sql:ro
+      - ./db/init/003_grant_gateway_recovery.sh:/docker-entrypoint-initdb.d/005_grant_gateway_recovery.sh:ro
     # compose.control.yaml 이 만드는 격리 네트워크. Gateway만 함께 붙는다.
     networks:
       - db_internal

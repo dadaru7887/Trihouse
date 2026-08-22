@@ -13,9 +13,8 @@ from fms_gateway.app.repositories import InMemoryFmsRepository
 ROOT = Path(__file__).resolve().parents[3]
 PHYSICAL_JSONL = (
     ROOT
-    / "control_ui"
-    / "rmf_control_ui"
     / "data"
+    / "map_authoring"
     / "import"
     / "trihouse_test_01_physical_features.jsonl"
 )

@@ -40,7 +40,7 @@ from sensor_msgs.msg import LaserScan
 from tf2_ros import Buffer, TransformListener
 
 ROOT = Path(__file__).resolve().parents[1]
-MAPS = ROOT / "control_ui" / "rmf_control_ui" / "data" / "rmf_maps"
+MAPS = ROOT / "pinky_pro_alpha" / "pinky_navigation" / "map"
 
 
 class Grid:

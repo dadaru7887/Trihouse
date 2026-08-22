@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SLAM 지도를 격자로 펼쳐 waypoint 가 어디에 놓이는지 눈으로 확인한다.
 
-    scripts/p0_show_map.py                       기본 trihouse_map_01
+    scripts/p0_show_map.py                       기본 new_map_2
     scripts/p0_show_map.py new_map_2             이름으로
     scripts/p0_show_map.py /절대/경로/my_map.yaml  경로로
 
@@ -24,14 +24,13 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-MAPS = ROOT / "control_ui" / "rmf_control_ui" / "data" / "rmf_maps"
+MAPS = ROOT / "pinky_pro_alpha" / "pinky_navigation" / "map"
 FEATURES = (
     ROOT
-    / "control_ui"
-    / "rmf_control_ui"
     / "data"
+    / "map_authoring"
     / "import"
-    / "trihouse_test_01_physical_features.jsonl"
+    / "trihouse_test_01_physical_features.new_map_2.jsonl"
 )
 
 # 격자에 겹쳐 그릴 때 쓸 한 글자 표시. 이름이 길어 그대로는 못 얹는다.
@@ -54,7 +53,7 @@ def load_grid(yaml_path: Path):
 
 
 def main() -> None:
-    selector = sys.argv[1] if len(sys.argv) > 1 else "trihouse_map_01"
+    selector = sys.argv[1] if len(sys.argv) > 1 else "new_map_2"
     yaml_path = (
         Path(selector).expanduser().resolve()
         if selector.endswith(".yaml") or "/" in selector

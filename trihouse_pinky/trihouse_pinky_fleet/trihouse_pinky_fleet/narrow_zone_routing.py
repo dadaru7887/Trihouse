@@ -58,8 +58,20 @@ def select_approach(
 def departure_profile(
     profiles: Mapping[str, NarrowZoneProfile], current_pose: Pose2D
 ) -> NarrowZoneProfile | None:
-    """현재 도킹 zone을 찾는다. readiness와 무관하게 갇힌 profile은 숨기지 않는다."""
+    """현재 도킹 zone 또는 대기점 출발 반경의 공통 탈출 profile을 찾는다."""
     for profile in profiles.values():
+        if any(trigger.contains(current_pose) for trigger in profile.departure_triggers):
+            return profile
         if profile.zone is not None and profile.zone.contains(current_pose):
             return profile
     return None
+
+
+def entry_handoff_reached(
+    profile: NarrowZoneProfile, current_pose: Pose2D
+) -> bool:
+    """Whether Nav2 has entered the boundary where rule control takes ownership.
+
+    Nav2가 규칙 제어에 제어권을 넘길 입구 구역에 들어왔는지 판정한다.
+    """
+    return profile.entry_zone is not None and profile.entry_zone.contains(current_pose)

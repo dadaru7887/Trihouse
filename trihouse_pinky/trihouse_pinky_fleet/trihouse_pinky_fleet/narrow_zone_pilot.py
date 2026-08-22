@@ -117,6 +117,10 @@ def load_zones(document: Mapping[str, Any], *, map_name: str) -> dict[str, Narro
     for code, body in (document.get("zones") or {}).items():
         if not bool(body.get("enabled", True)):
             continue
+        # 공통 충전소 탈출은 Fleet의 최신 profile 로더가 원형 departure_triggers로
+        # 처리한다. 이 구형 수동 pilot은 목적지별 entry/zone만 이해하므로 건너뛴다.
+        if body.get("departure_triggers"):
+            continue
         entry, shape = body.get("entry") or {}, body.get("zone") or {}
         try:
             entry_pose = (

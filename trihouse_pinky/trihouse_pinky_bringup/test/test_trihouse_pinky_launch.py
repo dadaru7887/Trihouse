@@ -208,3 +208,14 @@ def test_narrow_calibration_is_an_explicit_launch_argument() -> None:
 
     assert "allow_narrow_calibration" in declared
     assert declared["allow_narrow_calibration"].default_value[0].text == "false"
+
+
+def test_mobile_robot_bringup_does_not_start_an_omx_station_adapter() -> None:
+    """OMX 정거장은 별도 장비에서 실행되며 Pinky 기동을 막아서는 안 된다."""
+    description = _module().generate_launch_description()
+    nodes = [entity for entity in _flatten(description.entities) if isinstance(entity, Node)]
+
+    assert not any(
+        str(node.node_package) == "trihouse_omx_adapter"
+        for node in nodes
+    )

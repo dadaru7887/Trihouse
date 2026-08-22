@@ -264,6 +264,29 @@ def install_unrelated_newer_map() -> None:
         connection.close()
 
 
+def rename_active_map(map_name: str) -> None:
+    """Keep the same valid facility while changing its operational map name."""
+    connection = mysql_connection(database="trihouse_fms")
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "UPDATE locations SET map_name = %s WHERE map_name = 'trihouse_test_01'",
+            (map_name,),
+        )
+        cursor.execute(
+            "UPDATE map_projects SET map_name = %s WHERE map_name = 'trihouse_test_01'",
+            (map_name,),
+        )
+        cursor.execute(
+            "UPDATE map_revisions SET map_name = %s WHERE map_name = 'trihouse_test_01'",
+            (map_name,),
+        )
+        connection.commit()
+    finally:
+        cursor.close()
+        connection.close()
+
+
 def scalar(sql: str, params: tuple[object, ...] = ()) -> int:
     connection = mysql_connection(database="trihouse_fms")
     cursor = connection.cursor()
@@ -409,6 +432,31 @@ def test_each_approved_demo_order_runs_from_a_fresh_seed(
         ambient_visits = [item for item in parsed_inputs if item.get("branch") == "pinky_navigate"]
         assert len(ambient_visits) == 1
         assert ambient_visits[0]["product_codes"] == ["SKU-ORANGE", "SKU-MANDARIN"]
+
+
+def test_order_planning_uses_a_valid_published_map_without_a_legacy_name(
+    seeded_schema,
+) -> None:
+    install_active_map()
+    rename_active_map("new_map_2")
+
+    response = real_client().post(
+        "/api/v1/orders",
+        headers={"Idempotency-Key": "new-map-2-order"},
+        json=DEMO_ORDERS[5]["request"],
+    )
+
+    assert response.status_code == 201
+    target_maps = rows(
+        """
+        SELECT DISTINCT location.map_name
+        FROM job_steps step
+        JOIN locations location ON location.location_id = step.target_location_id
+        WHERE step.job_id = %s
+        """,
+        (response.json()["job_id"],),
+    )
+    assert target_maps == [{"map_name": "new_map_2"}]
 
 
 def test_order_idempotency_returns_the_original_response_without_reserving_twice(

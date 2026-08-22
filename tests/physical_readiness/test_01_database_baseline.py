@@ -43,9 +43,11 @@ def test_compose_database_stacks_mount_the_baseline():
     ledger = "./db/init/002_record_physical_baseline.sh:/docker-entrypoint-initdb.d/002_record_physical_baseline.sh:ro"
     migrations = "./db/migrations:/trihouse-migrations:ro"
     runner = "./db/init/003_apply_physical_migrations.sh:/docker-entrypoint-initdb.d/003_apply_physical_migrations.sh:ro"
+    recovery_grant = "./db/init/003_grant_gateway_recovery.sh:/docker-entrypoint-initdb.d/005_grant_gateway_recovery.sh:ro"
 
     for filename in ("compose.yaml", "compose.db.yaml", "compose.db_test.yaml"):
         assert expected in _compose_text(filename)
         assert ledger in _compose_text(filename)
         assert migrations in _compose_text(filename)
         assert runner in _compose_text(filename)
+        assert recovery_grant in _compose_text(filename)

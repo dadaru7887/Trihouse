@@ -17,11 +17,10 @@ REPOSITORY = ROOT.parent
 LAUNCH = ROOT / "launch" / "two_pinky_order_demo.launch.py"
 FEATURES = (
     REPOSITORY
-    / "control_system_test"
-    / "rmf_control_ui"
     / "data"
+    / "map_authoring"
     / "import"
-    / "trihouse_test_01_physical_features.jsonl"
+    / "trihouse_test_01_physical_features.new_map_2.jsonl"
 )
 
 sys.path.insert(0, str(REPOSITORY))
@@ -55,6 +54,7 @@ def test_launch_declares_the_two_pinky_demo_cli() -> None:
 
     assert {
         "physical_features_file", "nav_graph", "world", "nav2_params_file",
+        "narrow_zones_file",
         "fleet_config", "map_revision", "fleet_name", "fms_base_url",
         "start_rmf_core", "start_gazebo", "start_nav2", "start_rmf_worker",
     } <= names
@@ -76,6 +76,29 @@ def test_spawn_poses_come_only_from_the_authoritative_jsonl() -> None:
     assert poses["PK_01"] == pytest.approx(_charger_pose("TRIHOUSE-TEST-01-CHG-01"))
     assert poses["PK_02"] == pytest.approx(_charger_pose("TRIHOUSE-TEST-01-CHG-02"))
     assert poses["PK_01"] != poses["PK_02"]
+
+
+def test_simulated_lidar_rejects_returns_from_the_robot_model() -> None:
+    module = _module()
+    first = module._robot_description("pinky_01")
+    second = module._robot_description("pinky_02")
+
+    assert 'type="gpu_lidar"' in first
+    assert "<min>0.19</min>" in first
+    # EN: Gazebo GPU lidar renders collision geometry, so visual-only masks do not
+    # remove the Pinky's own returns. Keep the simulated ray plane above the body.
+    # KO: Gazebo GPU LiDAR는 collision 형상을 보므로 visual mask로 자기반사가
+    # 사라지지 않는다. 시뮬레이션 광선 높이를 차체 위로 유지한다.
+    assert "<pose>0 0 0.055 0 0 0</pose>" in first
+    assert "<pose>0 0 0.055 0 0 0</pose>" in second
+    assert "visibility_flags" not in first
+    assert "visibility_mask" not in first
+
+
+def test_simulation_stop_distance_fits_the_measured_approach_clearance() -> None:
+    source = LAUNCH.read_text(encoding="utf-8")
+
+    assert '"stop_distance_m": 0.10' in source
 
 
 def test_no_coordinate_literal_is_written_into_the_launch_file() -> None:

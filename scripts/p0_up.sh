@@ -17,6 +17,8 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 MYSQL_PW="$(grep -E '^MYSQL_ROOT_PASSWORD=' .env | cut -d= -f2-)"
+source "$ROOT/scripts/lib/p0_environment.sh"
+configure_p0_ros_domain "$ROOT/.env"
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/require_docker.sh"
 require_docker || exit 1
@@ -59,9 +61,9 @@ echo "[up] 지도 revision: $REVISION"
 
 echo "[up] 지도: $MAP_NAME  ($NAV2_MAP)"
 
-# Nav2 지도와 RMF graph waypoint는 반드시 같은 지도 좌표계여야 한다. 기본 파일은
-# trihouse_map_01에서 측정한 값이므로 new_map_2를 선택했을 때 fallback하지 않는다.
-FEATURES_FILE="control_ui/rmf_control_ui/data/import/trihouse_test_01_physical_features.${MAP_NAME}.jsonl"
+# EN: Map-authoring records are runtime data, not web-UI source assets.
+# KO: 지도 실측 레코드는 웹 UI 소스가 아니라 독립된 런타임 데이터다.
+FEATURES_FILE="$ROOT/data/map_authoring/import/trihouse_test_01_physical_features.${MAP_NAME}.jsonl"
 if [[ ! -f "$FEATURES_FILE" ]]; then
   echo "[up] 지도 '$MAP_NAME' 전용 waypoint 파일이 없습니다: $FEATURES_FILE" >&2
   echo "     scripts/rebuild_new_map_2.py 등으로 해당 지도 좌표계를 준비하세요." >&2
@@ -72,11 +74,12 @@ fi
 # 거기서 명령이 끝나 `env` 가 환경변수만 출력하고 bringup 이 실행되지 않는다.
 
 setsid nohup env \
+  TRIHOUSE_PROJECT="$MAP_NAME" \
   TRIHOUSE_MAP_REVISION="$REVISION" \
   TRIHOUSE_ROBOTS=PK_01 \
   TRIHOUSE_NAV2_MAP="$NAV2_MAP" \
   PHYSICAL_FEATURES_FILE="$FEATURES_FILE" \
-  ROS_DOMAIN_ID=0 \
+  ROS_DOMAIN_ID="$ROS_DOMAIN_ID" \
   control_tower/bringup/p0_simulation_bringup.sh > /tmp/sim.log 2>&1 &
 disown
 echo "[up] 띄웠습니다. 진행은 tail -f /tmp/sim.log"

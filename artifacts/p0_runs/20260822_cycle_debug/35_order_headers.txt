@@ -1,0 +1,5 @@
+HTTP/1.1 201 Created
+date: Sat, 22 Aug 2026 07:18:51 GMT
+server: uvicorn
+content-length: 295
+content-type: application/json
