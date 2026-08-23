@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+
+<!--
+  Namespace 전용 실제 Pinky bringup.
+
+  기존 bringup_robot.launch.xml은 단일 로봇/루트 토픽용으로 그대로 둔다.
+  이 launch만 namespace 전용 실행 파일과 설정을 사용한다.
+
+  경로: pinky_pro/src/pinky_pro/pinky_bringup/launch/bringup_robot_namespaced.launch.xml
+-->
+<launch>
+    <arg name="namespace" default="pinky_01"/>
+    <arg name="use_sim_time" default="False"/>
+    <arg name="wheel_radius" default="0.027"/>
+    <arg name="wheel_separation" default="0.0961"/>
+
+    <include file="$(find-pkg-share pinky_description)/launch/upload_robot.launch.py">
+        <arg name="namespace" value="$(var namespace)"/>
+        <arg name="is_sim" value="$(var use_sim_time)"/>
+    </include>
+
+    <group>
+        <push-ros-namespace namespace="$(var namespace)"/>
+
+        <include file="$(find-pkg-share sllidar_ros2)/launch/sllidar_c1_launch.py">
+            <arg name="serial_port" value="/dev/ttyAMA0"/>
+            <arg name="frame_id" value="$(var namespace)/rplidar_link"/>
+            <arg name="inverted" value="false"/>
+            <arg name="angle_compensate" value="true"/>
+            <arg name="scan_mode" value="DenseBoost"/>
+        </include>
+    </group>
+
+    <node
+        pkg="pinky_bringup"
+        exec="bringup_namespaced"
+        name="pinky_bringup"
+        namespace="$(var namespace)"
+        output="screen">
+        <param from="$(find-pkg-share pinky_bringup)/config/pinky_namespaced_params.yaml"/>
+        <param name="wheel_radius" value="$(var wheel_radius)"/>
+        <param name="wheel_separation" value="$(var wheel_separation)"/>
+    </node>
+
+    <node
+        pkg="pinky_bringup"
+        exec="battery_publisher"
+        name="battery_publisher"
+        namespace="$(var namespace)"
+        output="screen"/>
+</launch>

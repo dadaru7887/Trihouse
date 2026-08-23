@@ -1,10 +1,15 @@
 """실기 Pinky용 최상위 조합 launch; 벤더 `pinky_pro`는 include만 한다."""
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    GroupAction,
+    IncludeLaunchDescription,
+    TimerAction,
+)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
-from launch_ros.actions import Node, PushRosNamespace, SetRemap
+from launch_ros.actions import Node, PushRosNamespace, SetParameter, SetRemap
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -28,12 +33,20 @@ def generate_launch_description():
     # 만든다. 루트 표기 '/'를 그대로 넘기면 TF frame이 '//base_link'처럼 되어
     # /scan 및 /odom의 frame_id와 끊어지므로 벤더에만 양끝 '/'를 제거해 전달한다.
     vendor_namespace = PythonExpression(["'", namespace, "'.strip('/')"])
+    # status_node는 namespace 그룹 안에서 실행되어도 frame 파라미터에는 namespace가
+    # 자동으로 붙지 않는다. 실제 TF tree의 base frame을 명시적으로 계산한다.
+    status_base_frame_id = PythonExpression([
+        "('", namespace, "'.strip('/') + '/' if '", namespace,
+        "'.strip('/') else '') + 'base_footprint'",
+    ])
     map_revision = LaunchConfiguration('map_revision')
     map_path = LaunchConfiguration('map')
     control_host = LaunchConfiguration('control_host')
     control_port = LaunchConfiguration('control_port')
     font_path = LaunchConfiguration('font_path')
     nav2_params_file = LaunchConfiguration('nav2_params_file')
+    lifecycle_bond_timeout_s = LaunchConfiguration('lifecycle_bond_timeout_s')
+    navigation_start_delay_s = LaunchConfiguration('navigation_start_delay_s')
     vision_enabled = LaunchConfiguration('vision_enabled')
     docking_enabled = LaunchConfiguration('docking_enabled')
     narrow_zones_file = LaunchConfiguration('narrow_zones_file')
@@ -67,6 +80,13 @@ def generate_launch_description():
         # 기동)에서는 nav2 노드가 루트에 있어 벤더 맨 키가 그대로 맞으므로 그것이
         # 옳은 기본값이다.
         DeclareLaunchArgument('nav2_params_file', default_value=''),
+        # 실기 Raspberry Pi + Discovery Server에서는 lifecycle service가 보인 뒤
+        # map_server/AMCL bond 발견이 15초 제한을 간헐적으로 넘겼다. 현장 실측에서
+        # 60초 제한으로 두 localization bond가 연결됐으며 인자로 다시 조정할 수 있다.
+        DeclareLaunchArgument('lifecycle_bond_timeout_s', default_value='60.0'),
+        # localization과 navigation을 동시에 활성화하면 map TF가 생기기 전에
+        # planner가 timeout한다. 실측 localization 활성화 시간을 포함해 60초를 준다.
+        DeclareLaunchArgument('navigation_start_delay_s', default_value='60.0'),
         # 빈 문자열을 기본값으로 두면 안 된다. `DeclareLaunchArgument` 의 기본값은
         # 인자를 주지 않았을 때만 쓰이는데, 이 값은 include 로 언제나 넘어가므로
         # 비어 있으면 vision launch 의 기본값이 적용되지 않고 `camera_streamer` 가
@@ -107,7 +127,20 @@ def generate_launch_description():
             Node(package='trihouse_pinky_bringup', executable='readiness_checker', parameters=[{'robot_id': robot_id}]),
             Node(package='trihouse_pinky_fleet', executable='battery_condition', parameters=[{'robot_id': robot_id}]),
             Node(package='trihouse_pinky_fleet', executable='battery_policy'),
-            Node(package='trihouse_pinky_fleet', executable='status_node', parameters=[{'robot_id': robot_id, 'map_revision': map_revision}]),
+            Node(
+                package='trihouse_pinky_fleet',
+                executable='status_node',
+                parameters=[{
+                    'robot_id': robot_id,
+                    'map_revision': map_revision,
+                    'map_frame': 'map',
+                    'base_frame_id': status_base_frame_id,
+                }],
+                remappings=[
+                    ('/tf', 'tf'),
+                    ('/tf_static', 'tf_static'),
+                ],
+            ),
             Node(package='trihouse_pinky_fleet', executable='recovery_health', parameters=[{'robot_id': robot_id}]),
             Node(package='trihouse_pinky_fleet', executable='fleet_node', parameters=[{
                 'robot_id': robot_id,
@@ -148,36 +181,55 @@ def generate_launch_description():
         # 과 매칭되지 않아 파라미터가 한 개도 적용되지 않는다.
         # `p0_runtime_assets.derive_nav2_params(..., root_key=namespace)` 로 미리
         # 감싼 파일을 넘겨 그 간극을 메운다.
-        IncludeLaunchDescription(
-            AnyLaunchDescriptionSource(localization),
-            launch_arguments={
-                'map': map_path,
-                'namespace': namespace,
-                'use_sim_time': use_sim_time,
-                'autostart': 'True',
-                'use_composition': 'False',
-                'use_respawn': 'False',
-                'params_file': nav2_params_file,
-                # localization과 navigation XML이 같은 launch configuration 이름을
-                # 사용하므로 각 include에서 값을 고정하여 서로 물려받지 않게 한다.
-                'lifecycle_nodes': "['map_server', 'amcl']",
-            }.items(),
-        ),
-        IncludeLaunchDescription(
-            AnyLaunchDescriptionSource(navigation),
-            launch_arguments={
-                'namespace': namespace,
-                'use_sim_time': use_sim_time,
-                'autostart': 'True',
-                'use_composition': 'False',
-                'use_respawn': 'False',
-                'params_file': nav2_params_file,
-                'lifecycle_nodes': (
-                    "['controller_server', 'smoother_server', 'planner_server', "
-                    "'behavior_server', 'bt_navigator', 'waypoint_follower', "
-                    "'velocity_smoother']"
-                ),
-            }.items(),
+        GroupAction([
+            # SetParameter는 이 Group의 모든 노드에 전달된다. lifecycle manager는
+            # bond_timeout으로 사용하고, 다른 Nav2 노드는 미사용 override로 둔다.
+            SetParameter(
+                name='bond_timeout',
+                value=lifecycle_bond_timeout_s,
+            ),
+            IncludeLaunchDescription(
+                AnyLaunchDescriptionSource(localization),
+                launch_arguments={
+                    'map': map_path,
+                    'namespace': namespace,
+                    'use_sim_time': use_sim_time,
+                    'autostart': 'True',
+                    'use_composition': 'False',
+                    'use_respawn': 'False',
+                    'params_file': nav2_params_file,
+                    # localization과 navigation XML이 같은 launch configuration 이름을
+                    # 사용하므로 각 include에서 값을 고정하여 서로 물려받지 않게 한다.
+                    'lifecycle_nodes': "['map_server', 'amcl']",
+                }.items(),
+            ),
+        ]),
+        TimerAction(
+            period=navigation_start_delay_s,
+            actions=[
+                GroupAction([
+                    SetParameter(
+                        name='bond_timeout',
+                        value=lifecycle_bond_timeout_s,
+                    ),
+                    IncludeLaunchDescription(
+                        AnyLaunchDescriptionSource(navigation),
+                        launch_arguments={
+                            'namespace': namespace,
+                            'use_sim_time': use_sim_time,
+                            'autostart': 'True',
+                            'use_composition': 'False',
+                            'use_respawn': 'False',
+                            'params_file': nav2_params_file,
+                            'lifecycle_nodes': (
+                                "['controller_server', 'smoother_server', 'planner_server', "
+                                "'behavior_server', 'bt_navigator', 'waypoint_follower', "
+                                "'velocity_smoother']"
+                            ),
+                        }.items(),
+                    ),
+                ]),
+            ],
         ),
         # 벤더 발행자(robot_state_publisher, odom)는 루트 `/tf` 에 쓴다. 그런데
         # 벤더 navigation XML 이 nav2 노드에 `/tf -> tf` 를 걸어 두어 nav2 는

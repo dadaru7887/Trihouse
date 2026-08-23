@@ -332,6 +332,7 @@ def derive_nav2_params(
     *,
     initial_pose: tuple[float, float, float] | None = None,
     root_key: str | None = None,
+    bt_wait_for_service_timeout_ms: int | None = None,
 ) -> None:
     """한 로봇용 Nav2 파라미터를 만든다. 원본은 읽기만 한다.
 
@@ -381,6 +382,12 @@ def derive_nav2_params(
         return node
 
     derived = rewrite(document)
+    if bt_wait_for_service_timeout_ms is not None:
+        # Discovery Server를 쓰는 실기에서는 controller lifecycle bond가 연결된
+        # 직후에도 follow_path Action graph 전파가 1초를 넘길 수 있다. 벤더의
+        # 1000 ms를 그대로 쓰면 BT activation이 한 번 실패한 뒤 재시도하지 않는다.
+        bt = derived.setdefault("bt_navigator", {}).setdefault("ros__parameters", {})
+        bt["wait_for_service_timeout"] = int(bt_wait_for_service_timeout_ms)
     if initial_pose is not None:
         x, y, yaw = initial_pose
         amcl = derived.setdefault("amcl", {}).setdefault("ros__parameters", {})

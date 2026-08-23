@@ -1335,3 +1335,164 @@ done
 이번 관측은 중복 launch와 잘못된 vendor 단독 실행까지 원인을 확정한 상태다. 위 정리와
 단일 재기동을 실제 수행하고 모든 합격 조건을 측정하기 전에는 복구 성공으로 기록하지
 않는다.
+
+## 16. 2026-08-23 Pinky_01 BT Navigator 비활성 복구
+
+### 증상
+
+Localization TF와 controller/planner lifecycle이 정상이어도 다음처럼 BT만 inactive로
+남을 수 있다.
+
+```text
+/pinky_01/bt_navigator/get_state: inactive [2]
+/pinky_01/navigate_to_pose: Action servers 0
+NavigateToPose rejected the goal
+```
+
+프로세스가 존재한다는 사실은 합격 근거가 아니다. 이 실패에서도 `bt_navigator`와
+`lifecycle_manager_navigation` PID는 모두 살아 있었지만 BT Action은 활성화되지 않았다.
+
+### 확정 원인
+
+Pinky에 설치된 벤더 Nav2 원본에는 다음 값이 있었다.
+
+```yaml
+bt_navigator:
+  ros__parameters:
+    wait_for_service_timeout: 1000
+```
+
+`wait_for_service_timeout`은 새로 만든 파라미터가 아니라 기존 Nav2 BT 파라미터이며 단위는
+밀리초다. Raspberry Pi가 여러 노드를 시작하고 Fast DDS Discovery Server를 거치는 동안
+controller lifecycle bond 연결과 `/pinky_01/follow_path` Action graph 발견은 동시에 끝나지
+않는다. 2026-08-23 현재 실행 로그가 실패 경계를 직접 보여 줬다.
+
+```text
+lifecycle_manager_navigation: Activating bt_navigator
+bt_navigator_navigate_to_pose_rclcpp_node:
+  "follow_path" action server not available after waiting for 1.00s
+bt_navigator: Exception when loading BT: Action server follow_path not available
+bt_navigator: Error loading XML file: navigate_to_pose_w_replanning_and_recovery.xml
+lifecycle_manager_navigation: Failed to change state for node: bt_navigator
+```
+
+Lifecycle manager는 이 activation을 자동 재시도하지 않는다. 따라서 잠깐의 DDS 발견 지연이
+영구적인 `bt_navigator=inactive`와 `NavigateToPose` 거부로 바뀐다.
+
+같은 실기에서 별개의 앞단 timeout도 확인했다. `bond_timeout=15.0`일 때 map_server가 bond를
+만들었지만 localization manager가 발견하지 못해 bringup을 중단했다. 그러면 map TF가 생기지
+않고 뒤에서 시작한 planner가 global costmap activation에 실패한다. 즉 아래 두 timeout은
+서로 다른 경계를 보호한다.
+
+| 값 | 보호하는 경계 | 실패 시 증상 |
+| --- | --- | --- |
+| `lifecycle_bond_timeout_s` | lifecycle manager ↔ managed node bond 발견 | AMCL 또는 Nav2 activation 순서 중단 |
+| `navigation_start_delay_s` | localization 활성화 → navigation 시작 순서 | map TF가 없어서 planner activation timeout |
+| `wait_for_service_timeout` | BT Navigator → `follow_path` 등 Action 발견 | BT XML 로딩 실패, BT inactive |
+
+### 코드 수정
+
+벤더 원본 `pinky_pro`는 수정하지 않는다. 실기 파생본만 다음 계약으로 만든다.
+
+```text
+wait_for_service_timeout: 1000 → 10000 ms
+lifecycle_bond_timeout_s 기본값: 60.0 s
+navigation_start_delay_s 기본값: 60.0 s
+```
+
+수정 파일:
+
+- `scripts/derive_hardware_nav2_params.py`: 실기 파생본의 BT Action 발견 제한을 10초로 지정
+- `control_tower/bringup/p0_runtime_assets.py`: 파생 YAML에 해당 값을 기록
+- `trihouse_pinky/trihouse_pinky_bringup/launch/trihouse_pinky.launch.py`: lifecycle bond와
+  navigation 선행 지연 기본값을 각각 60초로 지정
+- `tests/test_derive_hardware_nav2_params.py`,
+  `trihouse_pinky/trihouse_pinky_bringup/test/test_trihouse_pinky_launch.py`: 회귀 계약 고정
+
+### Pinky_01 파라미터 재생성·배포
+
+장비의 벤더 YAML을 정본으로 사용하고 현재 승인된 initial pose를 반드시 보존한다.
+
+```bash
+# [개발 PC]
+cd /home/newuser/Trihouse/.worktrees/physical-integration-v1
+
+scp \
+  pinky@192.168.0.21:/home/pinky/pinky_pro/src/pinky_pro/pinky_navigation/params/nav2_params.yaml \
+  /tmp/pinky_01_vendor_nav2_params.yaml
+
+python3 scripts/derive_hardware_nav2_params.py \
+  --source /tmp/pinky_01_vendor_nav2_params.yaml \
+  --namespace pinky_01 \
+  --initial-pose 0.911748152598201,0.77587646431032,0.875201645910827 \
+  --output /tmp/hardware_pinky_01.yaml
+
+ssh pinky@192.168.0.21 \
+  'cp -a /home/pinky/hardware_pinky_01.yaml /home/pinky/hardware_pinky_01.yaml.backup-20260823-1930'
+
+scp \
+  /tmp/hardware_pinky_01.yaml \
+  pinky@192.168.0.21:/home/pinky/hardware_pinky_01.yaml
+```
+
+Pinky에서 값과 시작 pose를 함께 검증한다.
+
+```bash
+# [Pinky_01]
+python3 - <<'PY'
+from pathlib import Path
+import yaml
+
+document = yaml.safe_load(
+    Path('/home/pinky/hardware_pinky_01.yaml').read_text(encoding='utf-8')
+)
+params = document['pinky_01']
+assert params['bt_navigator']['ros__parameters']['wait_for_service_timeout'] == 10000
+assert params['amcl']['ros__parameters']['initial_pose'] == {
+    'x': 0.911748152598201,
+    'y': 0.77587646431032,
+    'z': 0.0,
+    'yaw': 0.875201645910827,
+}
+print('PASS: Pinky_01 BT discovery timeout and initial pose')
+PY
+```
+
+### 실측 검증 결과
+
+수정 설치본의 기본값으로 재기동했을 때 launch 명령에 `60/60`을 별도로 주지 않아도 다음을
+확인했다.
+
+```text
+lifecycle_manager_localization: Managed nodes are active
+lifecycle_manager_navigation: Activating bt_navigator
+lifecycle_manager_navigation: Server bt_navigator connected with bond
+lifecycle_manager_navigation: Managed nodes are active
+readiness.state: 1
+readiness.missing_interfaces: []
+status.frame_id: map
+status.telemetry_valid: true
+status.execution_ready: true
+```
+
+BT는 activation 뒤 약 3초 만에 bond 연결까지 완료했다. 원래 1초 제한으로는 이 실행도
+실패했지만 10초 제한에서는 성공했다.
+
+Discovery Server 환경에서 짧게 실행한 `ros2 action info`가 `Action servers: 0`을 표시해도
+그 값만으로 BT 실패를 판정하지 않는다. 같은 실행의 onboard `readiness_checker`는 실제
+`NavigateToPose` ActionClient로 서버 연결을 확인한 뒤 `state: 1`,
+`missing_interfaces: []`를 발행했다. manager 로그, lifecycle state와 readiness를 함께
+판정한다.
+
+이 검증 시점의 주문 gate는 별도 배터리 사유로 아직 닫혀 있었다.
+
+```text
+battery_percentage: 0.0
+battery_policy.detail: RETURN_REQUIRED
+dispatchable: false
+ready: false
+errors: [battery_not_dispatchable]
+```
+
+이는 BT/lifecycle 복구 실패가 아니다. 배터리 raw percent와 voltage를 확인해 정상 정책으로
+돌아오기 전에는 상온·냉장·냉동 주문이나 calibration goal을 보내지 않는다.

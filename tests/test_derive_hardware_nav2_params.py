@@ -26,6 +26,9 @@ amcl:
 controller_server:
   ros__parameters:
     controller_frequency: 20.0
+bt_navigator:
+  ros__parameters:
+    wait_for_service_timeout: 1000
 """
 
 
@@ -63,6 +66,26 @@ def test_the_document_is_wrapped_in_the_namespace(tmp_path, vendor_params) -> No
         document["pinky_01"]["amcl"]["ros__parameters"]["base_frame_id"]
         == "pinky_01/base_footprint"
     )
+
+
+def test_physical_bt_waits_for_action_discovery_on_the_discovery_server(
+    tmp_path, vendor_params
+) -> None:
+    """벤더의 1초 값으로는 실기 `/follow_path` 발견 전에 BT activation이 실패한다."""
+    destination = tmp_path / "hardware_pinky_01.yaml"
+
+    assert _module().main(
+        [
+            "--source", str(vendor_params),
+            "--namespace", "pinky_01",
+            "--output", str(destination),
+        ]
+    ) == 0
+
+    bt = yaml.safe_load(destination.read_text(encoding="utf-8"))["pinky_01"][
+        "bt_navigator"
+    ]["ros__parameters"]
+    assert bt["wait_for_service_timeout"] == 10_000
 
 
 def test_the_first_line_names_the_namespace(tmp_path, vendor_params) -> None:

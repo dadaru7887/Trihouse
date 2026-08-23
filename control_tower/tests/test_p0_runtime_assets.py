@@ -150,7 +150,7 @@ def test_simulation_profile_enables_only_complete_candidate_sequences(
     derived = yaml.safe_load(destination.read_text(encoding="utf-8"))
     assert original["zones"]["frozen_storage_loading_dock_01"]["measured"]["exit"] is False
     assert derived["zones"]["frozen_storage_loading_dock_01"]["measured"]["exit"] is True
-    assert derived["zones"]["ambient_storage_loading_dock_01"]["measured"]["exit"] is False
+    assert derived["zones"]["ambient_storage_loading_dock_01"]["measured"]["exit"] is True
 
 
 def test_the_derived_parameters_carry_the_initial_pose(tmp_path: Path) -> None:

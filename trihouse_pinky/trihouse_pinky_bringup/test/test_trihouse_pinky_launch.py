@@ -11,8 +11,13 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
-from launch_ros.actions import Node, SetRemap
+from launch.actions import (
+    DeclareLaunchArgument,
+    GroupAction,
+    IncludeLaunchDescription,
+    TimerAction,
+)
+from launch_ros.actions import Node, SetParameter, SetRemap
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCH = ROOT / "launch" / "trihouse_pinky.launch.py"
@@ -33,6 +38,8 @@ def _flatten(entities):
         yield entity
         if isinstance(entity, GroupAction):
             yield from _flatten(entity.get_sub_entities())
+        elif isinstance(entity, TimerAction):
+            yield from _flatten(entity.actions)
 
 
 def _remap(entity):
@@ -140,6 +147,84 @@ def test_nav2_children_receive_separate_lifecycle_node_lists() -> None:
         "['controller_server', 'smoother_server', 'planner_server', "
         "'behavior_server', 'bt_navigator', 'waypoint_follower', "
         "'velocity_smoother']"
+    )
+
+
+def test_nav2_lifecycle_timing_is_explicit_and_tunable() -> None:
+    """실기 DDS 지연값을 코드 수정 없이 launch 인자로 조정할 수 있어야 한다."""
+    description = _module().generate_launch_description()
+    declared = {
+        action.name: action
+        for action in description.entities
+        if isinstance(action, DeclareLaunchArgument)
+    }
+
+    assert declared["lifecycle_bond_timeout_s"].default_value[0].text == "60.0"
+    assert declared["navigation_start_delay_s"].default_value[0].text == "60.0"
+
+
+def test_both_nav2_includes_extend_the_lifecycle_bond_timeout() -> None:
+    """기본 4초 bond timeout으로 정상 map_server가 오판되지 않아야 한다."""
+    from launch import LaunchContext
+
+    description = _module().generate_launch_description()
+    context = LaunchContext()
+    context.launch_configurations["lifecycle_bond_timeout_s"] = "15.0"
+    protected = set()
+
+    for entity in _flatten(description.entities):
+        if not isinstance(entity, GroupAction):
+            continue
+        children = list(entity.get_sub_entities())
+        includes = [
+            child for child in children if isinstance(child, IncludeLaunchDescription)
+        ]
+        bond_parameters = [
+            child
+            for child in children
+            if isinstance(child, SetParameter)
+            and "".join(part.perform(context) for part in child.name)
+            == "bond_timeout"
+        ]
+        for include in includes:
+            location = _include_location(include)
+            if "localization_launch.xml" not in location and "navigation_launch.xml" not in location:
+                continue
+            assert len(bond_parameters) == 1
+            assert bond_parameters[0].value[0].perform(context) == "15.0"
+            protected.add(
+                "localization_launch.xml"
+                if "localization_launch.xml" in location
+                else "navigation_launch.xml"
+            )
+
+    assert protected == {"localization_launch.xml", "navigation_launch.xml"}
+
+
+def test_navigation_starts_after_localization_has_had_time_to_activate() -> None:
+    """map TF가 생기기 전에 planner/BT activation을 동시에 시작하지 않는다."""
+    from launch import LaunchContext
+
+    description = _module().generate_launch_description()
+    context = LaunchContext()
+    context.launch_configurations["navigation_start_delay_s"] = "20.0"
+    navigation_timers = [
+        entity
+        for entity in description.entities
+        if isinstance(entity, TimerAction)
+        and any(
+            isinstance(child, IncludeLaunchDescription)
+            and "navigation_launch.xml" in _include_location(child)
+            for child in _flatten(entity.actions)
+        )
+    ]
+
+    assert len(navigation_timers) == 1
+    assert navigation_timers[0].period[0].perform(context) == "20.0"
+    assert not any(
+        isinstance(child, IncludeLaunchDescription)
+        and "localization_launch.xml" in _include_location(child)
+        for child in _flatten(navigation_timers[0].actions)
     )
 
 
@@ -347,3 +432,52 @@ def test_single_robot_motor_input_is_owned_by_the_safety_supervisor() -> None:
         for child in _flatten(vendor_groups[0].get_sub_entities())
         if isinstance(child, SetRemap)
     }
+
+
+def test_status_node_reads_namespaced_tf_topics() -> None:
+    """status_node도 AMCL/Nav2와 같은 로봇 namespace의 TF를 읽어야 한다."""
+    description = _module().generate_launch_description()
+    status_nodes = [
+        entity
+        for entity in _flatten(description.entities)
+        if isinstance(entity, Node)
+        and str(entity.node_executable) == "status_node"
+    ]
+
+    assert len(status_nodes) == 1
+    assert {
+        ("/tf", "tf"),
+        ("/tf_static", "tf_static"),
+    } <= _node_remappings(status_nodes[0])
+
+
+def test_status_node_uses_namespaced_base_frame() -> None:
+    """map pose는 각 Pinky의 실제 base_footprint까지 조회해야 한다."""
+    from launch import LaunchContext
+    from launch_ros.utilities import evaluate_parameters
+
+    description = _module().generate_launch_description()
+    status_nodes = [
+        entity
+        for entity in _flatten(description.entities)
+        if isinstance(entity, Node)
+        and str(entity.node_executable) == "status_node"
+    ]
+
+    assert len(status_nodes) == 1
+    for namespace, expected in (
+        ("pinky_01", "pinky_01/base_footprint"),
+        ("pinky_02", "pinky_02/base_footprint"),
+        ("/", "base_footprint"),
+    ):
+        context = LaunchContext()
+        context.launch_configurations["namespace"] = namespace
+        context.launch_configurations["robot_id"] = "PK_TEST"
+        context.launch_configurations["map_revision"] = "test-revision"
+        parameters = evaluate_parameters(
+            context,
+            getattr(status_nodes[0], "_Node__parameters"),
+        )[0]
+
+        assert parameters["map_frame"] == "map"
+        assert parameters["base_frame_id"] == expected

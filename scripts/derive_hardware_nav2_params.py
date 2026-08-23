@@ -35,6 +35,11 @@ if str(REPOSITORY_ROOT) not in sys.path:
 from control_tower.bringup.p0_runtime_assets import derive_nav2_params
 
 
+# Pinky_01 실측에서 controller_server bond 연결 뒤 follow_path Action 발견까지
+# 벤더 기본 1000 ms를 넘겼다. 실기 파생본만 10초로 늘리고 시뮬 파생본은 건드리지 않는다.
+PHYSICAL_BT_ACTION_DISCOVERY_TIMEOUT_MS = 10_000
+
+
 def _initial_pose(value: str) -> tuple[float, float, float]:
     """`x,y,yaw` 를 읽는다. 형식이 어긋나면 조용히 넘기지 않는다.
 
@@ -97,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
         args.output,
         initial_pose=args.initial_pose,
         root_key=namespace,
+        bt_wait_for_service_timeout_ms=PHYSICAL_BT_ACTION_DISCOVERY_TIMEOUT_MS,
     )
 
     first_line = args.output.read_text(encoding="utf-8").splitlines()[0]
