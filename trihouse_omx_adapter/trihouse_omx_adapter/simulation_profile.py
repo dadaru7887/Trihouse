@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import math
+from typing import Any, Mapping
 
 
 PICKING_DURATION_S = 7.5
@@ -104,12 +105,43 @@ def validate_feedback(
         raise ValueError("progress regression")
 
 
+def feedback_event(
+    command: Mapping[str, object],
+    sample: PhaseSample,
+    *,
+    joint_state_stamp_ns: int,
+) -> dict[str, Any]:
+    """Build the versioned feedback payload shared by simulation and clients."""
+
+    identity_keys = (
+        "omx_id",
+        "job_id",
+        "job_step_id",
+        "handover_group_id",
+        "pinky_id",
+    )
+    missing = [key for key in identity_keys if key not in command]
+    if missing:
+        raise ValueError(f"missing feedback identities: {', '.join(missing)}")
+    return {
+        "schema_version": "v1",
+        **{key: command[key] for key in identity_keys},
+        "phase": sample.phase.value,
+        "phase_elapsed_s": sample.phase_elapsed_s,
+        "total_elapsed_s": sample.total_elapsed_s,
+        "progress": sample.progress,
+        "joint_state_stamp_ns": int(joint_state_stamp_ns),
+        "trajectory_tracking": True,
+    }
+
+
 __all__ = [
     "LOADING_DURATION_S",
     "OmxPhase",
     "PICKING_DURATION_S",
     "PhaseSample",
     "TRANSFER_DURATION_S",
+    "feedback_event",
     "sample_phase",
     "validate_feedback",
 ]
