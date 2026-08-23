@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from math import atan2, cos, hypot, sin
+from math import atan2, cos, hypot, isfinite, sin
 from typing import Any, Mapping, Sequence
 
 
@@ -92,6 +92,22 @@ class MeasurementState:
 
 
 @dataclass(frozen=True)
+class EntryPassageConfig:
+    """출입구 밖 정렬부터 내부 도크 접근까지의 기하와 제한값."""
+
+    doorway: Pose2D
+    inside_turn: Pose2D
+    dock_yaw: float
+    entry_yaw_tolerance_rad: float
+    entry_straight_speed_mps: float
+    heading_correction_max_rps: float
+    recovery_distance_m: float
+    recovery_speed_mps: float
+    recovery_max_attempts: int
+    recovery_timeout_s: float
+
+
+@dataclass(frozen=True)
 class NarrowZoneProfile:
     destination_code: str
     enabled: bool
@@ -109,6 +125,7 @@ class NarrowZoneProfile:
     issues: tuple[str, ...] = ()
     departure_triggers: tuple[CircularTrigger, ...] = ()
     exit_completion_radius_m: float | None = None
+    entry_passage: EntryPassageConfig | None = None
 
     @property
     def readiness_code(self) -> str:
@@ -164,7 +181,11 @@ class NarrowZoneProfile:
         if not self.enabled or (self.zone is None and not self.departure_triggers):
             return False
         if direction == ENTER:
-            return bool(self.entry_pose and self.enter and self.dock_target)
+            return bool(
+                self.entry_pose
+                and (self.entry_passage is not None or self.enter)
+                and self.dock_target
+            )
         if direction == EXIT:
             return bool(self.exit and self.exit_target)
         raise ValueError(f"direction은 {ENTER!r} 또는 {EXIT!r}이어야 한다")
@@ -523,6 +544,9 @@ def _parse_profile(destination: str, raw: Any) -> NarrowZoneProfile:
         f"{destination}.exit_completion_radius",
         issues,
     )
+    entry_passage = _entry_passage(
+        raw.get("entry_passage"), f"{destination}.entry_passage", issues
+    )
     measured_raw = raw.get("measured")
     measured = measured_raw if isinstance(measured_raw, Mapping) else {}
     measurement = MeasurementState(
@@ -548,6 +572,85 @@ def _parse_profile(destination: str, raw: Any) -> NarrowZoneProfile:
         issues=tuple(issues),
         departure_triggers=departure_triggers,
         exit_completion_radius_m=exit_completion_radius_m,
+        entry_passage=entry_passage,
+    )
+
+
+def _entry_passage(
+    raw: Any, where: str, issues: list[str]
+) -> EntryPassageConfig | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        issues.append(f"{where}_not_mapping")
+        return None
+    local_issues: list[str] = []
+    doorway = _pose(raw.get("doorway"), f"{where}.doorway", local_issues)
+    inside_turn = _pose(
+        raw.get("inside_turn"), f"{where}.inside_turn", local_issues
+    )
+    try:
+        dock_yaw = float(raw["dock_yaw"])
+        entry_yaw_tolerance_rad = float(raw["entry_yaw_tolerance_rad"])
+        entry_straight_speed_mps = float(raw["entry_straight_speed_mps"])
+        heading_correction_max_rps = float(raw["heading_correction_max_rps"])
+        recovery_distance_m = float(raw["recovery_distance_m"])
+        recovery_speed_mps = float(raw["recovery_speed_mps"])
+        recovery_max_attempts_raw = raw["recovery_max_attempts"]
+        recovery_max_attempts = int(recovery_max_attempts_raw)
+        recovery_timeout_s = float(raw["recovery_timeout_s"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        local_issues.append(f"{where}_invalid")
+    else:
+        numbers = (
+            dock_yaw,
+            entry_yaw_tolerance_rad,
+            entry_straight_speed_mps,
+            heading_correction_max_rps,
+            recovery_distance_m,
+            recovery_speed_mps,
+            recovery_timeout_s,
+        )
+        poses = (doorway, inside_turn)
+        if not all(isfinite(value) for value in numbers):
+            local_issues.append(f"{where}_not_finite")
+        if any(
+            pose is not None
+            and not all(isfinite(value) for value in (pose.x, pose.y, pose.yaw))
+            for pose in poses
+        ):
+            local_issues.append(f"{where}_pose_not_finite")
+        if (
+            entry_yaw_tolerance_rad <= 0.0
+            or entry_straight_speed_mps <= 0.0
+            or heading_correction_max_rps <= 0.0
+            or recovery_distance_m < 0.0
+            or recovery_speed_mps <= 0.0
+            or recovery_timeout_s <= 0.0
+        ):
+            local_issues.append(f"{where}_limits_invalid")
+        if (
+            isinstance(recovery_max_attempts_raw, bool)
+            or recovery_max_attempts <= 0
+            or recovery_max_attempts != recovery_max_attempts_raw
+        ):
+            local_issues.append(f"{where}_attempts_invalid")
+    if doorway is None or inside_turn is None:
+        local_issues.append(f"{where}_pose_missing")
+    if local_issues:
+        issues.extend(local_issues)
+        return None
+    return EntryPassageConfig(
+        doorway=doorway,
+        inside_turn=inside_turn,
+        dock_yaw=dock_yaw,
+        entry_yaw_tolerance_rad=entry_yaw_tolerance_rad,
+        entry_straight_speed_mps=entry_straight_speed_mps,
+        heading_correction_max_rps=heading_correction_max_rps,
+        recovery_distance_m=recovery_distance_m,
+        recovery_speed_mps=recovery_speed_mps,
+        recovery_max_attempts=recovery_max_attempts,
+        recovery_timeout_s=recovery_timeout_s,
     )
 
 

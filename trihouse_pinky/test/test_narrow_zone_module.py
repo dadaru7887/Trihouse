@@ -101,6 +101,70 @@ def test_catalog_rejects_a_profile_from_another_map() -> None:
         load_narrow_zones(_document(), map_name="trihouse_map_01")
 
 
+def test_profile_parses_entry_passage() -> None:
+    document = _document()
+    document["zones"]["frozen_storage_loading_dock_01"]["entry_passage"] = {
+        "doorway": {"x": 1.05, "y": 0.82, "yaw": 0.33},
+        "inside_turn": {"x": 1.19, "y": 0.87, "yaw": 0.33},
+        "dock_yaw": -2.80,
+        "entry_yaw_tolerance_rad": 0.05,
+        "entry_straight_speed_mps": 0.06,
+        "heading_correction_max_rps": 0.15,
+        "recovery_distance_m": 0.05,
+        "recovery_speed_mps": 0.03,
+        "recovery_max_attempts": 2,
+        "recovery_timeout_s": 10.0,
+    }
+
+    profile = load_narrow_zones(document, map_name="new_map_2")[
+        "frozen_storage_loading_dock_01"
+    ]
+
+    assert profile.entry_passage is not None
+    assert profile.entry_passage.doorway == Pose2D(1.05, 0.82, 0.33)
+    assert profile.entry_passage.inside_turn == Pose2D(1.19, 0.87, 0.33)
+    assert profile.entry_passage.dock_yaw == pytest.approx(-2.80)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("entry_yaw_tolerance_rad", 0.0),
+        ("entry_straight_speed_mps", -0.01),
+        ("heading_correction_max_rps", float("inf")),
+        ("recovery_distance_m", -0.01),
+        ("recovery_speed_mps", 0.0),
+        ("recovery_max_attempts", 0),
+        ("recovery_timeout_s", float("nan")),
+    ],
+)
+def test_invalid_entry_passage_is_recorded_as_a_profile_issue(
+    field: str, value: float,
+) -> None:
+    document = _document()
+    passage = {
+        "doorway": {"x": 1.05, "y": 0.82, "yaw": 0.33},
+        "inside_turn": {"x": 1.19, "y": 0.87, "yaw": 0.33},
+        "dock_yaw": -2.80,
+        "entry_yaw_tolerance_rad": 0.05,
+        "entry_straight_speed_mps": 0.06,
+        "heading_correction_max_rps": 0.15,
+        "recovery_distance_m": 0.05,
+        "recovery_speed_mps": 0.03,
+        "recovery_max_attempts": 2,
+        "recovery_timeout_s": 10.0,
+    }
+    passage[field] = value
+    document["zones"]["frozen_storage_loading_dock_01"]["entry_passage"] = passage
+
+    profile = load_narrow_zones(document, map_name="new_map_2")[
+        "frozen_storage_loading_dock_01"
+    ]
+
+    assert profile.entry_passage is None
+    assert any("entry_passage" in issue for issue in profile.issues)
+
+
 @pytest.mark.parametrize("missing", ["dock_target", "exit_target"])
 def test_warehouse_requires_both_completion_targets(missing: str) -> None:
     document = _document()

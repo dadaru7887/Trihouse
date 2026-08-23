@@ -45,11 +45,13 @@ def test_ambient_and_chilled_load_the_rule_values_as_calibration_only() -> None:
         AMBIENT: {
             "entry": (0.911748152598201, 0.77587646431032, 0.875201645910827),
             "dock": (1.194985191182392, 0.874754065282721, -2.805721254488808),
+            "doorway": (1.0533666718902965, 0.8253152649415205, 0.33587139910098424),
             "enter": (("rotate", -2.805721254488808), ("straight", -0.30)),
         },
         CHILLED: {
             "entry": (0.7859059395041531, 0.875244991226244, 0.8744648231294354),
             "dock": (1.3263418779273253, -0.2988701614809928, 2.4189105956431427),
+            "doorway": (1.0561239087157392, 0.2881874148726256, -1.1394165202222937),
             "enter": (("rotate", 2.4189105956431427), ("straight", -0.30)),
         },
     }
@@ -69,6 +71,20 @@ def test_ambient_and_chilled_load_the_rule_values_as_calibration_only() -> None:
         assert (profile.dock_target.x, profile.dock_target.y, profile.dock_target.yaw) == pytest.approx(
             wanted["dock"]
         )
+        assert profile.entry_passage is not None
+        assert (
+            profile.entry_passage.doorway.x,
+            profile.entry_passage.doorway.y,
+            profile.entry_passage.doorway.yaw,
+        ) == pytest.approx(wanted["doorway"])
+        assert (
+            profile.entry_passage.inside_turn.x,
+            profile.entry_passage.inside_turn.y,
+            profile.entry_passage.inside_turn.yaw,
+        ) == pytest.approx(
+            (wanted["dock"][0], wanted["dock"][1], wanted["doorway"][2])
+        )
+        assert profile.entry_passage.dock_yaw == pytest.approx(wanted["dock"][2])
         assert tuple(step.kind for step in profile.enter) == tuple(
             kind for kind, _ in wanted["enter"]
         )
@@ -87,6 +103,8 @@ def test_ambient_and_chilled_load_the_rule_values_as_calibration_only() -> None:
 
 def test_frozen_keeps_todays_entry_dock_and_distinct_exit_target() -> None:
     frozen = _profiles()[FROZEN]
+
+    assert frozen.entry_passage is None
 
     assert frozen.entry_pose is not None
     assert (frozen.entry_pose.x, frozen.entry_pose.y, frozen.entry_pose.yaw) == pytest.approx(

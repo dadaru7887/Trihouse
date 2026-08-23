@@ -19,6 +19,18 @@ zones:
     # measured.dock_pose=false로 두어 일반 주문 배정을 닫는다.
     zone: { x: 1.194985191182392, y: 0.874754065282721, yaw: -2.805721254488808, length: 0.20, width: 0.20 }
     dock_target: { x: 1.194985191182392, y: 0.874754065282721, yaw: -2.805721254488808 }
+    # doorway는 entry와 dock_target의 중점으로 계산한 1차 시험값이며 실측값이 아니다.
+    entry_passage:
+      doorway: { x: 1.0533666718902965, y: 0.8253152649415205, yaw: 0.33587139910098424 }
+      inside_turn: { x: 1.194985191182392, y: 0.874754065282721, yaw: 0.33587139910098424 }
+      dock_yaw: -2.805721254488808
+      entry_yaw_tolerance_rad: 0.05
+      entry_straight_speed_mps: 0.06
+      heading_correction_max_rps: 0.15
+      recovery_distance_m: 0.05
+      recovery_speed_mps: 0.03
+      recovery_max_attempts: 2
+      recovery_timeout_s: 10.0
     enter:
       - [rotate, -2.805721254488808]
       - [straight, -0.30]
@@ -44,6 +56,18 @@ zones:
       { x: 0.7859059395041531, y: 0.875244991226244, yaw: 0.8744648231294354, length: 0.05, width: 0.20 }
     zone: { x: 1.3263418779273253, y: -0.2988701614809928, yaw: 2.4189105956431427, length: 0.20, width: 0.20 }
     dock_target: { x: 1.3263418779273253, y: -0.2988701614809928, yaw: 2.4189105956431427 }
+    # doorway는 entry와 dock_target의 중점으로 계산한 1차 시험값이며 실측값이 아니다.
+    entry_passage:
+      doorway: { x: 1.0561239087157392, y: 0.2881874148726256, yaw: -1.1394165202222937 }
+      inside_turn: { x: 1.3263418779273253, y: -0.2988701614809928, yaw: -1.1394165202222937 }
+      dock_yaw: 2.4189105956431427
+      entry_yaw_tolerance_rad: 0.05
+      entry_straight_speed_mps: 0.06
+      heading_correction_max_rps: 0.15
+      recovery_distance_m: 0.05
+      recovery_speed_mps: 0.03
+      recovery_max_attempts: 2
+      recovery_timeout_s: 10.0
     enter:
       - [rotate, 2.4189105956431427]
       - [straight, -0.30]
