@@ -1102,7 +1102,14 @@ grep -nE \
 
 개발 PC submodule의 `pinky_pro/.../nav2_params.yaml`은 장비에서 조정한 값과 다를 수 있으므로
 대신 사용하지 않는다. 먼저 Pinky 원본을 임시 파일로 가져온 뒤, 그 파일에서 namespaced
-파생본을 생성한다. Pinky의 벤더 원본은 수정하지 않는다.
+파생본을 생성한다. Pinky의 벤더 원본은 수정하지 않는다. 별도의 운영 YAML을 하나 더
+관리하는 절차가 아니라, 생성 결과로 기존 `/home/pinky/hardware_pinky_02.yaml` 한 파일을
+갱신한다.
+
+기존 `hardware_pinky_02.yaml`에는 AMCL 시작 좌표 `(0.076, -0.013, 0.239)`가 들어 있었다.
+이 값을 생략하고 다시 생성하면 벤더 원본의 잘못된 리스트형 `initial_pose`가 남으므로,
+아래 명령은 기존 시작 좌표를 명시적으로 보존한다. 로봇의 승인된 시작 위치가 바뀌었다면
+이 세 값을 새 참값으로 바꾼 뒤 생성한다.
 
 ```bash
 cd /home/newuser/Trihouse/.worktrees/physical-integration-v1
@@ -1114,6 +1121,7 @@ rsync -avc --itemize-changes \
 python3 scripts/derive_hardware_nav2_params.py \
   --source /tmp/pinky_02_vendor_nav2_params.yaml \
   --namespace pinky_02 \
+  --initial-pose 0.076,-0.013,0.239 \
   --output /tmp/hardware_pinky_02.yaml
 
 python3 - <<'PY'
@@ -1145,6 +1153,9 @@ params = document['pinky_02']['amcl']['ros__parameters']
 assert params['base_frame_id'] == 'pinky_02/base_footprint'
 assert params['odom_frame_id'] == 'pinky_02/odom'
 assert params['scan_topic'] == '/pinky_02/scan'
+assert params['initial_pose'] == {'x': 0.076, 'y': -0.013, 'z': 0.0, 'yaw': 0.239}
+behavior = document['pinky_02']['behavior_server']['ros__parameters']
+assert behavior['local_frame'] == 'pinky_02/odom'
 print('PASS: Pinky 02 Nav2 params contract')
 PY
 ```
