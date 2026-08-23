@@ -338,6 +338,188 @@ class EntryPoseController:
         )
 
 
+class WarehouseEntryController:
+    """넓은 구역에서 정렬한 뒤 출입구를 직선 통과하고 내부에서 회전한다."""
+
+    ENTRY_ALIGNMENT = "entry_alignment"
+    ENTER_STRAIGHT = "enter_straight"
+    INSIDE_CLEAR = "inside_clear"
+    TURN_TO_DOCK = "turn_to_dock"
+    DOCK_APPROACH = "dock_approach"
+    RECOVER_ROTATION_SPACE = "recover_rotation_space"
+    COMPLETE = "complete"
+    FAILED = "failed"
+
+    def __init__(
+        self,
+        profile: NarrowZoneProfile,
+        *,
+        limits: MotionLimits | None = None,
+        calibration: bool = False,
+    ) -> None:
+        self.profile = profile
+        self.config = profile.entry_passage
+        self.limits = limits or MotionLimits()
+        self.calibration = calibration
+        self.phase = self.ENTRY_ALIGNMENT
+        self.failure: str | None = None
+        self._started = False
+        self._last_progress_s = 0.0
+        self._best_error: float | None = None
+
+    @property
+    def is_complete(self) -> bool:
+        return self._started and self.failure is None and self.phase == self.COMPLETE
+
+    @property
+    def progress(self) -> str:
+        return self.phase
+
+    def begin(self, pose: Pose2D, *, now_s: float) -> bool:
+        if self.config is None or self.profile.dock_target is None:
+            self.failure = "entry_passage_missing"
+            self.phase = self.FAILED
+            return False
+        readiness = self.profile.direction_readiness_code(ENTER)
+        if readiness != "READY" and not (
+            self.calibration and self.profile.calibration_ready(ENTER)
+        ):
+            self.failure = readiness
+            self.phase = self.FAILED
+            return False
+        self._started = True
+        self._last_progress_s = now_s
+        yaw_error = abs(normalize(self.config.doorway.yaw - pose.yaw))
+        if yaw_error <= self.config.entry_yaw_tolerance_rad:
+            self.phase = self.ENTER_STRAIGHT
+            self._best_error = hypot(
+                self.config.inside_turn.x - pose.x,
+                self.config.inside_turn.y - pose.y,
+            )
+        else:
+            self._best_error = yaw_error
+        return True
+
+    def cancel(self, reason: str = "canceled") -> None:
+        if not self.is_complete:
+            self.failure = reason
+            self.phase = self.FAILED
+
+    def advance(self, pose: Pose2D, *, now_s: float) -> VelocityCommand:
+        if not self._started or self.failure is not None or self.is_complete:
+            return VelocityCommand()
+        assert self.config is not None
+        assert self.profile.dock_target is not None
+
+        if self.phase == self.ENTRY_ALIGNMENT:
+            error = normalize(self.config.doorway.yaw - pose.yaw)
+            if abs(error) <= self.config.entry_yaw_tolerance_rad:
+                self._transition(self.ENTER_STRAIGHT, now_s)
+                return self.advance(pose, now_s=now_s)
+            if self._timed_out(
+                abs(error), self.config.entry_yaw_tolerance_rad, now_s,
+                "entry_alignment_timeout",
+            ):
+                return VelocityCommand()
+            return VelocityCommand(angular_z=self._angular_speed(error))
+
+        if self.phase == self.ENTER_STRAIGHT:
+            distance = hypot(
+                self.config.inside_turn.x - pose.x,
+                self.config.inside_turn.y - pose.y,
+            )
+            if distance <= self.limits.linear_tolerance_m:
+                self._transition(self.INSIDE_CLEAR, now_s)
+                return VelocityCommand()
+            if self._timed_out(
+                distance, self.limits.linear_tolerance_m, now_s,
+                "entry_straight_timeout",
+            ):
+                return VelocityCommand()
+            heading_error = normalize(self.config.doorway.yaw - pose.yaw)
+            correction = max(
+                -self.config.heading_correction_max_rps,
+                min(self.config.heading_correction_max_rps, 1.2 * heading_error),
+            )
+            speed = min(
+                self.config.entry_straight_speed_mps,
+                max(0.02, 0.6 * distance),
+            )
+            return VelocityCommand(linear_x=speed, angular_z=correction)
+
+        if self.phase == self.INSIDE_CLEAR:
+            self._transition(self.TURN_TO_DOCK, now_s)
+            return VelocityCommand()
+
+        if self.phase == self.TURN_TO_DOCK:
+            error = normalize(self.config.dock_yaw - pose.yaw)
+            if abs(error) <= self.limits.angular_tolerance_rad:
+                self._transition(self.DOCK_APPROACH, now_s)
+                return VelocityCommand()
+            if self._timed_out(
+                abs(error), self.limits.angular_tolerance_rad, now_s,
+                "inside_turn_timeout",
+            ):
+                return VelocityCommand()
+            return VelocityCommand(angular_z=self._angular_speed(error))
+
+        if self.phase == self.DOCK_APPROACH:
+            target = self.profile.dock_target
+            dx, dy = target.x - pose.x, target.y - pose.y
+            distance = hypot(dx, dy)
+            yaw_error = normalize(self.config.dock_yaw - pose.yaw)
+            if (
+                distance <= self.limits.linear_tolerance_m
+                and abs(yaw_error) <= self.limits.angular_tolerance_rad
+            ):
+                self.phase = self.COMPLETE
+                return VelocityCommand()
+            error = max(distance, abs(yaw_error))
+            if self._timed_out(
+                error,
+                min(self.limits.linear_tolerance_m, self.limits.angular_tolerance_rad),
+                now_s,
+                "dock_approach_timeout",
+            ):
+                return VelocityCommand()
+            forward = dx * cos(pose.yaw) + dy * sin(pose.yaw)
+            sign = 1.0 if forward >= 0.0 else -1.0
+            speed = min(self.limits.max_linear_mps, max(0.02, 0.6 * distance))
+            return VelocityCommand(
+                linear_x=sign * speed,
+                angular_z=self._angular_speed(yaw_error),
+            )
+
+        return VelocityCommand()
+
+    def _transition(self, phase: str, now_s: float) -> None:
+        self.phase = phase
+        self._last_progress_s = now_s
+        self._best_error = None
+
+    def _timed_out(
+        self,
+        error: float,
+        threshold: float,
+        now_s: float,
+        reason: str,
+    ) -> bool:
+        if self._best_error is None or error <= self._best_error - threshold:
+            self._best_error = error
+            self._last_progress_s = now_s
+        if now_s - self._last_progress_s <= self.limits.step_timeout_s:
+            return False
+        self.failure = reason
+        self.phase = self.FAILED
+        return True
+
+    def _angular_speed(self, error: float) -> float:
+        return max(
+            -self.limits.max_angular_rps,
+            min(self.limits.max_angular_rps, 1.2 * error),
+        )
+
+
 class NarrowZoneController:
     """pose 되먹임으로 한 번의 창고 진입 또는 탈출을 실행한다."""
 

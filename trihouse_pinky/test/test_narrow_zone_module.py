@@ -20,6 +20,7 @@ from trihouse_pinky_docking.narrow_zone import (  # noqa: E402
     NarrowZoneConfigError,
     NarrowZoneController,
     Pose2D,
+    WarehouseEntryController,
     load_narrow_zones,
 )
 
@@ -81,6 +82,27 @@ def _document(*, enabled: bool = True, measured: bool = True) -> dict:
             },
         },
     }
+
+
+def _entry_passage_profile():
+    document = _document()
+    zone = document["zones"]["frozen_storage_loading_dock_01"]
+    zone["dock_target"] = {"x": 1.20, "y": -1.0, "yaw": -math.pi / 2}
+    zone["entry_passage"] = {
+        "doorway": {"x": 1.10, "y": -1.0, "yaw": 0.0},
+        "inside_turn": {"x": 1.20, "y": -1.0, "yaw": 0.0},
+        "dock_yaw": -math.pi / 2,
+        "entry_yaw_tolerance_rad": 0.05,
+        "entry_straight_speed_mps": 0.06,
+        "heading_correction_max_rps": 0.15,
+        "recovery_distance_m": 0.05,
+        "recovery_speed_mps": 0.03,
+        "recovery_max_attempts": 2,
+        "recovery_timeout_s": 10.0,
+    }
+    return load_narrow_zones(document, map_name="new_map_2")[
+        "frozen_storage_loading_dock_01"
+    ]
 
 
 def test_catalog_keeps_disabled_warehouses_but_refuses_to_execute_them() -> None:
@@ -242,6 +264,68 @@ def test_entry_alignment_reaches_position_before_matching_entry_yaw() -> None:
     stopped = controller.advance(Pose2D(0.99, -1.0, 0.01), now_s=0.4)
     assert stopped.is_zero
     assert controller.is_complete
+
+
+def test_warehouse_entry_aligns_crosses_then_turns_inside() -> None:
+    controller = WarehouseEntryController(
+        _entry_passage_profile(),
+        limits=MotionLimits(linear_tolerance_m=0.02, angular_tolerance_rad=0.05),
+    )
+    assert controller.begin(Pose2D(1.0, -1.0, math.pi / 2), now_s=10.0)
+
+    align = controller.advance(Pose2D(1.0, -1.0, math.pi / 2), now_s=10.1)
+    assert align.linear_x == 0.0
+    assert align.angular_z < 0.0
+
+    straight = controller.advance(Pose2D(1.0, -1.0, 0.0), now_s=10.2)
+    assert straight.linear_x > 0.0
+    assert abs(straight.angular_z) <= 0.15
+
+    inside = controller.advance(Pose2D(1.20, -1.0, 0.0), now_s=10.3)
+    assert inside.is_zero
+    assert controller.progress == "inside_clear"
+    controller.advance(Pose2D(1.20, -1.0, 0.0), now_s=10.4)
+    turn = controller.advance(Pose2D(1.20, -1.0, 0.0), now_s=10.5)
+    assert turn.linear_x == 0.0
+    assert turn.angular_z < 0.0
+
+
+def test_warehouse_entry_never_rotates_in_place_while_crossing_doorway() -> None:
+    controller = WarehouseEntryController(_entry_passage_profile())
+    assert controller.begin(Pose2D(1.0, -1.0, 0.0), now_s=0.0)
+
+    crossing = controller.advance(Pose2D(1.10, -1.0, 0.30), now_s=0.1)
+
+    assert controller.progress == "enter_straight"
+    assert crossing.linear_x > 0.0
+    assert crossing.angular_z == pytest.approx(-0.15)
+
+
+def test_warehouse_entry_completes_after_inside_turn_and_dock_approach() -> None:
+    controller = WarehouseEntryController(_entry_passage_profile())
+    assert controller.begin(Pose2D(1.0, -1.0, 0.0), now_s=0.0)
+    controller.advance(Pose2D(1.20, -1.0, 0.0), now_s=0.1)
+    controller.advance(Pose2D(1.20, -1.0, 0.0), now_s=0.2)
+    controller.advance(Pose2D(1.20, -1.0, -math.pi / 2), now_s=0.3)
+    stopped = controller.advance(Pose2D(1.20, -1.0, -math.pi / 2), now_s=0.4)
+
+    assert stopped.is_zero
+    assert controller.is_complete
+
+
+def test_warehouse_entry_timeout_is_terminal() -> None:
+    controller = WarehouseEntryController(
+        _entry_passage_profile(), limits=MotionLimits(step_timeout_s=1.0)
+    )
+    assert controller.begin(Pose2D(1.0, -1.0, math.pi / 2), now_s=0.0)
+
+    stopped = controller.advance(Pose2D(1.0, -1.0, math.pi / 2), now_s=1.1)
+
+    assert stopped.is_zero
+    assert controller.failure == "entry_alignment_timeout"
+    assert controller.advance(
+        Pose2D(1.0, -1.0, math.pi / 2), now_s=1.2
+    ).is_zero
 
 
 def test_controller_rotates_the_short_way_without_linear_motion() -> None:
