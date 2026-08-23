@@ -1,0 +1,102 @@
+{
+  "model": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "quant": "4bit",
+  "samples": [
+    {
+      "idx": 0,
+      "category": "clean",
+      "answers": {
+        "A_image_only": "The robot is navigating a warehouse aisle toward the next waypoint. There are no visible obstacles or people in the immediate area. It appears to be safe to proceed forward as there are no obstructions detected in the current path.",
+        "B_with_context": "The robot is navigating a warehouse aisle toward the next waypoint. There are two people detected in the middle of the aisle with a confidence of 0.66 and 0.44 respectively. The top-left region is identified as an obstacle with a high confidence of 0.92. Based on the information provided, it appears that there are people in the way, but the obstacle detection is quite confident at 0.92. Therefore, it would be advisable to slow down or stop and re-plan the route to avoid potential collisions with the people."
+      }
+    },
+    {
+      "idx": 1,
+      "category": "clean",
+      "answers": {
+        "A_image_only": "The robot is navigating a warehouse aisle toward the next waypoint. There are no visible people or obstacles in the immediate area. It appears to be safe to proceed forward as there are no signs of hazards or other robots in the path.",
+        "B_with_context": "The robot is navigating a warehouse aisle toward the next waypoint. There are two people detected in the middle of the aisle with a confidence of 0.61 and 0.50 respectively. The top-left area is identified as an obstacle with a high confidence of 0.92. Based on the provided information, it appears that there are people in the way, but the confidence levels suggest they might not be a significant obstacle. However, the top-left area is clearly marked as an obstacle, which could pose a risk if the robot continues forward. It would be prudent to slow down or stop at this point to ensure safety."
+      }
+    },
+    {
+      "idx": 2,
+      "category": "s1",
+      "answers": {
+        "A_image_only": "The robot is navigating a warehouse aisle towards the next waypoint. There are no visible obstacles or people in the immediate area. It appears to be safe to proceed forward as there are no signs of hazards or other robots in the path.",
+        "B_with_context": "The robot is navigating a warehouse aisle toward the next waypoint. There are two people detected in the middle of the aisle with a confidence of 0.64 and 0.42 respectively. The top-left corner has an obstacle with a high confidence of 0.93. Based on the provided information, it appears that there are people in the way, but the confidence levels suggest they might not be a significant obstacle. However, the top-left corner with a very high confidence level indicates a potential hazard that should be avoided. Therefore, it would be prudent to slow down or stop at this point to ensure safety."
+      }
+    },
+    {
+      "idx": 3,
+      "category": "s1",
+      "answers": {
+        "A_image_only": "The robot is navigating a warehouse aisle toward the next waypoint. There are no visible obstacles or people in the immediate area. It appears to be a clear path ahead, so it would be safe to proceed forward.",
+        "B_with_context": "The robot is navigating a warehouse aisle toward the next waypoint. There are two people in the middle of the aisle with a high confidence level, indicating they might be obstacles or people. However, there is also a person at the top-left corner with a lower confidence level, which could indicate that they are not an immediate threat but rather a distant figure. The floor appears to have some obstacles, as indicated by the \"obstacle\" detection with a confidence of 0.92. It is generally safe to proceed forward, but the person at the top-left should be monitored closely due to their lower confidence level."
+      }
+    },
+    {
+      "idx": 4,
+      "category": "s3",
+      "answers": {
+        "A_image_only": "The robot is navigating a warehouse aisle toward the next waypoint. There are no visible obstacles or people in the immediate area. It appears to be safe to proceed forward as there are no obstructions detected in the path ahead.",
+        "B_with_context": "The robot is navigating a warehouse aisle toward the next waypoint. There are two people detected in the middle of the aisle with a confidence of 0.66 and 0.44 respectively. The top-left region is identified as an obstacle with a high confidence of 0.92. Based on the provided information, the current environment appears to be relatively safe for the robot to proceed forward, but the lower confidence values for some objects suggest that they may not be fully reliable."
+      }
+    },
+    {
+      "idx": 5,
+      "category": "s3",
+      "answers": {
+        "A_image_only": "The robot is navigating a warehouse aisle towards the next waypoint. There are no visible people or obstacles in the immediate area. It appears to be safe to proceed forward as there are no obstructions detected.",
+        "B_with_context": "The robot is navigating a warehouse aisle toward the next waypoint. There are two people detected in the middle of the aisle with a confidence of 0.61 and 0.50 respectively. The top-left area is identified as an obstacle with a high confidence of 0.92. Based on the information provided, it appears that there are people in the way, but the confidence levels suggest they might not be a significant obstacle. However, the top-left area is clearly marked as an obstacle, which could pose a risk if the robot were to collide with it. Therefore, it would be prudent to slow down or stop before proceeding further."
+      }
+    },
+    {
+      "idx": 6,
+      "category": "s4",
+      "answers": {
+        "A_image_only": "The robot is navigating a warehouse aisle toward the next waypoint. There are no visible obstacles or people in the immediate area. It appears to be safe to proceed forward as there are no signs of hazards or other robots in the path.",
+        "B_with_context": "The robot is navigating a warehouse aisle toward the next waypoint. There are two people detected in the middle of the aisle with a confidence of 0.66 and 0.44 respectively. One person is closer to the robot, while the other is further away. The top-left region is identified as an obstacle with a high confidence of 0.92. Based on this information, it appears that there are people in the way, but the obstacle detection is quite confident. However, the lower confidence values for the people suggest that they might not be moving significantly or could be obscured from view. Therefore, it would be prudent to slow down or stop until the people have moved out of the way before proceeding forward."
+      }
+    },
+    {
+      "idx": 7,
+      "category": "s4",
+      "answers": {
+        "A_image_only": "The robot is navigating a warehouse aisle toward the next waypoint. There are no visible people or obstacles in the immediate area. It appears to be safe to proceed forward as there are no signs of hazards or other robots in the path.",
+        "B_with_context": "The robot is navigating a warehouse aisle toward the next waypoint. There are two people detected in the middle of the aisle with a confidence of 0.61 and 0.49 respectively. One person is closer to the robot than the other. The top-left region is identified as an obstacle with a high confidence of 0.92. It appears that the current environment is relatively clear, but the low confidence of the second person suggests that they may not be moving or are not actively present at this moment. Therefore, it is currently safe to proceed forward."
+      }
+    },
+    {
+      "idx": 8,
+      "category": "s5",
+      "answers": {
+        "A_image_only": "The image is very blurry and lacks clear details of any obstacles or people. It is not possible to determine if there are any obstacles or people in the frame or if it is safe to proceed forward based on this image alone.",
+        "B_with_context": "The image is very blurry, making it difficult to discern specific details about the environment or objects within it. However, based on the provided information, there is an obstacle detected in the top-left corner with a high confidence of 0.92. This suggests that the robot should be cautious as it navigates the warehouse aisle towards the next waypoint. The low confidence level for the obstacle might indicate that the detection system is not reliably identifying the object, which could potentially lead to incorrect navigation decisions. Therefore, while the current detection indicates a potential obstacle, the reliability of this detection needs to be confirmed before proceeding."
+      }
+    },
+    {
+      "idx": 9,
+      "category": "s5",
+      "answers": {
+        "A_image_only": "The image is blurry and shows a warehouse environment with a white wall on the right side and a blue door on the left. There is a yellow object on the floor near the blue door. It is not possible to determine if there are any people or other obstacles in the area from this image. It is not safe to proceed forward as the image is too blurry to provide clear information about the surroundings.",
+        "B_with_context": "The robot is navigating a warehouse aisle toward the next waypoint. There are two people detected in the middle of the aisle with a confidence of 0.47 and 0.36 respectively. Additionally, there is an obstacle detected in the top-left corner with a confidence of 0.92. Based on the current detections, it appears that the robot should proceed forward as long as it avoids the obstacle in the top-left corner. However, the confidence levels for the people suggest that they may not be a significant threat at this moment."
+      }
+    },
+    {
+      "idx": 10,
+      "category": "lowlight",
+      "answers": {
+        "A_image_only": "There is no robot visible in the image. The image appears to be a dark room with a blue door on the left side and a white wall on the right side. There is no indication of any obstacles or people in the image. It is not safe to proceed forward as there is no robot present.",
+        "B_with_context": "The robot is navigating a warehouse aisle toward the next waypoint. There are two people detected in the middle of the aisle with a confidence of 0.63 and 0.45 respectively. One person is located at the top-left corner with a confidence of 0.92. The person at the top-left appears to be an obstacle due to their high confidence level. The other two people are likely pedestrians, but their lower confidence levels suggest they may not be significant obstacles. It is generally safe to proceed forward as there are no immediate threats from the detected objects."
+      }
+    },
+    {
+      "idx": 11,
+      "category": "lowlight",
+      "answers": {
+        "A_image_only": "There is no robot visible in the image. The image appears to be a dark room with a blue wall on the left side and a white wall on the right side. There is a small object on the floor near the center of the image. It is not safe to proceed forward as there are no robots or people visible in the image.",
+        "B_with_context": "The robot is navigating a warehouse aisle toward the next waypoint. There are two people detected in the middle of the aisle with a confidence of 0.61 and 0.50 respectively. The top-left region is identified as an obstacle with a high confidence of 0.92. Based on the information provided, it appears that there are people in the way, but the obstacle detection is quite confident. Therefore, it would be advisable to slow down or stop and re-plan the route to avoid potential hazards."
+      }
+    }
+  ]
+}

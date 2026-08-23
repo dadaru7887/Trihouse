@@ -1,0 +1,1 @@
+frame_idx,t_rel_s,fetch_ms,infer_ms,n_det,detections_json,robot_x,robot_y,robot_yaw,trigger_reasons
