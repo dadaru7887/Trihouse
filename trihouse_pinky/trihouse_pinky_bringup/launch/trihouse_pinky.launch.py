@@ -23,6 +23,7 @@ def generate_launch_description():
     """
     robot_id = LaunchConfiguration('robot_id')
     namespace = LaunchConfiguration('namespace')
+    use_sim_time = LaunchConfiguration('use_sim_time')
     # 벤더 upload_robot.launch.py는 namespace 뒤에 다시 '/'를 붙여 frame_prefix를
     # 만든다. 루트 표기 '/'를 그대로 넘기면 TF frame이 '//base_link'처럼 되어
     # /scan 및 /odom의 frame_id와 끊어지므로 벤더에만 양끝 '/'를 제거해 전달한다.
@@ -40,8 +41,21 @@ def generate_launch_description():
     allow_narrow_calibration = LaunchConfiguration('allow_narrow_calibration')
     marker_docks_file = LaunchConfiguration('marker_docks_file')
     vision_config = LaunchConfiguration('vision_config_file')
-    vendor_bringup = PathJoinSubstitution([FindPackageShare('pinky_bringup'), 'launch', 'bringup_robot.launch.xml'])
-    navigation = PathJoinSubstitution([FindPackageShare('pinky_navigation'), 'launch', 'bringup_launch.xml'])
+    vendor_bringup = PathJoinSubstitution([
+        FindPackageShare('pinky_bringup'),
+        'launch',
+        'bringup_robot_namespaced.launch.xml',
+    ])
+    localization = PathJoinSubstitution([
+        FindPackageShare('pinky_navigation'),
+        'launch',
+        'localization_launch.xml',
+    ])
+    navigation = PathJoinSubstitution([
+        FindPackageShare('pinky_navigation'),
+        'launch',
+        'navigation_launch.xml',
+    ])
     vision = PathJoinSubstitution([FindPackageShare('trihouse_pinky_vision'), 'launch', 'vision.launch.py'])
     vision_default_config = PathJoinSubstitution([FindPackageShare('trihouse_pinky_vision'), 'config', 'pinky_1.yaml'])
     return LaunchDescription([
@@ -122,6 +136,11 @@ def generate_launch_description():
                 condition=IfCondition(vision_enabled),
             ),
         ]),
+        # 벤더의 상위 `bringup_launch.xml`은 namespace를 한 번 push한 뒤, 아래 두
+        # launch에 같은 namespace 값을 물려준다. 비-composed 경로에서는 각 하위
+        # launch도 namespace를 push하여 `/pinky_01/pinky_01/...`이 된다. 따라서 하위
+        # launch를 직접 include하고 각각 정확히 한 번만 namespace를 적용한다.
+        #
         # `use_composition`은 반드시 False다. composed Nav2는 `push-ros-namespace`를
         # 물려받지 않아서 두 로봇이 루트 `/amcl_pose`와 `/map`을 공유하게 된다.
         # 벤더 XML 은 `<param from>` 으로 params 를 그대로 넘기고 RewrittenYaml 을
@@ -130,12 +149,34 @@ def generate_launch_description():
         # `p0_runtime_assets.derive_nav2_params(..., root_key=namespace)` 로 미리
         # 감싼 파일을 넘겨 그 간극을 메운다.
         IncludeLaunchDescription(
-            AnyLaunchDescriptionSource(navigation),
+            AnyLaunchDescriptionSource(localization),
             launch_arguments={
                 'map': map_path,
                 'namespace': namespace,
+                'use_sim_time': use_sim_time,
+                'autostart': 'True',
                 'use_composition': 'False',
+                'use_respawn': 'False',
                 'params_file': nav2_params_file,
+                # localization과 navigation XML이 같은 launch configuration 이름을
+                # 사용하므로 각 include에서 값을 고정하여 서로 물려받지 않게 한다.
+                'lifecycle_nodes': "['map_server', 'amcl']",
+            }.items(),
+        ),
+        IncludeLaunchDescription(
+            AnyLaunchDescriptionSource(navigation),
+            launch_arguments={
+                'namespace': namespace,
+                'use_sim_time': use_sim_time,
+                'autostart': 'True',
+                'use_composition': 'False',
+                'use_respawn': 'False',
+                'params_file': nav2_params_file,
+                'lifecycle_nodes': (
+                    "['controller_server', 'smoother_server', 'planner_server', "
+                    "'behavior_server', 'bt_navigator', 'waypoint_follower', "
+                    "'velocity_smoother']"
+                ),
             }.items(),
         ),
         # 벤더 발행자(robot_state_publisher, odom)는 루트 `/tf` 에 쓴다. 그런데
@@ -143,8 +184,8 @@ def generate_launch_description():
         # `/pinky_01/tf` 를 듣는다. 그 갈라짐이 시뮬에서 AMCL 스캔 전량 폐기를
         # 일으켰다. 발행자 쪽에도 같은 상대 이름을 걸어 한 자리로 모은다.
         #
-        # `PushRosNamespace` 는 넣지 않는다 — 벤더 bringup 이 자기 인자로 스스로
-        # push 하므로 두 번 감싸면 `/pinky_01/pinky_01/...` 이 된다.
+        # `PushRosNamespace` 는 넣지 않는다 — namespaced 벤더 bringup이 LiDAR에는
+        # push를, 나머지 하드웨어 노드에는 명시적 namespace를 적용한다.
         GroupAction([
             SetRemap('/tf', 'tf'),
             SetRemap('/tf_static', 'tf_static'),

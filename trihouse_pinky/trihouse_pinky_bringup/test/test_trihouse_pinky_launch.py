@@ -65,6 +65,14 @@ def _declared_arguments(description):
     }
 
 
+def _include_location(entity: IncludeLaunchDescription) -> str:
+    return str(entity.launch_description_source.location)
+
+
+def _include_arguments(entity: IncludeLaunchDescription):
+    return dict(entity.launch_arguments)
+
+
 def test_launch_declares_the_nav2_params_file_argument() -> None:
     """벤더 XML 은 RewrittenYaml 을 쓰지 않으므로 감싼 params 를 우리가 넘겨야 한다."""
     description = _module().generate_launch_description()
@@ -82,6 +90,57 @@ def test_the_nav2_params_argument_defaults_to_the_vendor_file() -> None:
     }
 
     assert declared["nav2_params_file"].default_value[0].text == ""
+
+
+def test_namespaced_vendor_bringup_is_used_for_physical_topics() -> None:
+    """LiDAR, odom, battery, cmd_vel도 로봇 namespace 안에서 실행되어야 한다."""
+    description = _module().generate_launch_description()
+    locations = [
+        _include_location(entity)
+        for entity in _flatten(description.entities)
+        if isinstance(entity, IncludeLaunchDescription)
+    ]
+
+    assert any("bringup_robot_namespaced.launch.xml" in location for location in locations)
+    assert not any(location.endswith("bringup_robot.launch.xml") for location in locations)
+
+
+def test_nav2_children_are_included_directly_without_the_double_push_wrapper() -> None:
+    """상위 bringup의 push와 하위 launch의 push가 namespace를 두 번 붙이면 안 된다."""
+    description = _module().generate_launch_description()
+    locations = [
+        _include_location(entity)
+        for entity in _flatten(description.entities)
+        if isinstance(entity, IncludeLaunchDescription)
+    ]
+
+    assert any("localization_launch.xml" in location for location in locations)
+    assert any("navigation_launch.xml" in location for location in locations)
+    assert not any("bringup_launch.xml" in location for location in locations)
+
+
+def test_nav2_children_receive_separate_lifecycle_node_lists() -> None:
+    """같은 launch 인자 이름이 include 사이에서 이전 값을 물려받지 않아야 한다."""
+    description = _module().generate_launch_description()
+    includes = {}
+    for entity in _flatten(description.entities):
+        if not isinstance(entity, IncludeLaunchDescription):
+            continue
+        location = _include_location(entity)
+        if "localization_launch.xml" in location:
+            includes["localization_launch.xml"] = entity
+        elif "navigation_launch.xml" in location:
+            includes["navigation_launch.xml"] = entity
+
+    localization_args = _include_arguments(includes["localization_launch.xml"])
+    navigation_args = _include_arguments(includes["navigation_launch.xml"])
+
+    assert str(localization_args["lifecycle_nodes"]) == "['map_server', 'amcl']"
+    assert str(navigation_args["lifecycle_nodes"]) == (
+        "['controller_server', 'smoother_server', 'planner_server', "
+        "'behavior_server', 'bt_navigator', 'waypoint_follower', "
+        "'velocity_smoother']"
+    )
 
 
 def test_vendor_bringup_is_wrapped_in_a_tf_remap_group() -> None:
@@ -134,7 +193,7 @@ def test_root_namespace_is_empty_when_forwarded_to_vendor_bringup() -> None:
         entity
         for entity in _flatten(description.entities)
         if isinstance(entity, IncludeLaunchDescription)
-        and "bringup_robot.launch.xml"
+        and "bringup_robot_namespaced.launch.xml"
         in str(entity.launch_description_source.location)
     ]
     assert len(vendor_includes) == 1
@@ -276,7 +335,7 @@ def test_single_robot_motor_input_is_owned_by_the_safety_supervisor() -> None:
         if isinstance(entity, GroupAction)
         and any(
             isinstance(child, IncludeLaunchDescription)
-            and "bringup_robot.launch.xml"
+            and "bringup_robot_namespaced.launch.xml"
             in str(child.launch_description_source.location)
             for child in _flatten(entity.get_sub_entities())
         )
