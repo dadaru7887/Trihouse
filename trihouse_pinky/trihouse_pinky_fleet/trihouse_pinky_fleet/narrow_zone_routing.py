@@ -22,6 +22,15 @@ def requires_narrow_profile(destination_code: str) -> bool:
     return "_storage_loading_dock_" in destination_code
 
 
+def entry_motion_strategy(profile: NarrowZoneProfile) -> str:
+    """설정에 명시된 출입구 방식만 선택해 fleet와 테스트의 판단을 일치시킨다."""
+    return (
+        "warehouse_entry"
+        if profile.entry_passage is not None
+        else "legacy_narrow_zone"
+    )
+
+
 def select_approach(
     profiles: Mapping[str, NarrowZoneProfile],
     destination_code: str,

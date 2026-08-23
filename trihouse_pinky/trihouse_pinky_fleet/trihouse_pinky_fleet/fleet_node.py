@@ -35,6 +35,8 @@ from trihouse_pinky_docking.narrow_zone import (
     NarrowZoneConfigError,
     NarrowZoneController,
     Pose2D,
+    SafetyObservation,
+    WarehouseEntryController,
     load_narrow_zones,
 )
 
@@ -42,6 +44,7 @@ from .workflow import JobCommand, JobPhase, TransportWorkflow
 from .narrow_zone_pilot import verify_pose
 from .narrow_zone_routing import (
     departure_profile,
+    entry_motion_strategy,
     entry_handoff_reached,
     select_approach,
 )
@@ -137,6 +140,7 @@ class FleetNode(Node):
         self.workflow = TransportWorkflow(robot_id=self.robot_id, expected_map_revision=self.map_revision)
         self.ready = False; self.outbox_ready = False; self.emergency = False; self.stationary = False; self.recovery_health_ok = False; self.current_pose: tuple[float, float, float] | None = None
         self.safety_seen = False
+        self.safety_observation = SafetyObservation()
         self.nearest_lidar_range_m: float | None = None
         # 정밀 정차 판정용 map 프레임 pose. odom 은 프레임이 달라 쓸 수 없다.
         self.map_pose: tuple[float, float, float] | None = None
@@ -216,6 +220,14 @@ class FleetNode(Node):
     def _on_safety(self, message: SafetyState) -> None:
         self.safety_seen = True
         self.emergency = message.state == SafetyState.STATE_EMERGENCY
+        self.safety_observation = SafetyObservation(
+            stopped=message.state in (
+                SafetyState.STATE_STOP,
+                SafetyState.STATE_EMERGENCY,
+            ),
+            emergency=self.emergency,
+            detail=str(message.detail or "clear"),
+        )
         if self.emergency:
             self.workflow.enter_emergency(message.detail)
 
@@ -542,39 +554,53 @@ class FleetNode(Node):
         # Nav2 실패 또는 취소 미확인 상태에서는 로컬 주행을 절대 시작하지 않는다.
         narrow_detail = ''
         if narrow_zone is not None and nav_approach_completed:
-            aligned, narrow_detail = await self._run_entry_alignment(
-                EntryPoseController(
-                    narrow_zone.entry_pose,
-                    limits=self._narrow_limits(),
-                ),
-                goal_handle,
-            )
-            if not aligned:
-                self._publish_event(
-                    goal, TaskEvent.EVENT_FAILED, narrow_detail,
-                    reason_code='GOAL_TOLERANCE_NOT_MET',
-                )
-                goal_handle.abort()
-                result.success = False
-                result.code = ExecuteTransport.Result.CODE_NAVIGATION_FAILED
-                result.message = narrow_detail
-                result.completed_at = self.get_clock().now().to_msg()
-                return result
-            if narrow_zone.marker_id is not None:
-                ran, narrow_detail = await self._run_marker_dock(
-                    narrow_zone.marker_id, goal
-                )
-            else:
-                ran, narrow_detail = await self._run_narrow_controller(
-                    NarrowZoneController(
+            if entry_motion_strategy(narrow_zone) == 'warehouse_entry':
+                ran, narrow_detail = await self._run_warehouse_entry(
+                    WarehouseEntryController(
                         narrow_zone,
-                        direction=ENTER,
                         limits=self._narrow_limits(),
                         calibration=calibration,
                     ),
                     goal_handle,
                 )
+            else:
+                aligned, narrow_detail = await self._run_entry_alignment(
+                    EntryPoseController(
+                        narrow_zone.entry_pose,
+                        limits=self._narrow_limits(),
+                    ),
+                    goal_handle,
+                )
+                if not aligned:
+                    failed = self._release_rule_failure()
+                    self._publish_navigation(goal, failed)
+                    self._publish_event(
+                        goal, TaskEvent.EVENT_FAILED, narrow_detail,
+                        reason_code='GOAL_TOLERANCE_NOT_MET',
+                    )
+                    goal_handle.abort()
+                    result.success = False
+                    result.code = ExecuteTransport.Result.CODE_NAVIGATION_FAILED
+                    result.message = narrow_detail
+                    result.completed_at = self.get_clock().now().to_msg()
+                    return result
+                if narrow_zone.marker_id is not None:
+                    ran, narrow_detail = await self._run_marker_dock(
+                        narrow_zone.marker_id, goal
+                    )
+                else:
+                    ran, narrow_detail = await self._run_narrow_controller(
+                        NarrowZoneController(
+                            narrow_zone,
+                            direction=ENTER,
+                            limits=self._narrow_limits(),
+                            calibration=calibration,
+                        ),
+                        goal_handle,
+                    )
             if not ran:
+                failed = self._release_rule_failure()
+                self._publish_navigation(goal, failed)
                 self._publish_event(
                     goal, TaskEvent.EVENT_FAILED, narrow_detail,
                     reason_code='NAV2_ABORTED',
@@ -597,6 +623,8 @@ class FleetNode(Node):
                 f'yaw 차 {yaw_error:.3f} rad'
             )
             if not docked:
+                failed = self._release_rule_failure()
+                self._publish_navigation(goal, failed)
                 self._publish_event(
                     goal, TaskEvent.EVENT_FAILED,
                     f'협로 진입 후 도크가 아니다 (거리 {distance:.3f} m, yaw {yaw_error:.3f} rad)',
@@ -979,6 +1007,15 @@ class FleetNode(Node):
     def _stop_narrow_drive(self) -> None:
         self.narrow_cmd_pub.publish(Twist())
 
+    def _release_rule_failure(self):
+        """로컬 규칙 실패가 다음 명령을 영구 차단하지 않게 active 이동을 해제한다."""
+        failed = self.workflow.nav_result(
+            succeeded=False, stationary=self.stationary
+        )
+        if failed.phase is JobPhase.NAVIGATING:
+            failed = self.workflow.cancel_navigation()
+        return failed
+
     async def _run_marker_dock(self, marker_id: str, transport_goal) -> tuple[bool, str]:
         """ArUco action server가 정렬·180도 회전·후진을 모두 끝낼 때까지 기다린다."""
         if not self.dock_client.wait_for_server(timeout_sec=2.0):
@@ -1020,6 +1057,15 @@ class FleetNode(Node):
             controller, goal_handle, label='entry pose 정렬'
         )
 
+    async def _run_warehouse_entry(
+        self, controller: WarehouseEntryController, goal_handle: object
+    ) -> tuple[bool, str]:
+        return await self._run_rule_controller(
+            controller,
+            goal_handle,
+            label=f'{controller.profile.destination_code} 출입구 진입',
+        )
+
     async def _run_rule_controller(
         self, controller: object, goal_handle: object, *, label: str
     ) -> tuple[bool, str]:
@@ -1031,11 +1077,20 @@ class FleetNode(Node):
         if not controller.begin(Pose2D(*self.map_pose), now_s=now_s):
             self._stop_narrow_drive()
             return False, str(controller.failure)
+        previous_progress = str(controller.progress)
+        previous_attempt = int(getattr(controller, 'recovery_attempt', 0))
+        self.get_logger().info(
+            f'rule_transition robot={self.robot_id} label={label!r} '
+            f'phase={previous_progress} safety={self.safety_observation.detail!r} '
+            f'recovery_attempt={previous_attempt}'
+        )
 
         while not controller.is_complete:
             if goal_handle.is_cancel_requested:
                 controller.cancel('navigation canceled')
-            elif self.emergency:
+            elif self.emergency and not isinstance(
+                controller, WarehouseEntryController
+            ):
                 controller.cancel('안전 정지')
             elif self.map_pose is None:
                 controller.cancel('map pose 를 잃었다')
@@ -1045,7 +1100,29 @@ class FleetNode(Node):
 
             current = Pose2D(*self.map_pose)
             now_s = self.get_clock().now().nanoseconds / 1e9
-            command_value = controller.advance(current, now_s=now_s)
+            if isinstance(controller, WarehouseEntryController):
+                command_value = controller.advance(
+                    current,
+                    now_s=now_s,
+                    safety=self.safety_observation,
+                )
+            else:
+                command_value = controller.advance(current, now_s=now_s)
+            current_progress = str(controller.progress)
+            current_attempt = int(getattr(controller, 'recovery_attempt', 0))
+            if (
+                current_progress != previous_progress
+                or current_attempt != previous_attempt
+            ):
+                self.get_logger().info(
+                    f'rule_transition robot={self.robot_id} label={label!r} '
+                    f'from={previous_progress} to={current_progress} '
+                    f'safety={self.safety_observation.detail!r} '
+                    f'recovery_attempt={current_attempt} '
+                    f'failure={getattr(controller, "failure", None)!r}'
+                )
+                previous_progress = current_progress
+                previous_attempt = current_attempt
             if controller.failure is not None:
                 self._stop_narrow_drive()
                 return False, controller.failure

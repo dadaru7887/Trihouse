@@ -21,6 +21,7 @@ from trihouse_pinky_docking.narrow_zone import (  # noqa: E402
 )
 from trihouse_pinky_fleet.narrow_zone_routing import (  # noqa: E402
     departure_profile,
+    entry_motion_strategy,
     entry_handoff_reached,
     select_approach,
 )
@@ -45,6 +46,20 @@ def test_an_ordinary_destination_keeps_the_requested_nav2_target() -> None:
     assert decision.allowed is True
     assert decision.profile is None
     assert decision.nav_target == requested
+
+
+def test_entry_controller_selection_uses_passage_only_when_configured() -> None:
+    profiles = _profiles()
+
+    assert entry_motion_strategy(
+        profiles["ambient_storage_loading_dock_01"]
+    ) == "warehouse_entry"
+    assert entry_motion_strategy(
+        profiles["chilled_storage_loading_dock_01"]
+    ) == "warehouse_entry"
+    assert entry_motion_strategy(
+        profiles["frozen_storage_loading_dock_01"]
+    ) == "legacy_narrow_zone"
 
 
 def test_a_warehouse_is_rejected_when_the_profile_catalog_is_missing() -> None:
