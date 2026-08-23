@@ -29,6 +29,49 @@
 예를 들어 `/battery/percent`가 `68.0`이면 `/trihouse/battery.percentage`는 약 `0.68`이어야
 한다. 전압이 유한하고 0보다 크면 `/trihouse/battery.present`는 `true`여야 한다.
 
+## 0. 모든 에러에 공통인 로그 수집 → 분기 STEPS
+
+오류가 나면 launch를 바로 여러 번 다시 실행하지 않는다. 먼저 아래 읽기 전용 명령으로
+**process, launch log, ROS status**를 같은 시각에 남긴다. 예시 log file은 이 문서의
+launch command와 같을 때 사용한다. 다른 log file로 시작했다면 실제 경로를 쓴다.
+
+```bash
+# pinky@ Pinky: process와 최근 launch error
+pgrep -af '[r]os2 launch trihouse_pinky_bringup trihouse_pinky.launch.py'
+pgrep -af '[s]afety_supervisor|[f]leet_node|[f]leet_gateway|[b]attery_adapter|[a]mcl|[m]ap_server'
+tail -n 120 /tmp/trihouse_pinky.log
+grep -aE 'ERROR|FATAL|Traceback|process has died|Failed to bring up|Failed to change state' \
+  /tmp/trihouse_pinky.log | tail -n 60
+
+# pinky@ Pinky: command를 보내지 않는 ROS status 확인
+timeout 10 ros2 topic echo /trihouse/readiness trihouse_interfaces/msg/Readiness --once
+timeout 10 ros2 topic echo /trihouse/status trihouse_interfaces/msg/RobotStatus --once
+timeout 10 ros2 topic echo /trihouse/safety/state trihouse_interfaces/msg/SafetyState --once
+ros2 topic info /cmd_vel_safe --verbose
+```
+
+개발 PC의 Control Tower/network error도 동시에 확인한다.
+
+```bash
+# pc@ 개발 PC
+ip route get <pinky-ip>
+nc -vz -w 3 <pinky-ip> 22
+nc -vz -w 3 <control-pc-ip> 8788
+```
+
+| log·관측 | 원인 판단 | 처리 명령 또는 다음 절 |
+| --- | --- | --- |
+| `process has died`, Python `Traceback` | 코드/의존성/launch 설정 오류 | 오류가 난 package만 4절 방식으로 build 후 3→5절 재기동 |
+| launch 또는 동일 node가 두 개 이상 | 중복 launch·고아 process | 2절 확인 후 3절의 `SIGINT`/전용 PID 종료, 하나만 5절로 기동 |
+| `RTPS_TRANSPORT_SHM ... open_and_lock_file failed` | Fast DDS SHM lock 충돌 | 1절의 `FASTDDS_BUILTIN_TRANSPORTS=UDPv4`를 새 terminal/새 launch에 적용 |
+| readiness/status timeout | DDS·overlay·sensor/node 중 하나 미준비 | 1절 environment를 비교하고 7절(TF/Nav2), 8절(battery), 16절(Discovery Server)을 순서대로 확인 |
+| `/trihouse/status.ready: false` 또는 `errors`가 비지 않음 | 주문 불가 status | `errors`의 첫 항목을 원인으로 삼아 해당 interface부터 recovery; action/order를 보내지 않음 |
+| `/cmd_vel_safe` publisher가 Safety Supervisor 외 node이거나 motor path가 불명확 | final safety-control ownership 위반 | 9절에서 remap/subscriber를 확인하고, 원인이 확인될 때까지 launch와 order를 중지 |
+
+이 표는 진단 순서를 정한 것이며, hardware wiring·실물 장애물·E-stop 문제를 remote command로
+우회하는 절차가 아니다. SafetyState가 `CLEAR`가 아니거나 현장 시야가 확보되지 않았으면
+모든 transport action을 보류한다.
+
 ## 1. Pinky 터미널 환경 설정
 
 아래 명령은 모두 **Pinky 터미널**에서 실행한다. 경로가 다른 Pinky에서는 먼저

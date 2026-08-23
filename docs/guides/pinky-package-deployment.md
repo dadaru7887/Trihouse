@@ -24,6 +24,66 @@ OMX는 별도 장비에서 실행되고, 관제가 Pinky와 OMX를 연결한다.
 
 예시의 `<...>`는 실제 확인값으로 바꾼다. 꺾쇠괄호를 그대로 입력하지 않는다.
 
+## 빠른 STEPS: 처음 배포부터 코드 갱신까지
+
+아래 순서가 이 문서의 실행 흐름이다. 실제 로봇 이동은 11절의 안전 조건과 17절의
+readiness를 모두 통과하기 전까지 포함하지 않는다.
+
+| 단계 | 실행 터미널 | 하는 일 | 완료 기준 |
+| --- | --- | --- | --- |
+| 1 | `pinky@` | ROS 배포판·vendor overlay·Pinky 홈을 확인한다. | `pinky_bringup`, `pinky_navigation`을 찾는다. |
+| 2 | `pinky@` | `~/trihouse_ws/src` workspace를 준비한다. | workspace와 `src`가 존재한다. |
+| 3 | `pc@` | SSH 대상과 원격 workspace를 확인한다. | 호스트·사용자·경로가 Pinky 실물과 일치한다. |
+| 4 | `pc@` | `trihouse_interfaces`, `trihouse_pinky`만 `rsync` dry-run 후 전송한다. | OMX/FMS/DB 코드는 Pinky에 복사되지 않는다. |
+| 5 | `pinky@` | rosdep 확인 후 순차 `colcon build --symlink-install`을 한다. | 7개 Trihouse package가 build된다. |
+| 6 | `pinky@` | underlay → vendor → Trihouse overlay 순으로 source한다. | `ros2 pkg prefix trihouse_pinky_bringup`가 `trihouse_ws/install`을 가리킨다. |
+| 7 | `pinky@` | launch 하나, 센서·TF·Nav2·battery·safety·readiness를 확인한다. | `ready: true`, `errors: []`, final `/cmd_vel_safe` 발행자는 Safety Supervisor 하나다. |
+| 8 | `pc@` → `pinky@` | 코드 수정분을 다시 전송하고 영향 package만 다시 build한 뒤 launch를 재기동한다. | 새 설치본과 새 process가 실행 중이다. |
+
+### 코드 수정 후 갱신: rcp가 아니라 `rsync`
+
+이 저장소의 갱신 수단은 `rcp`나 ROS link가 아니라 **SSH 위의 `rsync`**다.
+`--symlink-install`은 workspace 내부에서 install Python entrypoint가 source를 가리키게
+하지만, 이미 실행 중인 Python/launch process의 코드를 바꾸지는 않는다. 따라서 아래처럼
+전송·build·재기동을 한 묶음으로 실행한다.
+
+영향 범위가 불명확하면 6절의 전체 전송과 8절의 전체 build를 쓴다. 한 package의 Python
+코드만 바뀐 것이 확실할 때는 다음 최소 절차를 쓴다.
+
+```bash
+# pc@ 개발 PC: 먼저 차이만 확인한다.
+cd <trihouse-repository-root>
+rsync -avnc --itemize-changes \
+  --exclude='__pycache__/' --exclude='.pytest_cache/' --exclude='*.pyc' \
+  trihouse_pinky/trihouse_pinky_<changed-package>/ \
+  "$PINKY_TARGET:$PINKY_WS/src/trihouse_pinky/trihouse_pinky_<changed-package>/"
+
+# pc@ 개발 PC: dry-run 출력이 맞을 때만 실제 전송한다.
+rsync -avc --itemize-changes \
+  --exclude='__pycache__/' --exclude='.pytest_cache/' --exclude='*.pyc' \
+  trihouse_pinky/trihouse_pinky_<changed-package>/ \
+  "$PINKY_TARGET:$PINKY_WS/src/trihouse_pinky/trihouse_pinky_<changed-package>/"
+```
+
+```bash
+# pinky@ Pinky: 현재 운행 중이면 먼저 안전하게 정지하고, 이 package만 다시 build한다.
+source /opt/ros/<ros-distro>/setup.bash
+source <vendor-workspace>/install/setup.bash
+cd <pinky-home>/trihouse_ws
+
+colcon build --symlink-install --executor sequential \
+  --packages-select trihouse_pinky_<changed-package> \
+  --event-handlers console_direct+
+source install/setup.bash
+
+# 기존 launch 종료·새 launch 시작은 12절과 14절을 그대로 따른다.
+```
+
+`trihouse_interfaces`를 변경했거나 의존 package/launch file을 변경했다면 관련 package를
+함께 build한다. 예를 들어 action/message 변경은 `trihouse_interfaces`와 이 interface를
+쓰는 `trihouse_pinky_bringup`, `trihouse_pinky_fleet`, `trihouse_pinky_safety`를 모두
+다시 build해야 한다. 실기에서는 코드 변경 직후 launch를 무중단 갱신하지 않는다.
+
 ## 1. Pinky 환경 확인
 
 Pinky 터미널에서 먼저 실행한다.
