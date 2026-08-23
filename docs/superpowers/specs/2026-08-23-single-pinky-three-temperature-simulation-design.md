@@ -20,6 +20,8 @@
 8. 상온→냉장→냉동 순서의 다온도 주문 시나리오를 3회 연속 성공시킨다.
 9. 매 회차는 주문 접수부터 포장대 작업, 충전/대기소 복귀와 최종 정지까지 검증한다.
 10. 팀원이 문서의 PC별·터미널별 절차만으로 동일한 실행과 판정을 재현할 수 있다.
+11. OMX는 파지 시작부터 Pinky 적재 완료까지 정확히 15초 동안 실행 상태를 유지하고, `picking`과 `loading` 진행 상태를 계속 보고한다.
+12. 상온, 냉장, 냉동, 다온도 단계는 각각 3회 연속 성공할 때까지 반복하며, 한 단계를 합격하면 다음 단계로 자동 진행하지 않고 결과를 요약해 보고한다.
 
 ## 범위 분리
 
@@ -54,6 +56,12 @@
 대안인 과거 `control_system` 전체 스택 중심 구성은 현재 Control Tower 계약과 경로가 섞일 위험이 있어 사용하지 않는다. action 상태만 모사하는 방식은 Gazebo 로봇팔 동작을 증명하지 못하므로 사용하지 않는다.
 
 ## 실행 책임 경계
+
+### Open-RMF 유지 결정
+
+Open-RMF는 현재 단순 시각화 의존성이 아니다. Job Runner가 mobile step을 RMF channel로 내보내고, RMF dispatch worker가 작업을 dispatch하며, Pinky fleet adapter가 RMF 명령을 `ExecuteTransport`로 변환한다. 또한 fleet 등록과 recommission, pose/SOC 갱신, 충전기 선택, schedule participant, 예상 종료 SOC에 관여한다.
+
+이 설계는 이동 로봇이 한 대라서 다중 로봇 충돌 조정의 효용은 작지만 Open-RMF를 유지한다. 지금 제외하려면 직접 Nav2 dispatcher, mobile step lifecycle, cancellation/retry, battery finish-SOC와 charging policy를 대체해야 하며 이는 시뮬레이션 목표와 무관한 새 하위 시스템이 된다. 12회 검증 이후 성능 또는 운영 복잡도가 문제가 될 때 별도 제거 설계로 평가한다.
 
 ### Docker 계층
 
@@ -124,9 +132,23 @@ Nav2는 창고 entry, 포장대, 충전/대기소까지의 전역·국소 경로
 `OMX_01`과 `OMX_02`는 실물과 동일한 `ExecuteOmx` action 계약을 제공한다. 각 action phase는 Gazebo 관절 궤적과 연결한다.
 
 - `prepare`: 홈 자세에서 상품 접근 준비 자세로 이동
-- `pick/load`: 선반 측 접근, 그리퍼 닫기, Pinky 적재 위치로 이동, 그리퍼 열기
+- `picking`: 선반 측 접근과 그리퍼 닫기. 7.5초 동안 진행한다.
+- `loading`: Pinky 적재 위치로 이동하고 그리퍼를 연다. 7.5초 동안 진행한다.
 - terminal success: 관절이 안전 자세로 복귀하고 action result가 성공
 - cancel/failure: 움직임을 정지하고 action result에 reason code 기록
+
+`picking` 시작 시각부터 `loading` 완료 시각까지의 시뮬레이션 시간은 정확히 15초다. wall clock이 아니라 ROS simulation clock을 정본으로 사용하므로 Gazebo real-time factor가 변해도 작업 의미는 바뀌지 않는다. 7.5초 경계와 총 15초는 공통 설정에서만 정의하며 OMX별 코드에 중복하지 않는다.
+
+Action server는 terminal result만 보내지 않고 실행 중 1 Hz 이상의 feedback heartbeat를 발행한다. feedback에는 다음 필드를 포함한다.
+
+- canonical OMX ID와 주문/job/step/handover group ID
+- 현재 phase: `preparing`, `picking`, `loading`, `returning`, `succeeded`, `failed`, `cancelled`
+- phase 시작 시각, phase 경과 시간, 전체 경과 시간
+- 0~100 범위의 전체 진행률
+- 현재 대상 상품과 배정된 Pinky ID
+- 최신 joint-state timestamp와 trajectory tracking 상태
+
+Control Tower는 이 feedback을 실행 중 상태로 계속 추적하고 job step 관측 API와 로그에 반영한다. heartbeat가 2초 넘게 끊기거나 phase가 역행하거나 15초 종료 전에 성공 result가 오면 해당 회차를 실패시킨다. `picking → loading` 전이와 terminal result는 회차 증거 bundle에 보존한다.
 
 시뮬레이션은 인식 결과를 가장하지 않는다. 상품/파지 성공은 결정론적 scenario fixture와 action 상태로 주입하며 Vision topic이나 모델 process는 실행하지 않는다.
 
@@ -147,7 +169,7 @@ Nav2는 창고 entry, 포장대, 충전/대기소까지의 전역·국소 경로
 - step timeout, dead-letter, 중복 dispatch 또는 순서 위반
 - 포장대 단계를 생략하거나 충전/대기소에서 정지하지 않음
 
-한 회차 실패 후 다음 회차를 성공 횟수에 더하지 않는다. 원인을 수정하고 스택을 규정된 clean-start 상태로 되돌린 뒤 해당 시나리오의 연속 성공 횟수를 0부터 다시 센다.
+한 회차 실패 후 다음 회차를 성공 횟수에 더하지 않는다. 원인을 수정하고 스택을 규정된 clean-start 상태로 되돌린 뒤 해당 시나리오의 연속 성공 횟수를 0부터 다시 센다. 단계 runner는 합격할 때까지 같은 시나리오를 반복할 수 있지만, 실패 원인이 해소되지 않은 상태에서 무한 재주문하지 않는다. 실패 증거와 진단 결과를 남기고 clean-start gate가 다시 통과한 뒤에만 다음 attempt를 만든다.
 
 ## 검증 시나리오
 
@@ -157,6 +179,18 @@ Nav2는 창고 entry, 포장대, 충전/대기소까지의 전역·국소 경로
 2. 냉장 단일 주문 3회 연속
 3. 냉동 단일 주문 3회 연속
 4. 상온·냉장·냉동 상품을 포함하는 다온도 주문 3회 연속
+
+각 단계는 독립 실행 단위다. 한 단계가 3회 연속 성공하면 runner는 정지하고 다음 요약을 출력한다.
+
+- attempt 수, 성공·실패 수와 최종 연속 성공 수
+- 각 주문 ID, job ID, 시작·종료 시각과 소요 시간
+- 생성된 step 순서와 실제 terminal 상태
+- 사용한 Pinky/OMX, Nav2와 규칙 기반 이동 횟수
+- OMX `picking`/`loading` heartbeat 수와 15초 duration 판정
+- 실패가 있었다면 reason code, 복구 조치와 증거 경로
+- 단계 합격 여부와 다음 단계 실행 명령
+
+다음 단계는 요약 보고 후 별도 명령으로 시작한다. 이를 통해 상온 합격, 냉장 합격, 냉동 합격, 다온도 합격 시점마다 작업을 끊고 상황을 검토할 수 있다.
 
 각 회차 검증기는 다음 증거를 한 디렉터리에 저장한다.
 
@@ -176,20 +210,38 @@ Nav2는 창고 entry, 포장대, 충전/대기소까지의 전역·국소 경로
 
 시뮬레이션 합격 후 `docs/guides`에 팀 재현용 runbook을 작성한다. 문서는 실제 성공한 명령과 경로만 사용하며 예시용 가상 경로를 넣지 않는다.
 
+문서는 시뮬레이션 runbook과 실물·Vision runbook으로 나눈다. 시뮬레이션 runbook은 1단계 합격 직후 확정한다. 실물·Vision runbook은 실제 네트워크, 카메라, 모델과 로봇 연결을 검증한 뒤 확정하며 시뮬레이션 값으로 실물 설정을 추정하지 않는다.
+
+실물·Vision 문서는 다음 PC 역할을 기준으로 구성한다.
+
+| 장비 | 주요 책임 |
+| --- | --- |
+| 4060 서버 PC | MySQL, FMS/Control Tower, MediaMTX, 중앙 상태·로그, 영상 녹화 저장소, 필요 시 RMF core/bridge |
+| 5080 서버 PC | 중앙 Vision/VLM/RL 모델 실행과 모델 자산 관리; 시뮬레이션 단계에서는 실행 금지 |
+| `OMX_02` 서버 PC | `/omx_02` ROS action과 로봇팔 bringup, 손목 영상의 로컬 추론; 원본/운영 영상은 4060 서버 PC MediaMTX·녹화 저장소로 전송 |
+| `OMX_01` 일반 PC | `/omx_01` ROS action과 로봇팔 bringup, 카메라 송출 및 검증된 OMX 실행 runtime |
+| Pinky onboard PC | `/pinky_01` namespaced Nav2, 센서, safety, fleet gateway와 상태 발행 |
+
+각 PC 장에는 Docker/Compose 사용 범위와 호스트에서 직접 실행해야 하는 ROS/hardware process를 구분한다. Docker가 가능한 FMS, 데이터베이스, MediaMTX, 모델 서비스, OMX 상위 worker는 image tag와 compose profile로 재현한다. 장치 드라이버, Gazebo/RViz, DDS discovery 점검처럼 호스트 접근이 필요한 과정은 terminal 절차로 제공한다.
+
 문서 구조는 다음과 같다.
 
 1. 지원 OS, Docker/Compose, ROS 배포판, Gazebo, GPU/GUI 요구사항
-2. PC 역할과 Docker/호스트 ROS 책임 경계
-3. 저장소 clone, submodule, 이미지 build, ROS workspace build
-4. 공통 환경 변수와 `.env` 설정
-5. 터미널별 기동 순서와 각 터미널의 foreground/background 책임
-6. Gazebo/RViz 및 robot/OMX 개수 확인
-7. 주문 입력, 생성 시퀀스 확인, 시나리오 실행 명령
-8. 회차 PASS/FAIL 판정과 증거 위치
-9. 정상 종료, stale process 정리, DB/예약 상태 복구
-10. 증상별 진단과 재시작 절차
+2. 4060, 5080, OMX_02 서버, OMX_01 일반 PC, Pinky의 역할과 Docker/호스트 ROS 책임 경계
+3. 각 PC의 유선·Wi-Fi 연결, 검증된 SSID, 고정/예약 IP, subnet, gateway, ROS 전용 interface와 인터넷 interface
+4. Fast DDS Discovery Server 주소, `ROS_DOMAIN_ID`, RMW와 discovery 환경 및 PC 간 ping/port/topic 점검
+5. 저장소 clone, submodule revision, Docker image pull/build, ROS workspace build
+6. PC별 `.env`, compose profile, secret 주입과 volume 경로
+7. PC별 Docker 기동 순서와 healthcheck
+8. 각 PC와 Pinky의 터미널 번호별 source, export, bringup 명령 및 foreground/background 책임
+9. Gazebo/RViz 또는 실물 robot/OMX/카메라/Vision 개수와 namespace 확인
+10. OMX_02 로컬 추론과 4060 영상 저장 경로의 동시 확인
+11. 주문 입력, 생성 시퀀스, OMX 실시간 phase, 시나리오 실행 명령
+12. 단계별 PASS/FAIL 판정, 중간 요약과 증거 위치
+13. 정상 종료, stale process 정리, DB/예약 상태 복구
+14. 증상별 진단과 재시작 절차
 
-runbook 검증은 깨끗한 shell에서 문서의 명령을 순서대로 실행하는 방식으로 수행한다. 개인 shell alias, 기존 background process, 미기록 환경 변수에 의존하면 실패로 본다.
+Wi-Fi SSID, IP, interface 이름과 물리 경로는 실제 장비에서 확인한 값만 문서에 확정한다. 현재 실물 가이드에 기록된 과거 네트워크 값은 검증 없이 복사하지 않는다. runbook 검증은 깨끗한 shell과 재부팅 직후 상태에서 문서의 명령을 순서대로 실행하는 방식으로 수행한다. 개인 shell alias, 기존 background process, 미기록 환경 변수 또는 작성자만 아는 수동 GUI 조작에 의존하면 실패로 본다. 문장은 명확하고 간결하게 유지하되 명령, 기대 출력, PASS 조건과 실패 시 다음 행동은 생략하지 않는다.
 
 ## 실물 단계로의 이행 조건
 
