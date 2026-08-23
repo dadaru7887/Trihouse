@@ -163,3 +163,8 @@ def rotating_in_place(
     경고 필드가 속도를 낮춰 제동 거리를 짧게 만든다.
     """
     return abs(linear_x) <= linear_epsilon and abs(angular_z) > angular_epsilon
+
+
+def swept_clearance_blocked(nearby_m: float, clearance_m: float) -> bool:
+    """회전 외접원 경계도 충돌 영역에 포함한다."""
+    return nearby_m <= clearance_m

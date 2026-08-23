@@ -29,6 +29,7 @@ from .geometry import (
     path_clearance,
     point_in_polygon,
     rotating_in_place,
+    swept_clearance_blocked,
 )
 from .policy import (
     MotionCommand,
@@ -93,8 +94,8 @@ class SafetySupervisor(Node):
         self.declare_parameter('protective_half_width_m', PROTECTIVE_HALF_WIDTH_M)
         self.declare_parameter('footprint_front_m', FOOTPRINT_FRONT_M)
         self.declare_parameter('footprint_rear_m', FOOTPRINT_REAR_M)
-        # 회전이 쓸고 가는 원. 발자국 외접반경에 여유를 더한 값이다.
-        self.declare_parameter('swept_clearance_m', SWEPT_RADIUS_M + 0.02)
+        # 회전이 쓸고 가는 원. 발자국에서 계산한 물리 외접반경을 기본값으로 쓴다.
+        self.declare_parameter('swept_clearance_m', SWEPT_RADIUS_M)
         self.scan_forward_offset_rad = float(self.get_parameter('scan_forward_offset_rad').value)
         self.scan_origin_offset_x_m = float(self.get_parameter('scan_origin_offset_x_m').value)
         self.protective_half_width_m = float(self.get_parameter('protective_half_width_m').value)
@@ -261,7 +262,7 @@ class SafetySupervisor(Node):
         swept_blocked = (
             rotating_in_place(desired.linear_x, desired.angular_z)
             and nearby is not None
-            and nearby <= self.swept_clearance_m
+            and swept_clearance_blocked(nearby, self.swept_clearance_m)
         )
         path_distance = self._path_distance(desired.linear_x, desired.angular_z)
         inputs = SafetyInputs(sensor_fresh=scan_fresh and (range_fresh or not self.require_ultrasonic),
@@ -282,6 +283,14 @@ class SafetySupervisor(Node):
                 f"{desired.angular_z:.3f}) "
                 f"path_clearance={path_distance} "
                 f"scan_nearby={nearby} scan_age={now - self.last_scan_at:.3f}",
+                throttle_duration_sec=2.0,
+            )
+        elif decision.reason == "swept_stop":
+            self.get_logger().warning(
+                f"swept_stop: desired=({desired.linear_x:.3f}, "
+                f"{desired.angular_z:.3f}) scan_nearby={nearby} "
+                f"threshold={self.swept_clearance_m:.3f} "
+                f"scan_age={now - self.last_scan_at:.3f}",
                 throttle_duration_sec=2.0,
             )
         cmd = Twist(); cmd.linear.x = decision.command.linear_x; cmd.angular.z = decision.command.angular_z

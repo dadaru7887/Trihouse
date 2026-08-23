@@ -58,6 +58,7 @@ from trihouse_pinky_safety.geometry import (  # noqa: E402
     nearest_range,
     path_clearance,
     rotating_in_place,
+    swept_clearance_blocked,
 )
 
 
@@ -207,6 +208,18 @@ def test_the_swept_radius_is_derived_not_maintained_by_hand() -> None:
     assert SWEPT_RADIUS_M == pytest.approx(
         math.hypot(max(FOOTPRINT_FRONT_M, FOOTPRINT_REAR_M), PROTECTIVE_HALF_WIDTH_M)
     )
+
+
+@pytest.mark.parametrize(
+    ("nearby", "expected"),
+    [
+        (SWEPT_RADIUS_M - 0.001, True),
+        (SWEPT_RADIUS_M, True),
+        (SWEPT_RADIUS_M + 0.001, False),
+    ],
+)
+def test_swept_clearance_boundary(nearby: float, expected: bool) -> None:
+    assert swept_clearance_blocked(nearby, SWEPT_RADIUS_M) is expected
 
 
 # ---------------------------------------------------------------- 필드 모양
@@ -445,6 +458,12 @@ from trihouse_pinky_safety.safety_supervisor_node import SafetySupervisor  # noq
 
 PATH_DISTANCE = inspect.getsource(SafetySupervisor._path_distance)
 ON_SCAN = inspect.getsource(SafetySupervisor._on_scan)
+SUPERVISOR_INIT = inspect.getsource(SafetySupervisor.__init__)
+
+
+def test_supervisor_defaults_to_the_physical_swept_radius() -> None:
+    assert "'swept_clearance_m', SWEPT_RADIUS_M)" in SUPERVISOR_INIT
+    assert "SWEPT_RADIUS_M +" not in SUPERVISOR_INIT
 
 
 def test_the_ultrasonic_is_not_used_as_evidence_when_reversing() -> None:
