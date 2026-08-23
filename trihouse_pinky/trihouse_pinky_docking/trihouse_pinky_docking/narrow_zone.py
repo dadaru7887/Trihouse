@@ -224,6 +224,13 @@ class VelocityCommand:
         return self.linear_x == 0.0 and self.angular_z == 0.0
 
 
+@dataclass(frozen=True)
+class SafetyObservation:
+    stopped: bool = False
+    emergency: bool = False
+    detail: str = "clear"
+
+
 def normalize(angle: float) -> float:
     return atan2(sin(angle), cos(angle))
 
@@ -366,6 +373,9 @@ class WarehouseEntryController:
         self._started = False
         self._last_progress_s = 0.0
         self._best_error: float | None = None
+        self.recovery_attempt = 0
+        self._recovery_origin: Pose2D | None = None
+        self._recovery_started_s = 0.0
 
     @property
     def is_complete(self) -> bool:
@@ -405,11 +415,53 @@ class WarehouseEntryController:
             self.failure = reason
             self.phase = self.FAILED
 
-    def advance(self, pose: Pose2D, *, now_s: float) -> VelocityCommand:
+    def advance(
+        self,
+        pose: Pose2D,
+        *,
+        now_s: float,
+        safety: SafetyObservation = SafetyObservation(),
+    ) -> VelocityCommand:
         if not self._started or self.failure is not None or self.is_complete:
             return VelocityCommand()
         assert self.config is not None
         assert self.profile.dock_target is not None
+
+        if safety.emergency:
+            return self._fail("safety_emergency")
+        if safety.stopped:
+            if (
+                safety.detail == "swept_stop"
+                and self.phase == self.RECOVER_ROTATION_SPACE
+            ):
+                if now_s - self._recovery_started_s > self.config.recovery_timeout_s:
+                    return self._fail("swept_recovery_timeout")
+                return VelocityCommand()
+            if safety.detail == "swept_stop" and self.phase == self.ENTRY_ALIGNMENT:
+                if self.recovery_attempt >= self.config.recovery_max_attempts:
+                    return self._fail("swept_recovery_exhausted")
+                self.recovery_attempt += 1
+                self.phase = self.RECOVER_ROTATION_SPACE
+                self._recovery_origin = pose
+                self._recovery_started_s = now_s
+                return VelocityCommand()
+            return self._fail(f"safety_stop:{safety.detail or 'unknown'}")
+
+        if self.phase == self.RECOVER_ROTATION_SPACE:
+            assert self._recovery_origin is not None
+            if now_s - self._recovery_started_s > self.config.recovery_timeout_s:
+                return self._fail("swept_recovery_timeout")
+            travelled = hypot(
+                pose.x - self._recovery_origin.x,
+                pose.y - self._recovery_origin.y,
+            )
+            if travelled >= self.config.recovery_distance_m:
+                self._transition(self.ENTRY_ALIGNMENT, now_s)
+                self._best_error = abs(
+                    normalize(self.config.doorway.yaw - pose.yaw)
+                )
+                return VelocityCommand()
+            return VelocityCommand(linear_x=-self.config.recovery_speed_mps)
 
         if self.phase == self.ENTRY_ALIGNMENT:
             error = normalize(self.config.doorway.yaw - pose.yaw)
@@ -496,6 +548,11 @@ class WarehouseEntryController:
         self.phase = phase
         self._last_progress_s = now_s
         self._best_error = None
+
+    def _fail(self, reason: str) -> VelocityCommand:
+        self.failure = reason
+        self.phase = self.FAILED
+        return VelocityCommand()
 
     def _timed_out(
         self,

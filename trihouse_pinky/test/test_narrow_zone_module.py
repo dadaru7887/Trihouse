@@ -20,6 +20,7 @@ from trihouse_pinky_docking.narrow_zone import (  # noqa: E402
     NarrowZoneConfigError,
     NarrowZoneController,
     Pose2D,
+    SafetyObservation,
     WarehouseEntryController,
     load_narrow_zones,
 )
@@ -326,6 +327,118 @@ def test_warehouse_entry_timeout_is_terminal() -> None:
     assert controller.advance(
         Pose2D(1.0, -1.0, math.pi / 2), now_s=1.2
     ).is_zero
+
+
+def test_swept_stop_during_alignment_stops_then_reverses_and_retries() -> None:
+    controller = WarehouseEntryController(_entry_passage_profile())
+    start = Pose2D(1.0, -1.0, math.pi / 2)
+    assert controller.begin(start, now_s=0.0)
+
+    stopped = controller.advance(
+        start,
+        now_s=0.1,
+        safety=SafetyObservation(stopped=True, detail="swept_stop"),
+    )
+    assert stopped.is_zero
+    assert controller.progress == "recover_rotation_space"
+    assert controller.recovery_attempt == 1
+
+    reverse = controller.advance(
+        start, now_s=0.2, safety=SafetyObservation(detail="clear")
+    )
+    assert reverse.linear_x == pytest.approx(-0.03)
+    assert reverse.angular_z == 0.0
+
+    retry = controller.advance(
+        Pose2D(0.94, -1.0, math.pi / 2),
+        now_s=0.3,
+        safety=SafetyObservation(detail="clear"),
+    )
+    assert retry.is_zero
+    assert controller.progress == "entry_alignment"
+
+
+@pytest.mark.parametrize(
+    "detail",
+    ["front_stop", "keep_out", "sensor_timeout", "control_link_lost"],
+)
+def test_non_swept_safety_stop_never_starts_recovery(detail: str) -> None:
+    controller = WarehouseEntryController(_entry_passage_profile())
+    start = Pose2D(1.0, -1.0, math.pi / 2)
+    assert controller.begin(start, now_s=0.0)
+
+    command = controller.advance(
+        start,
+        now_s=0.1,
+        safety=SafetyObservation(stopped=True, detail=detail),
+    )
+
+    assert command.is_zero
+    assert controller.failure == f"safety_stop:{detail}"
+    assert controller.progress == "failed"
+
+
+def test_emergency_never_starts_entry_recovery() -> None:
+    controller = WarehouseEntryController(_entry_passage_profile())
+    start = Pose2D(1.0, -1.0, math.pi / 2)
+    assert controller.begin(start, now_s=0.0)
+
+    command = controller.advance(
+        start,
+        now_s=0.1,
+        safety=SafetyObservation(stopped=True, emergency=True, detail="swept_stop"),
+    )
+
+    assert command.is_zero
+    assert controller.failure == "safety_emergency"
+
+
+def test_swept_stop_is_not_recovered_after_doorway_crossing_begins() -> None:
+    controller = WarehouseEntryController(_entry_passage_profile())
+    start = Pose2D(1.0, -1.0, 0.0)
+    assert controller.begin(start, now_s=0.0)
+
+    command = controller.advance(
+        start,
+        now_s=0.1,
+        safety=SafetyObservation(stopped=True, detail="swept_stop"),
+    )
+
+    assert command.is_zero
+    assert controller.failure == "safety_stop:swept_stop"
+
+
+def test_swept_recovery_has_attempt_and_time_bounds() -> None:
+    profile = _entry_passage_profile()
+    start = Pose2D(1.0, -1.0, math.pi / 2)
+    timed_out = WarehouseEntryController(profile)
+    assert timed_out.begin(start, now_s=0.0)
+    timed_out.advance(
+        start, now_s=0.1,
+        safety=SafetyObservation(stopped=True, detail="swept_stop"),
+    )
+    timeout_command = timed_out.advance(start, now_s=10.2)
+    assert timeout_command.is_zero
+    assert timed_out.failure == "swept_recovery_timeout"
+
+    exhausted = WarehouseEntryController(profile)
+    assert exhausted.begin(start, now_s=0.0)
+    for attempt in range(2):
+        exhausted.advance(
+            start, now_s=attempt + 0.1,
+            safety=SafetyObservation(stopped=True, detail="swept_stop"),
+        )
+        exhausted.advance(
+            Pose2D(0.94 - attempt * 0.06, -1.0, math.pi / 2),
+            now_s=attempt + 0.2,
+        )
+    final = exhausted.advance(
+        Pose2D(0.88, -1.0, math.pi / 2),
+        now_s=2.5,
+        safety=SafetyObservation(stopped=True, detail="swept_stop"),
+    )
+    assert final.is_zero
+    assert exhausted.failure == "swept_recovery_exhausted"
 
 
 def test_controller_rotates_the_short_way_without_linear_motion() -> None:
