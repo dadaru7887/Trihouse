@@ -1496,3 +1496,275 @@ errors: [battery_not_dispatchable]
 
 이는 BT/lifecycle 복구 실패가 아니다. 배터리 raw percent와 voltage를 확인해 정상 정책으로
 돌아오기 전에는 상온·냉장·냉동 주문이나 calibration goal을 보내지 않는다.
+
+## 17. 2026-08-24 노드는 보이지만 lifecycle은 `Node not found`
+
+### 에러 메시지
+
+`ros2 daemon`을 재시작한 직후 노드 목록에는 localization 노드가 보이지만 lifecycle 조회는
+실패하고, navigation 노드는 아직 목록에 없었다.
+
+```text
+/pinky_01/amcl
+/pinky_01/map_server
+
+=== amcl ===
+Node not found
+=== map_server ===
+Node not found
+=== controller_server ===
+Node not found
+=== planner_server ===
+Node not found
+=== bt_navigator ===
+Node not found
+
+lifecycle_manager_localization: Managed nodes are active
+```
+
+### 원인
+
+이 출력에는 서로 다른 두 상태가 섞여 있다.
+
+1. `/pinky_01/amcl`과 `/pinky_01/map_server`는 실제로 기동·활성화됐다. localization
+   manager의 `Managed nodes are active`가 그 증거다. 이 둘의 `Node not found`는 Fast DDS
+   Discovery Server 환경에서 daemon 기반 node graph와 짧게 실행되는 lifecycle CLI의
+   service 발견 시점이 어긋나 생긴 CLI 오탐일 수 있다. 따라서 node list 한 번과
+   `ros2 lifecycle get` 한 번만으로 프로세스 부재 또는 lifecycle 실패를 확정하지 않는다.
+2. `controller_server`, `planner_server`, `bt_navigator`는 같은 node list에도 없다.
+   현재 `trihouse_pinky.launch.py`는 localization이 먼저 안정되도록 navigation include를
+   기본 60초 늦게 시작한다. launch 기동 후 60초가 지나지 않았다면 정상 대기 상태다.
+   60초가 지난 뒤에도 세 노드와 `lifecycle_manager_navigation: Managed nodes are active`가
+   없으면 그때는 실제 navigation 기동 실패로 분류한다.
+
+`lifecycle_manager_localization: Managed nodes are active` 한 줄은 localization만 통과했다는
+뜻이며 navigation까지 통과했다는 뜻은 아니다.
+
+### 해결방법
+
+먼저 launch 경과시간, 실제 Nav2 프로세스와 lifecycle service를 읽기 전용으로 확인한다.
+이 단계에서는 launch를 재시작하거나 lifecycle state를 변경하지 않는다.
+
+```bash
+LAUNCH_PID="$(
+  pgrep -f \
+    '^/usr/bin/python3 /opt/ros/jazzy/bin/ros2 launch trihouse_pinky_bringup trihouse_pinky.launch.py' |
+  head -1
+)"
+ps -p "$LAUNCH_PID" -o pid,etimes,args
+
+pgrep -af \
+  'nav2_amcl/amcl|nav2_map_server/map_server|nav2_controller/controller_server|nav2_planner/planner_server|nav2_bt_navigator/bt_navigator'
+
+timeout 30 ros2 service list --no-daemon |
+  grep -E '^/pinky_01/(amcl|map_server|controller_server|planner_server|bt_navigator)/(get_state|change_state)'
+```
+
+`etimes`가 60초 미만이면 navigation 시작 지연이 끝날 때까지 기다린 뒤 다시 확인한다.
+60초를 이미 넘겼다면 기다리는 것으로 해결되지 않으므로 바로 manager 로그를 확인한다.
+
+```bash
+grep -aE \
+  'lifecycle_manager_(localization|navigation)|Failed to bring up|Failed to change state|unable to be reached|process has died|Traceback' \
+  /tmp/trihouse_pinky_pinky01.log | tail -120
+```
+
+daemon 기반 `ros2 lifecycle get`만 계속 `Node not found`를 출력하지만 `get_state` service가
+보이면 service를 직접 호출해 상태를 교차 확인한다.
+
+```bash
+for NODE in amcl map_server controller_server planner_server bt_navigator; do
+  echo "=== $NODE ==="
+  timeout 30 ros2 service call \
+    "/pinky_01/$NODE/get_state" \
+    lifecycle_msgs/srv/GetState \
+    '{}'
+done
+```
+
+합격 기준은 다섯 응답의 `current_state.id: 3`, localization/navigation manager의
+`Managed nodes are active` 두 줄, 그리고 다음 readiness의 `state: 1`과
+`missing_interfaces: []`다.
+
+```bash
+timeout 30 ros2 topic echo \
+  /pinky_01/trihouse/readiness \
+  trihouse_interfaces/msg/Readiness \
+  --once
+```
+
+service가 실제로 없거나 navigation manager가 `Failed to bring up` 또는
+`Failed to change state`를 기록했다면 CLI 오탐이 아니다. 그 경우 이 문서 16절의
+`wait_for_service_timeout`, `lifecycle_bond_timeout_s`, `navigation_start_delay_s`와 설치된
+`/home/pinky/hardware_pinky_01.yaml`을 확인한다. 다섯 lifecycle state와 readiness가 모두
+통과하기 전에는 action goal이나 주문을 보내지 않는다.
+
+### 실측 후속 판정
+
+같은 실행을 launch 경과시간 429초에 다시 확인한 결과 `ros2 service list --no-daemon`
+필터는 아무것도 출력하지 않았지만, manager 로그는 다음 전체 activation을 기록했다.
+
+```text
+localization: map_server → amcl → Managed nodes are active
+navigation: controller_server → smoother_server → planner_server
+            → behavior_server → bt_navigator → waypoint_follower
+            → velocity_smoother → Managed nodes are active
+```
+
+각 노드에는 `Server <node> connected with bond.`도 기록됐고 실패 로그는 없었다. 이는
+**Measured: localization과 navigation lifecycle 활성화 성공**이다. 반면 비어 있는 짧은 CLI
+service 목록은 이 실행에서 lifecycle service 부재의 증거로 사용할 수 없다. launch를
+재시작하거나 state를 수동 변경하지 않는다.
+
+다음 경계는 현재 확인 터미널과 launch process의 DDS 환경이 같은지 비교하는 것이다.
+`--no-daemon`은 현재 shell 환경으로 새 participant를 만들기 때문에 둘의 환경이 다르면
+manager는 정상이어도 짧은 CLI만 endpoint를 발견하지 못할 수 있다.
+
+```bash
+echo '=== current shell DDS environment ==='
+env | grep -E \
+  '^(ROS_DOMAIN_ID|ROS_DISCOVERY_SERVER|ROS_AUTOMATIC_DISCOVERY_RANGE|RMW_IMPLEMENTATION|FASTDDS_BUILTIN_TRANSPORTS|FASTRTPS_DEFAULT_PROFILES_FILE|ROS_STATIC_PEERS)='
+
+echo '=== launch DDS environment ==='
+tr '\0' '\n' < "/proc/$LAUNCH_PID/environ" |
+  grep -E \
+    '^(ROS_DOMAIN_ID|ROS_DISCOVERY_SERVER|ROS_AUTOMATIC_DISCOVERY_RANGE|RMW_IMPLEMENTATION|FASTDDS_BUILTIN_TRANSPORTS|FASTRTPS_DEFAULT_PROFILES_FILE|ROS_STATIC_PEERS)='
+```
+
+두 출력의 승인된 값은 `ROS_DOMAIN_ID=12`,
+`ROS_DISCOVERY_SERVER=192.168.0.4:11811`,
+`ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT`, `RMW_IMPLEMENTATION=rmw_fastrtps_cpp`,
+`FASTDDS_BUILTIN_TRANSPORTS=UDPv4`다. `ROS_STATIC_PEERS`와
+`FASTRTPS_DEFAULT_PROFILES_FILE`은 없어야 한다. shell만 다르면 STEP 0 환경을 그 터미널에
+다시 적용한 뒤 CLI를 재확인한다. lifecycle 성공과 별도로 onboard readiness가
+`state: 1`, `missing_interfaces: []`인지 확인해야 action 경계까지 통과한 것이다.
+
+## 18. 2026-08-24 창고 출입구 회전과 `swept_stop` 반복
+
+### 반복된 증상
+
+상온·냉장 entry까지 Nav2가 접근한 뒤 규칙 주행이 시작되지만 로봇이 움직이지 않거나,
+safety가 다음 상태를 내고 action이 실패했다.
+
+```text
+safety.state: 2
+safety.detail: swept_stop
+ExecuteTransport: navigation failed 또는 step_timeout
+다음 goal: robot is not idle
+```
+
+### 근본 원인
+
+구형 진입은 두 번의 출입구 회전을 만들 수 있었다.
+
+1. `EntryPoseController.MATCH_YAW`가 entry 위치에서 entry yaw로 제자리 회전했다.
+2. 상온·냉장 `enter` 시퀀스의 첫 단계도 dock yaw로 제자리 회전했다.
+
+출입구 옆 장애물이 회전 외접원 안에 있으면 safety supervisor가 `swept_stop`으로 회전을
+막는 것은 정상 동작이다. 임계값을 터미널에서 낮추거나 safety를 우회하는 것이 해결책이
+아니다. 추가로 fleet의 기존 safety callback은 STOP 여부만 기억하고 `detail`을 버렸기 때문에
+`swept_stop`과 `front_stop`·sensor timeout·control link 단절을 구분할 수 없었다. 규칙 주행
+실패 경로 일부는 `TransportWorkflow`를 IDLE로 되돌리지 않아 다음 goal이
+`robot is not idle`로 거절됐다.
+
+### 수정 파일과 역할
+
+- `trihouse_pinky_docking/narrow_zone.py`
+  - `entry_passage` 설정과 `WarehouseEntryController` 추가
+  - 밖에서 heading 정렬 → 양의 선속도로 직선 통과 → 내부 정지 → 내부 회전 → dock 접근
+  - alignment 단계의 `swept_stop`만 최대 0.05 m, 0.03 m/s, 2회, 10초로 제한 복구
+- `trihouse_pinky_fleet/fleet_node.py`
+  - `SafetyState.detail` 보존 및 새 controller 전달
+  - phase/recovery 전이만 `rule_transition`으로 기록
+  - 로컬 규칙 실패 시 active workflow 종료
+- `trihouse_pinky_fleet/narrow_zone_routing.py`
+  - `entry_passage`가 있는 profile만 새 경로 선택
+- `trihouse_pinky_safety/geometry.py`, `safety_supervisor_node.py`
+  - 회전 기본 임계값을 `SWEPT_RADIUS_M + 0.02`가 아닌 물리 외접반경
+    `SWEPT_RADIUS_M`로 설정
+  - 경계 `nearby <= swept_clearance_m`은 그대로 STOP
+  - 2초 throttle 로그에 요청 선·각속도, scan 최근접 거리, 임계값 기록
+- `config/narrow_zones.new_map_2.yaml`
+  - 상온·냉장 `entry_passage` 시험값 추가
+
+냉동창고와 충전 출발은 `entry_passage`가 없으므로 기존 규칙을 유지한다.
+
+### 현재 좌표의 의미
+
+현재 doorway는 새 실측점이 아니라 기존 `entry`와 `dock_target`의 중점으로 계산한 1차
+시험값이다.
+
+```text
+상온 entry       = (0.9117481526,  0.7758764643)
+상온 doorway     = (1.0533666719,  0.8253152649), heading= 0.3358713991
+상온 inside/dock = (1.1949851912,  0.8747540653), dock yaw=-2.8057212545
+
+냉장 entry       = (0.7859059395,  0.8752449912)
+냉장 doorway     = (1.0561239087,  0.2881874149), heading=-1.1394165202
+냉장 inside/dock = (1.3263418779, -0.2988701615), dock yaw= 2.4189105956
+```
+
+특히 냉장 entry→inside 구간은 약 1.293 m다. 실제 통로 중심선과 일치하는지 사람이 먼저
+확인하기 전에는 goal을 보내지 않는다. 실패하면 임의로 값을 보정하지 말고 원하는 위치에
+수동 배치한 뒤 map pose를 다시 측정한다.
+
+### 배포와 검증 순서
+
+정확한 개발 PC/Pinky 터미널별 복사·빌드·bringup·goal 명령은
+`docs/guides/pinky-ambient-chilled-calibration.md` 9절을 따른다. 주행 전 합격 조건은 다음과
+같다.
+
+```text
+Nav2 lifecycle active
+status.frame_id=map
+status.ready=true
+status.dispatchable=true
+safety.state=CLEAR 또는 SLOW
+/pinky_01/cmd_vel_dock → safety_supervisor → /pinky_01/cmd_vel_safe → vendor motor
+/pinky_01/trihouse/transport/execute action server 존재
+```
+
+로그에서 정상 전이는 다음 순서다.
+
+```text
+entry_alignment
+enter_straight
+inside_clear
+turn_to_dock
+dock_approach
+complete
+```
+
+출입구 통과 중 `linear_x=0`인 회전 명령이 나오거나, `front_stop`에서 후진 복구가 시작되거나,
+workflow 실패 뒤 다음 명령이 `robot is not idle`이면 회귀 결함이다. 현재 변경은 자동 테스트로
+검증했을 뿐이며 Pinky 실물 주행 성공으로 기록하지 않는다.
+
+후속 실측에서는 current shell과 launch process가 다음 다섯 값을 모두 동일하게 가졌고,
+stale 변수 두 개는 양쪽 모두 없었다.
+
+```text
+ROS_DOMAIN_ID=12
+ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT
+FASTDDS_BUILTIN_TRANSPORTS=UDPv4
+ROS_DISCOVERY_SERVER=192.168.0.4:11811
+RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+```
+
+따라서 이 실행의 빈 `ros2 service list --no-daemon` 결과는 DDS 환경 불일치가 원인이
+아니다. persistent lifecycle manager는 같은 서비스에 연결해 전체 bond와 activation을
+완료했으므로, 짧게 실행된 CLI participant의 endpoint 발견 오탐으로 판정한다. 이 CLI
+표시만 고치려고 정상 launch를 재기동하지 않는다.
+
+다음 읽기 전용 확인은 onboard `readiness_checker`가 `/scan`, `/odom`과
+`/pinky_01/navigate_to_pose` Action server를 실제로 모두 사용할 수 있는지 검사한 결과다.
+
+```bash
+timeout 30 ros2 topic echo \
+  /pinky_01/trihouse/readiness \
+  trihouse_interfaces/msg/Readiness \
+  --once
+```
+
+`state: 1`, `missing_interfaces: []`면 Nav2 Action 사용 가능 경계까지 PASS다. timeout이거나
+`missing_interfaces`에 값이 있으면 lifecycle 성공과 별개의 topic/action discovery 문제로
+남겨 해당 항목부터 진단한다.

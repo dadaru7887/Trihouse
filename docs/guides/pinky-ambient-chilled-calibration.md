@@ -102,7 +102,7 @@ ssh pinky@"$PINKY_IP" \
 두 checksum의 기대값은 다음과 같다.
 
 ```text
-42fa8e0b23802502b6c52811c8b3b0d71ca7aed222699ff0e5d40423cd286bf8
+9add00b3cff347cc33bb20704e02a15679ddf300e5ceb4cab4d2746e19861eb9
 ```
 
 ## 2. Pinky 터미널: 기존 launch 정리와 bringup (재실행 금지 구성)
@@ -301,7 +301,7 @@ send_calibration_goal() {
   run_id="$(date +%s%N)"
 
   ros2 action send_goal \
-    /trihouse/transport/execute \
+    /pinky_01/trihouse/transport/execute \
     trihouse_interfaces/action/ExecuteTransport \
     "{
       task_context: {
@@ -345,8 +345,10 @@ send_calibration_goal \
   0.16714744696329686
 ```
 
-예상 경로는 Nav2 상온 entry 접근, 완전 정차, entry 정렬, yaw `-2.805721` 회전,
-`0.30 m` 후진이다. 결과와 실물 정차를 확인한 뒤에만 탈출한다.
+2026-08-24 변경 설치본의 예상 경로는 Nav2 상온 entry 접근, 완전 정차, 넓은 곳에서
+출입구 heading `0.335871` 정렬, 양의 선속도로 내부 좌표까지 직선 진입, 완전 정지,
+내부에서 dock yaw `-2.805721` 회전이다. 출입구에서 제자리 회전하거나 `0.30 m` 후진하는
+것은 구형 경로이므로 즉시 중단한다. 결과와 실물 정차를 확인한 뒤에만 탈출한다.
 
 ```bash
 send_calibration_goal \
@@ -370,8 +372,11 @@ send_calibration_goal \
   0.3535289808978392
 ```
 
-예상 경로는 Nav2 냉장 entry 접근, 완전 정차, entry 정렬, yaw `2.418911` 회전,
-`0.30 m` 후진이다. 결과와 실물 정차를 확인한 뒤에만 탈출한다.
+2026-08-24 변경 설치본의 예상 경로는 Nav2 냉장 entry 접근, 완전 정차, 넓은 곳에서
+출입구 heading `-1.139417` 정렬, 양의 선속도로 내부 좌표까지 직선 진입, 완전 정지,
+내부에서 dock yaw `2.418911` 회전이다. entry에서 내부까지 약 `1.293 m`인 긴 시험 구간은
+실제 통로 중심과 장애물을 사람이 먼저 확인해야 한다. 결과와 실물 정차를 확인한 뒤에만
+탈출한다.
 
 ```bash
 send_calibration_goal \
@@ -443,3 +448,153 @@ robot state publisher의 TF는 `rplidar_link`로 남는다.
 `execution_ready=false`, `errors=[safety_blocked]`였다. 장애물 또는 로봇 위치를 사람이
 확인해 safety block을 해소하고, LiDAR frame 결함을 수정·검증하기 전에는 상온·냉장
 goal을 다시 보내지 않는다. safety threshold를 낮춰 우회하지 않는다.
+
+## 9. 2026-08-24 변경본 배포와 단계별 재시험
+
+이 절은 앞의 구형 진입 설명보다 우선한다. 현재 `entry_passage`의 doorway는 실측점이 아니라
+기존 `entry`와 `dock_target`의 중점으로 계산한 1차 시험값이다. 실패하면 임의 보정하지 않고
+로봇을 수동 배치해 좌표를 다시 측정한다.
+
+### 개발 PC 터미널 1 — 소스와 profile 배포
+
+```bash
+cd /home/newuser/Trihouse/.worktrees/physical-integration-v1
+
+export PINKY_IP=192.168.0.21
+export REMOTE_REPO=/home/pinky/trihouse_ws/src/Trihouse
+
+ssh pinky@"$PINKY_IP" \
+  "test -f '$REMOTE_REPO/trihouse_pinky/trihouse_pinky_fleet/package.xml'"
+
+scp \
+  trihouse_pinky/trihouse_pinky_docking/trihouse_pinky_docking/narrow_zone.py \
+  pinky@"$PINKY_IP":"$REMOTE_REPO/trihouse_pinky/trihouse_pinky_docking/trihouse_pinky_docking/narrow_zone.py"
+
+scp \
+  trihouse_pinky/trihouse_pinky_fleet/trihouse_pinky_fleet/fleet_node.py \
+  trihouse_pinky/trihouse_pinky_fleet/trihouse_pinky_fleet/narrow_zone_routing.py \
+  pinky@"$PINKY_IP":"$REMOTE_REPO/trihouse_pinky/trihouse_pinky_fleet/trihouse_pinky_fleet/"
+
+scp \
+  trihouse_pinky/trihouse_pinky_safety/trihouse_pinky_safety/geometry.py \
+  trihouse_pinky/trihouse_pinky_safety/trihouse_pinky_safety/safety_supervisor_node.py \
+  pinky@"$PINKY_IP":"$REMOTE_REPO/trihouse_pinky/trihouse_pinky_safety/trihouse_pinky_safety/"
+
+scp config/narrow_zones.new_map_2.yaml \
+  pinky@"$PINKY_IP":/home/pinky/narrow_zones.new_map_2.yaml
+```
+
+첫 번째 `test -f`가 실패하면 원격 소스 경로가 다른 것이므로 복사를 중단하고 다음으로 찾는다.
+
+```bash
+ssh pinky@"$PINKY_IP" \
+  "find /home/pinky/trihouse_ws/src -path '*/trihouse_pinky_fleet/package.xml' -print"
+```
+
+### Pinky_01 터미널 1 — 기존 motion 종료, 빌드, bringup
+
+기존 launch를 `Ctrl-C`로 내린 뒤 남은 프로세스가 없을 때만 빌드한다.
+
+```bash
+pkill -INT -f \
+  '^/usr/bin/python3 /opt/ros/jazzy/bin/ros2 launch trihouse_pinky_bringup trihouse_pinky.launch.py' || true
+sleep 8
+
+pgrep -af \
+  '[r]os2 launch trihouse_pinky_bringup|[f]leet_node|[s]afety_supervisor|[c]ontroller_server' ||
+echo 'PASS: 기존 motion process 없음'
+
+cd /home/pinky/trihouse_ws
+source /opt/ros/jazzy/setup.bash
+source /home/pinky/pinky_pro/install/setup.bash
+colcon build --symlink-install --packages-select \
+  trihouse_pinky_docking \
+  trihouse_pinky_safety \
+  trihouse_pinky_fleet \
+  trihouse_pinky_bringup
+source install/setup.bash
+```
+
+```bash
+export ROS_DOMAIN_ID=12
+export ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT
+export ROS_DISCOVERY_SERVER='192.168.0.4:11811'
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export FASTDDS_BUILTIN_TRANSPORTS=UDPv4
+unset ROS_STATIC_PEERS
+unset FASTRTPS_DEFAULT_PROFILES_FILE
+
+ros2 launch \
+  trihouse_pinky_bringup \
+  trihouse_pinky.launch.py \
+  namespace:=pinky_01 \
+  robot_id:=PK_01 \
+  map:=/home/pinky/map/new_map_2.yaml \
+  map_revision:='new_map_2:df9a7f70eab87135a0e1a73c2b63a0a15aae2de3512a6c760a3259d0337a32ed' \
+  nav2_params_file:=/home/pinky/hardware_pinky_01.yaml \
+  narrow_zones_file:=/home/pinky/narrow_zones.new_map_2.yaml \
+  narrow_map_name:=new_map_2 \
+  allow_narrow_calibration:=true \
+  control_host:=192.168.0.4 \
+  control_port:=8788 \
+  vision_enabled:=false \
+  docking_enabled:=false
+```
+
+이 터미널은 bringup 전용으로 유지한다.
+
+### Pinky_01 터미널 2 — 정지 상태 검증과 로그
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source /home/pinky/pinky_pro/install/setup.bash
+source /home/pinky/trihouse_ws/install/setup.bash
+export ROS_DOMAIN_ID=12
+export ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT
+export ROS_DISCOVERY_SERVER='192.168.0.4:11811'
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export FASTDDS_BUILTIN_TRANSPORTS=UDPv4
+unset ROS_STATIC_PEERS
+unset FASTRTPS_DEFAULT_PROFILES_FILE
+
+timeout 30 ros2 topic echo \
+  /pinky_01/trihouse/status \
+  trihouse_interfaces/msg/RobotStatus --once
+
+timeout 30 ros2 topic echo \
+  /pinky_01/trihouse/safety/state \
+  trihouse_interfaces/msg/SafetyState --once
+
+ros2 topic info /pinky_01/cmd_vel_dock --verbose
+ros2 topic info /pinky_01/cmd_vel_safe --verbose
+```
+
+`ready=true`, `dispatchable=true`, `frame_id=map`, safety CLEAR/SLOW를 확인한다. 그 다음 로그를
+연속 관찰한다.
+
+```bash
+tail -F /tmp/trihouse_pinky_pinky01.log | \
+  grep -aE 'rule_transition|swept_stop|front_stop|FAILED|ERROR'
+```
+
+### 개발 PC 터미널 2 — 좌표 goal 시험 순서
+
+위 4절의 함수를 사용하되 action 이름을 namespace까지 명시한다.
+
+```bash
+# send_calibration_goal 함수 안의 action 경로
+/pinky_01/trihouse/transport/execute
+```
+
+시험 순서는 다음과 같다.
+
+1. 로봇을 움직이지 않고 status·safety·action server·publisher 경로를 확인한다.
+2. 상온 좌표 goal을 한 번 보내고 사람이 출입구 밖 정렬 → 직선 진입 → 내부 회전을 확인한다.
+3. 상온 성공 후에만 냉장 경로의 약 1.293 m 직선 구간을 사람이 비우고 냉장 goal을 보낸다.
+4. 냉장 성공 후 냉동 calibration으로 기존 경로가 유지되는지 회귀 확인한다.
+5. 세 좌표 시험과 왕복이 모두 성공한 뒤에만 FMS 주문 시험으로 넘어간다.
+
+`swept_stop` 복구는 출입구 밖 정렬 중에만 허용된다. 첫 틱은 정지하고, safety가 CLEAR/SLOW로
+돌아오면 `0.03 m/s`로 최대 `0.05 m` 후진한 뒤 다시 정렬한다. 최대 2회 또는 10초를 넘기면
+실패한다. `front_stop`, emergency, `keep_out`, 센서 timeout, control link 단절에서는 절대
+복구 이동하지 않는다.
