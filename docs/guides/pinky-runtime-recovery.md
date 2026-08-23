@@ -1017,3 +1017,267 @@ vendor pinky_bringup: cmd_vel → cmd_vel_safe
 배터리 정책은 local-only 시험을 허용했지만 15.4%는 세 구역 연속 시험에 충분하다고
 판정하지 않는다. 냉동 한 구역을 마칠 때마다 SOC를 다시 확인하고, 낮아지면 다음 구역을
 시작하지 않고 충전한다.
+
+## 15. namespaced Pinky 단일 bringup
+
+### 실패 증상과 확정 원인
+
+`namespace:=pinky_02` 시험 중 다음 두 launch가 동시에 실행됐다.
+
+```text
+PID 19692: trihouse_pinky.launch.py namespace:=/
+PID 22898: pinky_bringup bringup_robot.launch.xml namespace:=pinky_02
+```
+
+두 번째 명령은 namespaced 하드웨어 launch가 아니며 Nav2도 시작하지 않는다. 그래서
+`robot_state_publisher`만 `/pinky_02` 아래에 있고 LiDAR, 배터리와 IMU는 루트에 남았다.
+첫 번째 예전 Trihouse launch도 계속 살아 있어 루트 Nav2와 하드웨어 프로세스가 중복됐다.
+
+```text
+/scan               publisher namespace: /
+/battery/percent    publisher namespace: /
+/battery/voltage    publisher namespace: /
+/imu_raw            publisher namespace: /
+/pinky_02/odom      Unknown topic
+/pinky_02/amcl      Node not found
+```
+
+토픽 목록에 한때 `/pinky_02/amcl_pose` 등이 보였더라도 실제 PID와 publisher가 없으면
+정상 기동으로 판정하지 않는다. DDS graph의 이전 endpoint 또는 서로 다른 launch의
+endpoint가 섞여 보일 수 있으므로 launch PID, 노드 PID와 실제 메시지를 함께 확인한다.
+
+### 사용하면 안 되는 명령
+
+다음 명령은 Trihouse, safety와 Nav2를 시작하지 않으므로 전체 시스템 bringup으로 사용하지
+않는다.
+
+```bash
+# 사용하지 않는다.
+ros2 launch pinky_bringup bringup_robot.launch.xml namespace:=pinky_02
+```
+
+`pinky_navigation/bringup_launch.xml`도 별도로 실행하지 않는다. 최신
+`trihouse_pinky.launch.py`가 `localization_launch.xml`과 `navigation_launch.xml`을 직접
+include하여 namespace를 각각 한 번만 적용한다.
+
+### 1. 설치본 계약 확인
+
+Pinky 터미널에서 overlay 순서와 설치 파일을 확인한다.
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source /home/pinky/pinky_pro/install/setup.bash
+source /home/pinky/trihouse_ws/install/setup.bash
+
+ros2 pkg prefix trihouse_pinky_bringup
+
+test -f \
+  /home/pinky/pinky_pro/install/pinky_bringup/share/pinky_bringup/launch/bringup_robot_namespaced.launch.xml &&
+echo 'PASS: namespaced vendor bringup'
+
+grep -nE \
+  'bringup_robot_namespaced|localization_launch|navigation_launch|lifecycle_nodes' \
+  /home/pinky/trihouse_ws/install/trihouse_pinky_bringup/share/trihouse_pinky_bringup/launch/trihouse_pinky.launch.py
+```
+
+설치된 Trihouse launch에 다음 계약이 모두 보여야 한다.
+
+- `bringup_robot_namespaced.launch.xml` 사용
+- 벤더 상위 `bringup_launch.xml` 미사용
+- `localization_launch.xml`, `navigation_launch.xml` 직접 include
+- localization lifecycle: `['map_server', 'amcl']`
+- navigation lifecycle: controller, smoother, planner, behavior, BT, waypoint, velocity
+
+### 2. namespaced Nav2 파라미터 생성과 검증
+
+벤더 launch는 `RewrittenYaml(root_key=namespace)`를 사용하지 않는다. 따라서 frame과
+토픽만 `pinky_02/...`로 바꾼 평면 YAML은 충분하지 않고, 문서 전체가 최상위
+`pinky_02:` 아래에 있어야 한다.
+
+실제 Pinky에 설치된 벤더 소스가 정본이다.
+
+```text
+/home/pinky/pinky_pro/src/pinky_pro/pinky_navigation/params/nav2_params.yaml
+```
+
+개발 PC submodule의 `pinky_pro/.../nav2_params.yaml`은 장비에서 조정한 값과 다를 수 있으므로
+대신 사용하지 않는다. 먼저 Pinky 원본을 임시 파일로 가져온 뒤, 그 파일에서 namespaced
+파생본을 생성한다. Pinky의 벤더 원본은 수정하지 않는다.
+
+```bash
+cd /home/newuser/Trihouse/.worktrees/physical-integration-v1
+
+rsync -avc --itemize-changes \
+  pinky@192.168.0.22:/home/pinky/pinky_pro/src/pinky_pro/pinky_navigation/params/nav2_params.yaml \
+  /tmp/pinky_02_vendor_nav2_params.yaml
+
+python3 scripts/derive_hardware_nav2_params.py \
+  --source /tmp/pinky_02_vendor_nav2_params.yaml \
+  --namespace pinky_02 \
+  --output /tmp/hardware_pinky_02.yaml
+
+python3 - <<'PY'
+from pathlib import Path
+import yaml
+
+path = Path('/tmp/hardware_pinky_02.yaml')
+document = yaml.safe_load(path.read_text(encoding='utf-8'))
+assert list(document) == ['pinky_02'], list(document)
+print('PASS: top-level namespace = pinky_02')
+PY
+
+rsync -avc --itemize-changes \
+  /tmp/hardware_pinky_02.yaml \
+  pinky@192.168.0.22:/home/pinky/hardware_pinky_02.yaml
+```
+
+Pinky에서 다시 확인한다.
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import yaml
+
+path = Path('/home/pinky/hardware_pinky_02.yaml')
+document = yaml.safe_load(path.read_text(encoding='utf-8'))
+assert list(document) == ['pinky_02'], list(document)
+params = document['pinky_02']['amcl']['ros__parameters']
+assert params['base_frame_id'] == 'pinky_02/base_footprint'
+assert params['odom_frame_id'] == 'pinky_02/odom'
+assert params['scan_topic'] == '/pinky_02/scan'
+print('PASS: Pinky 02 Nav2 params contract')
+PY
+```
+
+### 3. 기존 launch를 정확히 식별하고 정리
+
+종료 전에 PID, PPID, PGID와 전체 명령행을 확인한다.
+
+```bash
+ps -eo pid,ppid,pgid,sid,stat,etimes,args |
+grep -E \
+  '[r]os2 launch trihouse_pinky_bringup|[r]os2 launch pinky_bringup|[r]os2 launch pinky_navigation'
+```
+
+이전 Trihouse launch와 잘못 실행한 단독 vendor launch의 전용 process group만 종료한다.
+아래 PID는 예시가 아니라 현재 `pgrep` 결과로 다시 구한다.
+
+```bash
+for PATTERN in \
+  '^/usr/bin/python3 /opt/ros/jazzy/bin/ros2 launch trihouse_pinky_bringup trihouse_pinky.launch.py' \
+  '^/usr/bin/python3 /opt/ros/jazzy/bin/ros2 launch pinky_bringup '
+do
+  for PID in $(pgrep -f "$PATTERN" || true); do
+    PGID="$(ps -o pgid= -p "$PID" | tr -d ' ')"
+    ps -p "$PID" -o pid,ppid,pgid,sid,stat,etimes,args
+    if [ -n "$PGID" ]; then
+      kill -TERM -- "-$PGID"
+    fi
+  done
+done
+
+sleep 8
+
+pgrep -af \
+  '[r]os2 launch trihouse_pinky_bringup|[r]os2 launch pinky_bringup|[r]os2 launch pinky_navigation' ||
+echo 'PASS: Pinky launch clean'
+```
+
+process group이 사용자 shell이나 다른 실험을 포함하는 경우에는 음수 PGID 종료를 사용하지
+않고, 4절의 개별 PID 정리 절차를 따른다.
+
+### 4. Trihouse launch 하나만 실행
+
+Pinky 터미널에서 현재 개발 PC 주소와 map revision을 환경에 넣는다. 다른 네트워크에서는
+`CONTROL_HOST`와 Discovery Server 주소를 그대로 재사용하지 않는다.
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source /home/pinky/pinky_pro/install/setup.bash
+source /home/pinky/trihouse_ws/install/setup.bash
+
+export ROS_DOMAIN_ID=12
+export ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT
+unset ROS_STATIC_PEERS
+export ROS_DISCOVERY_SERVER='192.168.0.4:11811'
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export FASTDDS_BUILTIN_TRANSPORTS=UDPv4
+
+export CONTROL_HOST='192.168.0.4'
+export MAP_REVISION='new_map_2:df9a7f70eab87135a0e1a73c2b63a0a15aae2de3512a6c760a3259d0337a32ed'
+
+setsid nohup ros2 launch \
+  trihouse_pinky_bringup \
+  trihouse_pinky.launch.py \
+  namespace:=pinky_02 \
+  robot_id:=PK_02 \
+  map:=/home/pinky/map/new_map_2.yaml \
+  map_revision:="$MAP_REVISION" \
+  nav2_params_file:=/home/pinky/hardware_pinky_02.yaml \
+  narrow_zones_file:=/home/pinky/narrow_zones.new_map_2.yaml \
+  narrow_map_name:=new_map_2 \
+  allow_narrow_calibration:=false \
+  control_host:="$CONTROL_HOST" \
+  control_port:=8788 \
+  vision_enabled:=false \
+  docking_enabled:=false \
+  > /tmp/trihouse_pinky_02.log 2>&1 < /dev/null &
+
+echo $! | tee /tmp/trihouse_pinky_02.pid
+sleep 12
+```
+
+이 명령 하나가 namespaced 하드웨어, localization, Nav2, safety와 Trihouse onboard 노드를
+모두 시작한다. 벤더 bringup이나 navigation을 다른 터미널에서 추가로 실행하지 않는다.
+
+### 5. 주행 없이 namespace와 lifecycle 검증
+
+```bash
+echo '=== launch count ==='
+pgrep -af \
+  '^/usr/bin/python3 /opt/ros/jazzy/bin/ros2 launch trihouse_pinky_bringup trihouse_pinky.launch.py'
+
+echo '=== double namespace must be empty ==='
+ros2 topic list | grep '^/pinky_02/pinky_02/' ||
+echo 'PASS: double namespace 없음'
+
+echo '=== required topic publishers ==='
+for TOPIC in \
+  /pinky_02/scan \
+  /pinky_02/odom \
+  /pinky_02/battery/percent \
+  /pinky_02/battery/voltage
+do
+  echo "--- $TOPIC ---"
+  ros2 topic info "$TOPIC" --verbose |
+  grep -E 'Publisher count|Node name|Node namespace'
+done
+
+echo '=== unexpected root publishers ==='
+for TOPIC in /scan /battery/percent /battery/voltage /imu_raw; do
+  echo "--- $TOPIC ---"
+  ros2 topic info "$TOPIC" --verbose 2>/dev/null |
+  grep -E 'Publisher count|Node name|Node namespace' || true
+done
+
+for NODE in \
+  map_server amcl controller_server smoother_server planner_server \
+  behavior_server bt_navigator waypoint_follower velocity_smoother
+do
+  echo "=== /pinky_02/$NODE ==="
+  timeout 8 ros2 lifecycle get "/pinky_02/$NODE"
+done
+```
+
+합격 조건:
+
+- 전체 Trihouse launch가 정확히 한 개
+- `/pinky_02/pinky_02/*` 없음
+- `/pinky_02/scan`, `/odom`, 배터리 토픽에 publisher 존재
+- 루트 `/scan`, `/battery/*`, `/imu_raw`에 robot publisher 없음
+- localization과 navigation lifecycle 노드 모두 `active [3]`
+- `/pinky_02/cmd_vel_safe`의 유일한 발행자가 namespaced safety supervisor
+
+이번 관측은 중복 launch와 잘못된 vendor 단독 실행까지 원인을 확정한 상태다. 위 정리와
+단일 재기동을 실제 수행하고 모든 합격 조건을 측정하기 전에는 복구 성공으로 기록하지
+않는다.
