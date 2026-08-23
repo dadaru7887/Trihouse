@@ -158,6 +158,7 @@ def test_profile_parses_entry_passage() -> None:
         ("recovery_distance_m", -0.01),
         ("recovery_speed_mps", 0.0),
         ("recovery_max_attempts", 0),
+        ("recovery_max_attempts", 2.0),
         ("recovery_timeout_s", float("nan")),
     ],
 )

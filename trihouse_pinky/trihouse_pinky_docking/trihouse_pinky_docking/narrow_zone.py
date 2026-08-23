@@ -869,9 +869,8 @@ def _entry_passage(
         ):
             local_issues.append(f"{where}_limits_invalid")
         if (
-            isinstance(recovery_max_attempts_raw, bool)
+            type(recovery_max_attempts_raw) is not int
             or recovery_max_attempts <= 0
-            or recovery_max_attempts != recovery_max_attempts_raw
         ):
             local_issues.append(f"{where}_attempts_invalid")
     if doorway is None or inside_turn is None:
