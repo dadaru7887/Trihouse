@@ -21,7 +21,7 @@
 - A `docked` observation matching job, step, robot, dock, map revision, and freshness is required before OMX motion.
 - Each single-Pinky stage stops after three consecutive successes and prints a review summary before the next stage can start.
 - At every stage pause, ask the user to run Codex `/status`; if the displayed weekly usage is at least 60%, stop and ask whether to continue because this agent cannot read the account usage dashboard directly.
-- Existing user changes in `control_system`, `pinky_pro`, and `control_ui/` must be preserved; only task-related overlapping lines may be edited after inspecting their current diff.
+- `control_system` is pinned to upstream `main` and treated as read-only; `pinky_pro` additions are preserved; `control_ui/` is unused and untouched.
 
 ---
 
@@ -49,8 +49,8 @@
 
 ### Gazebo OMX integration
 
-- `control_system/robo_pinky/src/robo_pinky_sim/config/arms.yaml`: canonical two-arm placement for the three-temperature world.
-- `control_system/robo_pinky/src/robo_pinky_sim/launch/warehouse.launch.py`: selective `OMX_01`/`OMX_02` spawn and joint bridges.
+- `control_system/robo_pinky/src/robo_pinky_sim/config/arms.yaml`: read-only upstream two-arm placement input.
+- `control_system/robo_pinky/src/robo_pinky_sim/launch/warehouse.launch.py`: read-only upstream OMX spawn and joint bridge implementation.
 - `trihouse_rmf_bridge/launch/two_pinky_order_demo.launch.py`: include the two OMX models without adding a second mobile robot in the single-Pinky stage.
 - `control_tower/bringup/p0_simulation_bringup.sh`: pass one/two robot mode, OMX simulation profile, and explicit Vision-off flags.
 - `trihouse_rmf_bridge/test/test_two_pinky_order_demo_launch.py`: entity count, namespace, and OMX bridge launch tests.
@@ -353,8 +353,8 @@ git commit -m "feat(control): gate loading on verified docking"
 ### Task 6: Spawn and Animate Exactly Two OMX Arms
 
 **Files:**
-- Modify: `control_system/robo_pinky/src/robo_pinky_sim/config/arms.yaml`
-- Modify: `control_system/robo_pinky/src/robo_pinky_sim/launch/warehouse.launch.py`
+- Inspect only: `control_system/robo_pinky/src/robo_pinky_sim/config/arms.yaml`
+- Inspect only: `control_system/robo_pinky/src/robo_pinky_sim/launch/warehouse.launch.py`
 - Modify: `trihouse_rmf_bridge/launch/two_pinky_order_demo.launch.py`
 - Modify: `tests/simulation/omx/action_server.py`
 - Modify: `trihouse_rmf_bridge/test/test_two_pinky_order_demo_launch.py`
@@ -364,11 +364,11 @@ git commit -m "feat(control): gate loading on verified docking"
 - ROS joint command topics: `/omx_01/{joint1,joint2,joint3,joint4,gripper_left_joint,gripper_right_joint}_cmd` and matching `/omx_02/...`
 - Joint feedback topics: `/omx_01/joint_states`, `/omx_02/joint_states`
 
-- [ ] **Step 1: Inspect and preserve the nested `control_system` diff**
+- [ ] **Step 1: Verify the upstream `control_system` input is clean and pinned**
 
-Run: `git -C control_system status --short && git -C control_system diff -- robo_pinky/src/robo_pinky_sim/config/arms.yaml robo_pinky/src/robo_pinky_sim/launch/warehouse.launch.py`
+Run: `git -C control_system status --short && git -C control_system branch --show-current && git -C control_system rev-parse HEAD`
 
-Expected: record whether the user already changed either target before editing.
+Expected: no internal changes, branch `main`, and the reviewed upstream revision recorded in the evidence manifest. Do not edit or commit inside this submodule.
 
 - [ ] **Step 2: Write failing launch contract tests**
 
@@ -380,9 +380,9 @@ Run: `pytest -q trihouse_rmf_bridge/test/test_two_pinky_order_demo_launch.py`
 
 Expected: the new OMX entity assertions fail.
 
-- [ ] **Step 4: Add selective two-arm spawn and bridges**
+- [ ] **Step 4: Include the upstream selective two-arm spawn and bridges from the root launch**
 
-Reuse `omx.urdf.xacro`; do not copy the model into the root repository. Set canonical placement from the published three-temperature map and fail bringup when either placement is missing.
+Reuse the upstream `warehouse.launch.py` and `omx.urdf.xacro`; do not copy or edit them. Pass canonical two-arm selection and published three-temperature placement from the root launch, and fail bringup when either upstream asset or placement is missing.
 
 - [ ] **Step 5: Map simulator phases to deterministic joint trajectories**
 
@@ -394,12 +394,10 @@ Run: `pytest -q trihouse_rmf_bridge/test/test_two_pinky_order_demo_launch.py tes
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit root and nested changes separately**
+- [ ] **Step 7: Commit root integration changes only**
 
 ```bash
-git -C control_system add robo_pinky/src/robo_pinky_sim/config/arms.yaml robo_pinky/src/robo_pinky_sim/launch/warehouse.launch.py
-git -C control_system commit -m "feat(sim): expose canonical OMX pair"
-git add control_system trihouse_rmf_bridge/launch/two_pinky_order_demo.launch.py trihouse_rmf_bridge/test/test_two_pinky_order_demo_launch.py tests/simulation/omx/action_server.py
+git add trihouse_rmf_bridge/launch/two_pinky_order_demo.launch.py trihouse_rmf_bridge/test/test_two_pinky_order_demo_launch.py tests/simulation/omx/action_server.py
 git commit -m "feat(sim): animate two OMX stations"
 ```
 
