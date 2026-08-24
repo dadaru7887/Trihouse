@@ -24,7 +24,7 @@ from .geometry import (
     PROTECTIVE_HALF_WIDTH_M,
     SCAN_FORWARD_OFFSET_RAD,
     SCAN_ORIGIN_OFFSET_X_M,
-    SWEPT_RADIUS_M,
+    SWEPT_CONTACT_M,
     nearest_range,
     path_clearance,
     point_in_polygon,
@@ -73,11 +73,24 @@ class SafetySupervisor(Node):
     def __init__(self) -> None:
         super().__init__('safety_supervisor')
         self.declare_parameter('robot_id', 'PK_01')
-        self.declare_parameter('sensor_timeout_s', 0.5)
-        self.declare_parameter('stop_distance_m', 0.30)
-        self.declare_parameter('slow_distance_m', 0.70)
+        # 라이다 10 Hz 기준 1.0 s 는 **10 스캔 연속 실종**이다. 그래도 fail-safe 다.
+        # 이전 값 0.5 s 는 실기 부하를 못 견뎌 gate 를 깜빡이게 했고, 그 깜빡임이
+        # 로봇을 RMF 에서 빼냈다 — 2026-08-24 실측에서 `sensor_timeout` 이 423 샘플,
+        # 그중 414 초가 한 구간이었다.
+        self.declare_parameter('sensor_timeout_s', 1.0)
+        self.declare_parameter('stop_distance_m', 0.05)
+        # `policy.SafetyConfig.slow_distance_m` 과 같은 이유로 지금은 판정에
+        # 쓰이지 않는다. 값만 넘어가고 게이트는 사람 검출로만 감속한다.
+        self.declare_parameter('slow_distance_m', 0.25)
         self.declare_parameter('slow_linear_speed_mps', 0.08)
-        self.declare_parameter('require_ultrasonic', True)
+        # 초음파를 필수 센서로 보지 않는다.
+        #
+        # `sensor_fresh` 는 `scan_fresh and (range_fresh or not require_ultrasonic)`
+        # 이라, True 면 **초음파 하나가 끊길 때 라이다가 멀쩡해도 전 주행이 정지**한다.
+        # 두 번째 거부권을 주는 셈인데, 정작 초음파는 정면만 보고 센서 원점 기준
+        # raw range 를 낸다 — `path_clearance` 의 몸끝 기준 여유와 의미가 다른 값을
+        # 같은 `stop_distance_m` 에 걸어 `min()` 으로 경쟁시켜 왔다.
+        self.declare_parameter('require_ultrasonic', False)
         # waypoint 측정 전용 local-manual에서는 관제 연결 없이도 허용하되,
         # 라이다·초음파·비상정지·보호 필드는 동일하게 적용한다.
         self.declare_parameter('manual_mode_enabled', False)
@@ -94,8 +107,10 @@ class SafetySupervisor(Node):
         self.declare_parameter('protective_half_width_m', PROTECTIVE_HALF_WIDTH_M)
         self.declare_parameter('footprint_front_m', FOOTPRINT_FRONT_M)
         self.declare_parameter('footprint_rear_m', FOOTPRINT_REAR_M)
-        # 회전이 쓸고 가는 원. 발자국에서 계산한 물리 외접반경을 기본값으로 쓴다.
-        self.declare_parameter('swept_clearance_m', SWEPT_RADIUS_M)
+        # 회전 중 접촉 감지 문턱. **발자국 외접반경(`SWEPT_RADIUS_M`)이 아니다** —
+        # 회전 충돌 방지는 Nav2 가 맡는다. 값의 근거와 포기한 것은
+        # `geometry.SWEPT_CONTACT_M` 의 주석에 적었다.
+        self.declare_parameter('swept_clearance_m', SWEPT_CONTACT_M)
         self.scan_forward_offset_rad = float(self.get_parameter('scan_forward_offset_rad').value)
         self.scan_origin_offset_x_m = float(self.get_parameter('scan_origin_offset_x_m').value)
         self.protective_half_width_m = float(self.get_parameter('protective_half_width_m').value)

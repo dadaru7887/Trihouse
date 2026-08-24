@@ -54,6 +54,7 @@ from trihouse_pinky_safety.geometry import (  # noqa: E402
     PROTECTIVE_HALF_WIDTH_M,
     SCAN_FORWARD_OFFSET_RAD,
     SCAN_ORIGIN_OFFSET_X_M,
+    SWEPT_CONTACT_M,
     SWEPT_RADIUS_M,
     nearest_range,
     path_clearance,
@@ -392,12 +393,71 @@ def test_a_person_near_the_robot_slows_it_down() -> None:
     assert result.command.linear_x == SafetyConfig().slow_linear_speed_mps
 
 
-def test_something_far_ahead_on_the_path_slows_before_it_stops() -> None:
-    """경로 위의 물체는 STOP 전에 먼저 SLOW 로 예고된다."""
+def test_distance_alone_no_longer_slows_the_robot() -> None:
+    """거리 기반 감속은 Nav2 가 맡는다. 여기서 또 하면 감속이 3 중이 된다.
+
+    Nav2 는 costmap 위에서 `use_cost_regulated_linear_velocity_scaling`
+    (cost_scaling_dist 0.6) 과 `approach_velocity_scaling_dist`(0.6) 두 개를
+    이미 돌리고 있다. 2.20 x 2.70 m 방에서는 어느 지점이든 목적지 또는 장애물의
+    0.6 m 안이라 셋이 항상 동시에 걸리고, `desired_linear_vel: 0.2` 가 실제로는
+    0.05~0.08 로 떨어진다.
+
+    이 게이트가 거리로 하는 일은 이제 **STOP 하나뿐**이다 — 예고 없이 선다.
+    그 예고는 Nav2 쪽 감속이 대신한다.
+    """
     result = apply_safety_gate(
         MotionCommand(0.12, 0.0), SafetyInputs(front_distance_m=0.50)
     )
+    assert result.level == SafetyLevel.CLEAR
+    assert result.command.linear_x == 0.12
+
+
+def test_a_person_far_away_does_not_slow_the_robot() -> None:
+    """감속의 근거는 "사람이 있다" 가 아니라 "사람이 가까이 있다" 다.
+
+    이전에는 `person_detected or (거리 <= 임계)` 라 `or` 이 거리 조건을 무력화했고,
+    방 반대편 참관자나 신뢰도 0.01 짜리 오검출까지 감속을 걸었다. 운영 테스트는
+    사람이 옆에서 지켜보므로 그대로 상시 감속이 된다.
+    """
+    far = SafetyConfig().person_protective_distance_m + 0.5
+    result = apply_safety_gate(
+        MotionCommand(0.12, 0.0),
+        SafetyInputs(person_detected=True, person_distance_m=far),
+    )
+    assert result.level == SafetyLevel.CLEAR
+
+
+def test_a_person_at_an_unknown_distance_still_slows_the_robot() -> None:
+    """거리를 모르는 것을 안전하다고 읽으면 안 된다."""
+    result = apply_safety_gate(
+        MotionCommand(0.12, 0.0),
+        SafetyInputs(person_detected=True, person_distance_m=None),
+    )
     assert result.level == SafetyLevel.SLOW
+
+
+def test_reversing_is_slowed_too() -> None:
+    """`min(-0.20, 0.08)` 은 -0.20 을 그대로 통과시킨다.
+
+    부호는 진행 방향이고 상한은 빠르기다. 둘을 한 번에 `min` 으로 처리하면
+    **후진에서는 감속이 아예 걸리지 않는다.**
+    """
+    limit = SafetyConfig().slow_linear_speed_mps
+    result = apply_safety_gate(
+        MotionCommand(-0.20, 0.0),
+        SafetyInputs(person_detected=True, person_distance_m=0.5),
+    )
+    assert result.level == SafetyLevel.SLOW
+    assert result.command.linear_x == -limit, "후진이 감속되지 않았다"
+
+
+def test_slowing_never_speeds_the_robot_up() -> None:
+    """상한은 상한이다. 원 명령이 이미 느리면 그대로 둔다."""
+    result = apply_safety_gate(
+        MotionCommand(0.03, 0.0),
+        SafetyInputs(person_detected=True, person_distance_m=0.5),
+    )
+    assert result.command.linear_x == 0.03
 
 
 def test_rotating_into_something_beside_the_robot_stops() -> None:
@@ -413,7 +473,7 @@ def test_rotating_into_something_beside_the_robot_stops() -> None:
 def test_the_path_still_stops_the_robot() -> None:
     """직사각형 안으로 들어온 것은 여전히 STOP 이다."""
     result = apply_safety_gate(
-        MotionCommand(0.20, 0.0), SafetyInputs(front_distance_m=0.20)
+        MotionCommand(0.20, 0.0), SafetyInputs(front_distance_m=0.04)
     )
     assert result.level == SafetyLevel.STOP
     assert result.reason == "front_stop"
@@ -461,9 +521,48 @@ ON_SCAN = inspect.getsource(SafetySupervisor._on_scan)
 SUPERVISOR_INIT = inspect.getsource(SafetySupervisor.__init__)
 
 
-def test_supervisor_defaults_to_the_physical_swept_radius() -> None:
-    assert "'swept_clearance_m', SWEPT_RADIUS_M)" in SUPERVISOR_INIT
-    assert "SWEPT_RADIUS_M +" not in SUPERVISOR_INIT
+def test_supervisor_defaults_to_the_contact_threshold_not_the_swept_radius() -> None:
+    """회전 충돌 방지는 Nav2 가 맡고, 여기 남은 것은 접촉 감지다.
+
+    두 계층이 같은 판정을 하면 더 안전해지지 않고, 어긋날 때만 교착이 생긴다.
+    2026-08-24 실측: 협로 탈출부에서 `swept_stop` 과 `front_stop` 이 110 초 동안
+    24 회 번갈아 나오는 사이 자세가 0.1 도도 바뀌지 않았다.
+
+    문턱을 **값으로 적지 않고 이름으로 묶는** 이유는, 두 상수가 서로 다른 것을
+    뜻하기 때문이다 — `SWEPT_RADIUS_M` 은 발자국에서 나오는 물리량이고,
+    `SWEPT_CONTACT_M` 은 그보다 낮게 **의도적으로** 정한 운영값이다.
+    """
+    assert "'swept_clearance_m', SWEPT_CONTACT_M)" in SUPERVISOR_INIT
+    assert "'swept_clearance_m', SWEPT_RADIUS_M)" not in SUPERVISOR_INIT
+    assert "SWEPT_CONTACT_M +" not in SUPERVISOR_INIT
+
+
+def test_the_contact_threshold_separates_a_wall_from_a_dragged_cable() -> None:
+    """운영값은 2026-08-24 실측 세 값 사이에서만 뜻이 있다.
+
+    벽(0.176)을 잡으면 회전이 영구히 막히고, 케이블(0.088)을 놓치면 그것을 감고
+    돈다. 이 시험이 지키는 것은 숫자가 아니라 **그 사이에 있다**는 사실이다.
+    """
+    wall, cable, charger = 0.176, 0.088, 0.036
+    assert not swept_clearance_blocked(wall, SWEPT_CONTACT_M), "정상 벽에서 회전이 막힌다"
+    assert swept_clearance_blocked(cable, SWEPT_CONTACT_M), "끌려 나온 케이블을 놓친다"
+    assert swept_clearance_blocked(charger, SWEPT_CONTACT_M)
+    # 라이다 잡음(RPLidar +-1~2 cm)을 견디려면 양쪽으로 여유가 필요하다.
+    assert wall - SWEPT_CONTACT_M >= 0.03, "벽까지 여유가 잡음보다 작다"
+    assert SWEPT_CONTACT_M - cable >= 0.03, "케이블까지 여유가 잡음보다 작다"
+
+
+def test_the_contact_threshold_is_a_deliberate_concession() -> None:
+    """접촉 방지를 포기한 폭을 코드가 스스로 말하게 한다.
+
+    이 값이 `SWEPT_RADIUS_M` 이상이 되면 Nav2 와 다시 이중이 되고, 지나치게
+    낮아지면 접촉 감지라는 이름값도 못 한다.
+    """
+    assert SWEPT_CONTACT_M < SWEPT_RADIUS_M
+    assert SWEPT_RADIUS_M - SWEPT_CONTACT_M < 0.08, (
+        f"포기한 폭이 {SWEPT_RADIUS_M - SWEPT_CONTACT_M:.3f} m 다 — "
+        "회전 접촉을 사실상 감지하지 못한다"
+    )
 
 
 def test_the_ultrasonic_is_not_used_as_evidence_when_reversing() -> None:

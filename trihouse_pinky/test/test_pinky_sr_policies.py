@@ -39,10 +39,24 @@ from trihouse_pinky_safety.geometry import point_in_polygon  # noqa: E402
 
 class SafetyPolicyTest(unittest.TestCase):
     def test_front_sensor_stop_overrides_person_and_preserves_goal(self) -> None:
-        """A near front obstacle must stop, even when the person rule only slows."""
+        """A near front obstacle must stop, even when the person rule only slows.
+
+        EN: The distance comes from the configured threshold, not a literal. A
+        literal silently stops testing the ordering once the threshold moves —
+        0.20 m sat inside the old 0.30 m stop distance and outside the current
+        0.05 m one, so this test asserted nothing about priority any more.
+        KO: 거리를 설정값에서 끌어온다. 상수로 적으면 임계값이 바뀐 순간 순서를
+        시험하지 못하게 된다 — 0.20 m 는 옛 0.30 m 안이었고 지금의 0.05 m 밖이라,
+        이 시험은 더 이상 우선순위를 확인하지 않고 있었다.
+        """
+        inside_stop = SafetyConfig().stop_distance_m / 2.0
         result = apply_safety_gate(
             MotionCommand(0.20, 0.10),
-            SafetyInputs(front_distance_m=0.20, person_detected=True),
+            SafetyInputs(
+                front_distance_m=inside_stop,
+                person_detected=True,
+                person_distance_m=0.5,
+            ),
         )
         self.assertEqual(SafetyLevel.STOP, result.level)
         self.assertEqual(0.0, result.command.linear_x)
