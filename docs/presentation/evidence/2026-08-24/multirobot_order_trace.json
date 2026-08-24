@@ -1,0 +1,448 @@
+{
+  "evidence_boundary": {
+    "type": "CODE_LEVEL_DRY_RUN",
+    "production_code_executed": [
+      "OutboundPlanner.plan",
+      "planned_outbound_steps",
+      "JobRunner.run_once"
+    ],
+    "mysql_written": false,
+    "robot_moved": false
+  },
+  "stage_1_order": {
+    "external_reference": "ORDER-DEMO-001",
+    "priority": "high",
+    "items": [
+      {
+        "line_no": 1,
+        "product_code": "SKU-AMBIENT-A",
+        "quantity": 6
+      },
+      {
+        "line_no": 2,
+        "product_code": "SKU-CHILLED-B",
+        "quantity": 3
+      },
+      {
+        "line_no": 3,
+        "product_code": "SKU-FROZEN-C",
+        "quantity": 2
+      }
+    ]
+  },
+  "stage_2_inventory_candidates": [
+    {
+      "lot_id": 1002,
+      "lot_code": "LOT-A-LATE",
+      "product_code": "SKU-AMBIENT-A",
+      "item_name": "SKU-AMBIENT-A",
+      "temperature_zone": "ambient",
+      "slot_location_id": 1102,
+      "available_qty": 5,
+      "reserved_qty": 0,
+      "expiry_date": "2026-09-05",
+      "received_at": "2026-08-01T00:00:00",
+      "reservable_qty": 5
+    },
+    {
+      "lot_id": 1001,
+      "lot_code": "LOT-A-EARLY",
+      "product_code": "SKU-AMBIENT-A",
+      "item_name": "SKU-AMBIENT-A",
+      "temperature_zone": "ambient",
+      "slot_location_id": 1101,
+      "available_qty": 4,
+      "reserved_qty": 0,
+      "expiry_date": "2026-08-28",
+      "received_at": "2026-08-01T00:00:00",
+      "reservable_qty": 4
+    },
+    {
+      "lot_id": 2001,
+      "lot_code": "LOT-B-CHILLED",
+      "product_code": "SKU-CHILLED-B",
+      "item_name": "SKU-CHILLED-B",
+      "temperature_zone": "chilled",
+      "slot_location_id": 1201,
+      "available_qty": 10,
+      "reserved_qty": 0,
+      "expiry_date": "2026-08-30",
+      "received_at": "2026-08-01T00:00:00",
+      "reservable_qty": 10
+    },
+    {
+      "lot_id": 3001,
+      "lot_code": "LOT-C-FROZEN",
+      "product_code": "SKU-FROZEN-C",
+      "item_name": "SKU-FROZEN-C",
+      "temperature_zone": "frozen",
+      "slot_location_id": 1301,
+      "available_qty": 5,
+      "reserved_qty": 0,
+      "expiry_date": "2026-09-01",
+      "received_at": "2026-08-01T00:00:00",
+      "reservable_qty": 5
+    }
+  ],
+  "stage_3_fefo_allocation": [
+    {
+      "line_no": 1,
+      "product_code": "SKU-AMBIENT-A",
+      "requested_qty": 6,
+      "reserved_qty": 6,
+      "allocations": [
+        {
+          "lot_id": 1001,
+          "lot_code": "LOT-A-EARLY",
+          "slot_location_id": 1101,
+          "reserved_qty": 4
+        },
+        {
+          "lot_id": 1002,
+          "lot_code": "LOT-A-LATE",
+          "slot_location_id": 1102,
+          "reserved_qty": 2
+        }
+      ]
+    },
+    {
+      "line_no": 2,
+      "product_code": "SKU-CHILLED-B",
+      "requested_qty": 3,
+      "reserved_qty": 3,
+      "allocations": [
+        {
+          "lot_id": 2001,
+          "lot_code": "LOT-B-CHILLED",
+          "slot_location_id": 1201,
+          "reserved_qty": 3
+        }
+      ]
+    },
+    {
+      "line_no": 3,
+      "product_code": "SKU-FROZEN-C",
+      "requested_qty": 2,
+      "reserved_qty": 2,
+      "allocations": [
+        {
+          "lot_id": 3001,
+          "lot_code": "LOT-C-FROZEN",
+          "slot_location_id": 1301,
+          "reserved_qty": 2
+        }
+      ]
+    }
+  ],
+  "stage_4_zone_bundles": [
+    {
+      "temperature_zone": "ambient",
+      "dock_location_id": 101,
+      "omx_id": "OMX_01",
+      "lot_codes": [
+        "LOT-A-EARLY",
+        "LOT-A-LATE"
+      ],
+      "product_codes": [
+        "SKU-AMBIENT-A",
+        "SKU-AMBIENT-A"
+      ]
+    },
+    {
+      "temperature_zone": "chilled",
+      "dock_location_id": 102,
+      "omx_id": "OMX_01",
+      "lot_codes": [
+        "LOT-B-CHILLED"
+      ],
+      "product_codes": [
+        "SKU-CHILLED-B"
+      ]
+    },
+    {
+      "temperature_zone": "frozen",
+      "dock_location_id": 103,
+      "omx_id": "OMX_02",
+      "lot_codes": [
+        "LOT-C-FROZEN"
+      ],
+      "product_codes": [
+        "SKU-FROZEN-C"
+      ]
+    }
+  ],
+  "stage_5_generated_job_steps": [
+    {
+      "job_step_id": 1001,
+      "step_no": 10,
+      "temperature_zone": "ambient",
+      "branch": "omx_prepare",
+      "executor_type": "arm",
+      "action_type": "prepare",
+      "target_location_id": 101,
+      "dependencies": [],
+      "assigned_device_id": "OMX_01",
+      "initial_runner_state": "DISPATCHED"
+    },
+    {
+      "job_step_id": 1002,
+      "step_no": 20,
+      "temperature_zone": "ambient",
+      "branch": "pinky_navigate",
+      "executor_type": "mobile",
+      "action_type": "navigate",
+      "target_location_id": 101,
+      "dependencies": [],
+      "assigned_device_id": "PK_01",
+      "initial_runner_state": "DISPATCHED"
+    },
+    {
+      "job_step_id": 1003,
+      "step_no": 30,
+      "temperature_zone": "ambient",
+      "branch": "readiness_load_gate",
+      "executor_type": "fms",
+      "action_type": "load",
+      "target_location_id": 101,
+      "dependencies": [
+        10,
+        20
+      ],
+      "assigned_device_id": null,
+      "initial_runner_state": "WAITING"
+    },
+    {
+      "job_step_id": 1004,
+      "step_no": 40,
+      "temperature_zone": "chilled",
+      "branch": "omx_prepare",
+      "executor_type": "arm",
+      "action_type": "prepare",
+      "target_location_id": 102,
+      "dependencies": [
+        30
+      ],
+      "assigned_device_id": "OMX_01",
+      "initial_runner_state": "WAITING"
+    },
+    {
+      "job_step_id": 1005,
+      "step_no": 50,
+      "temperature_zone": "chilled",
+      "branch": "pinky_navigate",
+      "executor_type": "mobile",
+      "action_type": "navigate",
+      "target_location_id": 102,
+      "dependencies": [
+        30
+      ],
+      "assigned_device_id": "PK_01",
+      "initial_runner_state": "WAITING"
+    },
+    {
+      "job_step_id": 1006,
+      "step_no": 60,
+      "temperature_zone": "chilled",
+      "branch": "readiness_load_gate",
+      "executor_type": "fms",
+      "action_type": "load",
+      "target_location_id": 102,
+      "dependencies": [
+        40,
+        50
+      ],
+      "assigned_device_id": null,
+      "initial_runner_state": "WAITING"
+    },
+    {
+      "job_step_id": 1007,
+      "step_no": 70,
+      "temperature_zone": "frozen",
+      "branch": "omx_prepare",
+      "executor_type": "arm",
+      "action_type": "prepare",
+      "target_location_id": 103,
+      "dependencies": [
+        60
+      ],
+      "assigned_device_id": "OMX_02",
+      "initial_runner_state": "WAITING"
+    },
+    {
+      "job_step_id": 1008,
+      "step_no": 80,
+      "temperature_zone": "frozen",
+      "branch": "pinky_navigate",
+      "executor_type": "mobile",
+      "action_type": "navigate",
+      "target_location_id": 103,
+      "dependencies": [
+        60
+      ],
+      "assigned_device_id": "PK_01",
+      "initial_runner_state": "WAITING"
+    },
+    {
+      "job_step_id": 1009,
+      "step_no": 90,
+      "temperature_zone": "frozen",
+      "branch": "readiness_load_gate",
+      "executor_type": "fms",
+      "action_type": "load",
+      "target_location_id": 103,
+      "dependencies": [
+        70,
+        80
+      ],
+      "assigned_device_id": null,
+      "initial_runner_state": "WAITING"
+    },
+    {
+      "job_step_id": 1010,
+      "step_no": 100,
+      "temperature_zone": "common",
+      "branch": "packing_navigate",
+      "executor_type": "mobile",
+      "action_type": "navigate",
+      "target_location_id": 201,
+      "dependencies": [
+        90
+      ],
+      "assigned_device_id": "PK_01",
+      "initial_runner_state": "WAITING"
+    },
+    {
+      "job_step_id": 1011,
+      "step_no": 110,
+      "temperature_zone": "common",
+      "branch": "common",
+      "executor_type": "fms",
+      "action_type": "handover",
+      "target_location_id": 201,
+      "dependencies": [
+        100
+      ],
+      "assigned_device_id": null,
+      "initial_runner_state": "WAITING"
+    },
+    {
+      "job_step_id": 1012,
+      "step_no": 120,
+      "temperature_zone": "common",
+      "branch": "worker_completion",
+      "executor_type": "fms",
+      "action_type": "wait",
+      "target_location_id": 201,
+      "dependencies": [
+        110
+      ],
+      "assigned_device_id": null,
+      "initial_runner_state": "WAITING"
+    },
+    {
+      "job_step_id": 1013,
+      "step_no": 130,
+      "temperature_zone": "common",
+      "branch": "common",
+      "executor_type": "mobile",
+      "action_type": "return_home",
+      "target_location_id": null,
+      "dependencies": [
+        120
+      ],
+      "assigned_device_id": "PK_01",
+      "initial_runner_state": "WAITING"
+    }
+  ],
+  "stage_6_resource_assignment": {
+    "revision": 1,
+    "mobile_id": "PK_01",
+    "omx_id": "OMX_01",
+    "packing_dock_code": "PACKING-01-DOCK-01",
+    "charger_code": "TRIHOUSE-TEST-01-CHG-01",
+    "omx_ids": [
+      "OMX_01",
+      "OMX_02"
+    ],
+    "job_id": 501,
+    "available_devices_seen": [
+      {
+        "device_id": "PK_01",
+        "device_type": "mobile",
+        "control_mode": "automatic",
+        "state": "idle",
+        "health": "ok",
+        "navigation_state": null,
+        "current_job_step_id": null
+      },
+      {
+        "device_id": "PK_02",
+        "device_type": "mobile",
+        "control_mode": "automatic",
+        "state": "idle",
+        "health": "ok",
+        "navigation_state": null,
+        "current_job_step_id": null
+      },
+      {
+        "device_id": "OMX_01",
+        "device_type": "arm",
+        "control_mode": "automatic",
+        "state": "idle",
+        "health": "ok",
+        "navigation_state": null,
+        "current_job_step_id": null
+      },
+      {
+        "device_id": "OMX_02",
+        "device_type": "arm",
+        "control_mode": "automatic",
+        "state": "idle",
+        "health": "ok",
+        "navigation_state": null,
+        "current_job_step_id": null
+      }
+    ]
+  },
+  "stage_7_first_dispatch": {
+    "runner_report": {
+      "assigned": [
+        501
+      ],
+      "dispatched": [
+        501
+      ],
+      "awaiting": [],
+      "expired": [],
+      "blocked": [],
+      "errors": []
+    },
+    "dispatched_steps": [
+      {
+        "job_step_id": 1001,
+        "step_no": 10,
+        "temperature_zone": "ambient",
+        "branch": "omx_prepare",
+        "executor_type": "arm",
+        "action_type": "prepare",
+        "target_location_id": 101,
+        "dependencies": [],
+        "assigned_device_id": "OMX_01",
+        "initial_runner_state": "DISPATCHED"
+      },
+      {
+        "job_step_id": 1002,
+        "step_no": 20,
+        "temperature_zone": "ambient",
+        "branch": "pinky_navigate",
+        "executor_type": "mobile",
+        "action_type": "navigate",
+        "target_location_id": 101,
+        "dependencies": [],
+        "assigned_device_id": "PK_01",
+        "initial_runner_state": "DISPATCHED"
+      }
+    ],
+    "interpretation": "OMX preparation and Pinky navigation start in parallel, then converge at step 30."
+  }
+}

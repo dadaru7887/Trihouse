@@ -231,6 +231,48 @@ PASS 조건은 launch 명령행에 `namespace:=pinky_01`과
 `ROS_DOMAIN_ID=12`, `ROS_DISCOVERY_SERVER=192.168.0.4:11811`만 있는 것이다.
 `FASTRTPS_DEFAULT_PROFILES_FILE`이 출력되면 실패다.
 
+launch 직후 STEP 3 명령을 실행하지 않는다. 현재 launch는 localization을 먼저 시작하고
+navigation을 기본 60초 뒤에 시작한다. 2026-08-24 Pinky_01 실측에서는 launch 시작부터
+localization과 navigation manager가 모두 active가 될 때까지 약 93초가 걸렸다. 고정된
+`sleep`만 믿지 말고, 최대 120초 동안 두 완료 로그를 기다린다.
+
+```bash
+# [Pinky_01 터미널 2 — 최대 120초, 주행 명령 없음]
+NAV2_WAIT_DEADLINE=$((SECONDS + 120))
+
+while (( SECONDS < NAV2_WAIT_DEADLINE )); do
+  if grep -aq \
+      'lifecycle_manager_localization.*Managed nodes are active' \
+      /tmp/trihouse_pinky_pinky01.log && \
+     grep -aq \
+      'lifecycle_manager_navigation.*Managed nodes are active' \
+      /tmp/trihouse_pinky_pinky01.log
+  then
+    echo 'PASS: localization/navigation managers are active'
+    break
+  fi
+  sleep 2
+done
+
+if ! grep -aq \
+    'lifecycle_manager_localization.*Managed nodes are active' \
+    /tmp/trihouse_pinky_pinky01.log || \
+   ! grep -aq \
+    'lifecycle_manager_navigation.*Managed nodes are active' \
+    /tmp/trihouse_pinky_pinky01.log
+then
+  echo 'FAIL: Nav2 did not become active within 120 seconds'
+  grep -aE \
+    'lifecycle_manager_(localization|navigation)|Failed to bring up|Failed to change state|unable to be reached|process has died|Traceback' \
+    /tmp/trihouse_pinky_pinky01.log | tail -120
+  echo 'STEP 3 및 주문/주행을 진행하지 않는다.'
+fi
+```
+
+두 manager 완료 로그가 먼저 나오면 120초를 모두 채우지 않고 STEP 3으로 넘어가도 된다.
+120초 안에 나오지 않으면 기다림을 반복하거나 launch를 겹쳐 띄우지 말고 출력된 실패 로그를
+`pinky-runtime-recovery.md` 16~17절 기준으로 진단한다.
+
 ## STEP 3. 노드와 lifecycle 확인
 
 `ros2 node list`가 namespaced 노드를 보여도 lifecycle이 active라는 뜻은 아니다. Discovery
@@ -239,10 +281,6 @@ lifecycle service를 함께 확인한다.
 
 ```bash
 # [Pinky_01 터미널 2 — 확인]
-ros2 daemon stop
-ros2 daemon start
-sleep 3
-
 ros2 node list | sort | grep '^/pinky_01/'
 
 for node in amcl map_server controller_server planner_server bt_navigator; do
@@ -255,9 +293,24 @@ grep -aE \
   /tmp/trihouse_pinky_pinky01.log
 ```
 
-PASS 조건은 다섯 lifecycle 노드가 모두 `active [3]`이고, localization과 navigation manager가
-각각 `Managed nodes are active`를 기록하는 것이다. `Node not found`가 나오면 실제 process와
-서비스를 추가로 확인하되 성공으로 간주하지 않는다.
+Discovery Server 환경에서는 manager가 모든 lifecycle service와 bond에 연결한 뒤에도 짧은
+`ros2 lifecycle get`이 `Node not found`를 출력할 수 있다. 2026-08-24 실측에서도 이 CLI
+오탐이 발생했으므로 daemon을 STEP 3 직전에 재시작해서 3초 뒤 결과만 판정 근거로 삼지
+않는다. lifecycle CLI는 보조 증거이며, 최종 PASS는 다음 두 조건을 함께 사용한다.
+
+1. localization과 navigation manager가 각각 `Managed nodes are active`를 기록한다.
+2. onboard readiness가 `state: 1`, `missing_interfaces: []`를 발행한다.
+
+```bash
+timeout 30 ros2 topic echo \
+  /pinky_01/trihouse/readiness \
+  trihouse_interfaces/msg/Readiness \
+  --once
+```
+
+다섯 lifecycle 노드가 `active [3]`이면 추가 증거가 된다. `Node not found`가 나오더라도 위
+두 PASS 조건이 맞으면 정상 launch를 재시작하지 않는다. manager 완료 로그나 readiness가
+실패하면 실제 process와 서비스를 추가로 확인한다.
 
 ```bash
 # [Pinky_01 터미널 2 — 확인]

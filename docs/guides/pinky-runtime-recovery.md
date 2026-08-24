@@ -1768,3 +1768,18 @@ timeout 30 ros2 topic echo \
 `state: 1`, `missing_interfaces: []`면 Nav2 Action 사용 가능 경계까지 PASS다. timeout이거나
 `missing_interfaces`에 값이 있으면 lifecycle 성공과 별개의 topic/action discovery 문제로
 남겨 해당 항목부터 진단한다.
+
+후속 실측에서 readiness는 다음으로 통과했다.
+
+```text
+robot_id: PK_01
+state: 1
+missing_interfaces: []
+details: [base transport prerequisites]
+```
+
+이는 **Measured: scan, odom, NavigateToPose Action을 포함한 base transport prerequisites
+PASS**다. 최초의 `ros2 lifecycle get: Node not found`는 Nav2 장애가 아니라 CLI graph
+오탐으로 종결한다. 이 결과만으로 배터리 정책, 최종 `RobotStatus`, Safety Supervisor와
+motor command ownership까지 통과한 것은 아니므로 주문 또는 action goal은 아직 보내지
+않는다.

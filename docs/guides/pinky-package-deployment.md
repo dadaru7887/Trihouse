@@ -68,7 +68,7 @@ rsync -avc --itemize-changes \
 ```bash
 # pinky@ Pinky: 현재 운행 중이면 먼저 안전하게 정지하고, 이 package만 다시 build한다.
 source /opt/ros/<ros-distro>/setup.bash
-source <vendor-workspace>/install/setup.bash
+source /home/pinky/pinky_pro/install/setup.bash
 cd <pinky-home>/trihouse_ws
 
 colcon build --symlink-install --executor sequential \
@@ -125,7 +125,7 @@ overlay만 선택한다. 예를 들어 vendor workspace가 `pinky_pro`라면 다
 
 ```bash
 source /opt/ros/<ros-distro>/setup.bash
-source <vendor-workspace>/install/setup.bash
+source /home/pinky/pinky_pro/install/setup.bash
 
 ros2 pkg prefix pinky_bringup
 ros2 pkg prefix pinky_navigation
@@ -257,7 +257,7 @@ Pinky 터미널에서 기본 ROS 2 환경과 확인된 vendor overlay를 순서�
 cd <pinky-home>/trihouse_ws
 
 source /opt/ros/<ros-distro>/setup.bash
-source <vendor-workspace>/install/setup.bash
+source /home/pinky/pinky_pro/install/setup.bash
 
 colcon list
 ```
@@ -290,7 +290,7 @@ Pinky 터미널에서 실행한다.
 cd <pinky-home>/trihouse_ws
 
 source /opt/ros/<ros-distro>/setup.bash
-source <vendor-workspace>/install/setup.bash
+source /home/pinky/pinky_pro/install/setup.bash
 
 colcon build \
   --symlink-install \
@@ -306,7 +306,7 @@ colcon build \
 
 ```bash
 source /opt/ros/<ros-distro>/setup.bash
-source <vendor-workspace>/install/setup.bash
+source /home/pinky/pinky_pro/install/setup.bash
 source <pinky-home>/trihouse_ws/install/setup.bash
 ```
 
@@ -410,7 +410,7 @@ Pinky의 모든 새 터미널에서 underlay부터 overlay 순서로 source한�
 
 ```bash
 source /opt/ros/<ros-distro>/setup.bash
-source <vendor-workspace>/install/setup.bash
+source /home/pinky/pinky_pro/install/setup.bash
 source <pinky-home>/trihouse_ws/install/setup.bash
 
 export ROS_DOMAIN_ID=<control-pc와-같은-domain-id>
