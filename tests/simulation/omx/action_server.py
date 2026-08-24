@@ -11,6 +11,11 @@ from rclpy.node import Node
 from trihouse_interfaces.action import ExecuteOmx
 
 from trihouse_omx_adapter.action_client import action_endpoint_for_device
+from trihouse_omx_adapter.simulation_profile import (
+    TRANSFER_DURATION_S,
+    feedback_event,
+    sample_phase,
+)
 
 
 class SimulationOmxActionServer(Node):
@@ -41,6 +46,8 @@ class SimulationOmxActionServer(Node):
             result.result_json = json.dumps({"reason_code": "COMMAND_UUID_CONFLICT"})
             goal_handle.abort()
             return result
+        if command["kind"] == "load":
+            self._publish_transfer_feedback(goal_handle, command)
         body = cached[1] if cached else self._simulate(command)
         self._results[command["command_uuid"]] = (canonical, body)
         result.success = True
@@ -48,6 +55,37 @@ class SimulationOmxActionServer(Node):
         result.result_json = json.dumps(body, ensure_ascii=False, sort_keys=True)
         goal_handle.succeed()
         return result
+
+    def _publish_transfer_feedback(
+        self,
+        goal_handle,  # noqa: ANN001
+        command: dict[str, object],
+    ) -> None:
+        clock = self.get_clock()
+        start_ns = clock.now().nanoseconds
+        rate = self.create_rate(2.0, clock)
+        try:
+            while True:
+                now_ns = clock.now().nanoseconds
+                elapsed_s = min((now_ns - start_ns) / 1_000_000_000, TRANSFER_DURATION_S)
+                event = feedback_event(
+                    command,
+                    sample_phase(elapsed_s),
+                    joint_state_stamp_ns=now_ns,
+                )
+                feedback = ExecuteOmx.Feedback()
+                feedback.event_json = json.dumps(
+                    event,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                goal_handle.publish_feedback(feedback)
+                if elapsed_s >= TRANSFER_DURATION_S:
+                    return
+                rate.sleep()
+        finally:
+            self.destroy_rate(rate)
 
     @staticmethod
     def _simulate(command: dict[str, object]) -> dict[str, object]:

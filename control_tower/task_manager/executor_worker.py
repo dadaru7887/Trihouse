@@ -348,7 +348,7 @@ def _omx_command(
         raise LookupError(f"step {dispatch.job_step_id} is missing temperature_zone")
     if omx_id is None:
         raise LookupError(f"step {dispatch.job_step_id} is missing OMX identity")
-    return {
+    command: dict[str, object] = {
         "schema_version": 1,
         "command_uuid": _command_uuid(dispatch),
         "kind": kind,
@@ -359,6 +359,15 @@ def _omx_command(
         "temperature_zone": temperature_zone,
         "items": items,
     }
+    handover_group_id = step_input.get("handover_group_id")
+    pinky_id = dispatch.assignment.get("mobile_id") or (
+        dispatch.assigned_device_id if dispatch.executor_type == "fms" else None
+    )
+    if handover_group_id:
+        command["handover_group_id"] = str(handover_group_id)
+    if pinky_id:
+        command["pinky_id"] = str(pinky_id)
+    return command
 
 
 def _expected_items(dispatch: ExecutorDispatch) -> tuple[str, ...]:

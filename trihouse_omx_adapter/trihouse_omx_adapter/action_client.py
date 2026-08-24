@@ -4,10 +4,99 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from typing import Any
+
+from .simulation_profile import OmxPhase, PhaseSample, validate_feedback
 
 
 _DEVICE_ID = re.compile(r"OMX_[0-9]{2,}")
+_FEEDBACK_IDENTITIES = (
+    "omx_id",
+    "job_id",
+    "job_step_id",
+    "handover_group_id",
+    "pinky_id",
+)
+
+
+class OmxExecutionEvidence(dict[str, Any]):
+    """Action result plus the ordered feedback evidence, with legacy mapping access."""
+
+    def __init__(
+        self,
+        result: dict[str, Any],
+        feedback: tuple[dict[str, Any], ...],
+    ) -> None:
+        super().__init__(result)
+        self.result = self
+        self.feedback = feedback
+
+
+class OmxFeedbackTracker:
+    """Validate and retain one OMX execution's feedback heartbeat stream."""
+
+    def __init__(
+        self,
+        expected_identity: Mapping[str, object],
+        *,
+        max_gap_s: float = 2.0,
+    ) -> None:
+        if max_gap_s <= 0:
+            raise ValueError("max_gap_s must be positive")
+        missing = [key for key in _FEEDBACK_IDENTITIES if key not in expected_identity]
+        if missing:
+            raise ValueError(f"missing feedback identities: {', '.join(missing)}")
+        self._expected = {key: expected_identity[key] for key in _FEEDBACK_IDENTITIES}
+        self._max_gap_s = max_gap_s
+        self._events: list[dict[str, Any]] = []
+        self._previous: PhaseSample | None = None
+        self._previous_joint_stamp_ns: int | None = None
+
+    @property
+    def events(self) -> tuple[dict[str, Any], ...]:
+        return tuple(self._events)
+
+    def record_json(self, event_json: str) -> None:
+        try:
+            event = json.loads(event_json)
+        except (json.JSONDecodeError, TypeError) as error:
+            raise RuntimeError("INVALID_FEEDBACK_JSON") from error
+        if not isinstance(event, dict):
+            raise RuntimeError("INVALID_FEEDBACK_JSON")
+        if any(event.get(key) != value for key, value in self._expected.items()):
+            raise RuntimeError("FEEDBACK_IDENTITY_MISMATCH")
+        if event.get("schema_version") != "v1":
+            raise RuntimeError("UNSUPPORTED_FEEDBACK_SCHEMA")
+        if event.get("trajectory_tracking") is not True:
+            raise RuntimeError("TRAJECTORY_NOT_TRACKING")
+        try:
+            sample = PhaseSample.from_values(
+                str(event["phase"]),
+                float(event["phase_elapsed_s"]),
+                float(event["total_elapsed_s"]),
+                float(event["progress"]),
+            )
+            joint_stamp_ns = int(event["joint_state_stamp_ns"])
+            validate_feedback(self._previous, sample)
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError(f"INVALID_FEEDBACK: {error}") from error
+        if self._previous is not None:
+            gap = sample.total_elapsed_s - self._previous.total_elapsed_s
+            if gap > self._max_gap_s:
+                raise RuntimeError("FEEDBACK_HEARTBEAT_GAP")
+        if (
+            self._previous_joint_stamp_ns is not None
+            and joint_stamp_ns < self._previous_joint_stamp_ns
+        ):
+            raise RuntimeError("JOINT_STATE_STAMP_REGRESSION")
+        self._events.append(event)
+        self._previous = sample
+        self._previous_joint_stamp_ns = joint_stamp_ns
+
+    def require_complete(self) -> None:
+        if self._previous is None or self._previous.phase is not OmxPhase.SUCCEEDED:
+            raise RuntimeError("OMX_FEEDBACK_INCOMPLETE")
 
 
 def action_endpoint_for_device(device_id: str) -> str:
@@ -35,7 +124,7 @@ class RosOmxActionExecutor:
         self._device_id = device_id
         self._timeout_s = timeout_s
 
-    def execute(self, command: dict[str, object]) -> dict[str, Any]:
+    def execute(self, command: dict[str, object]) -> OmxExecutionEvidence:
         if command.get("omx_id") != self._device_id:
             raise RuntimeError("DEVICE_MISMATCH")
         if not self._client.wait_for_server(timeout_sec=self._timeout_s):
@@ -44,7 +133,14 @@ class RosOmxActionExecutor:
         goal.command_json = json.dumps(
             command, ensure_ascii=False, separators=(",", ":"), sort_keys=True
         )
-        sent = self._client.send_goal_async(goal)
+        tracker = OmxFeedbackTracker(command) if command.get("kind") == "load" else None
+
+        def record_feedback(message: object) -> None:
+            if tracker is None:
+                raise RuntimeError("UNEXPECTED_OMX_FEEDBACK")
+            tracker.record_json(message.feedback.event_json)  # type: ignore[attr-defined]
+
+        sent = self._client.send_goal_async(goal, feedback_callback=record_feedback)
         self._rclpy.spin_until_future_complete(
             self._node, sent, timeout_sec=self._timeout_s
         )
@@ -69,7 +165,14 @@ class RosOmxActionExecutor:
         if not isinstance(body, dict):
             raise RuntimeError("OMX Action result must be a JSON object")
         body["success"] = True
-        return body
+        if tracker is not None:
+            tracker.require_complete()
+        return OmxExecutionEvidence(body, tracker.events if tracker is not None else ())
 
 
-__all__ = ["RosOmxActionExecutor", "action_endpoint_for_device"]
+__all__ = [
+    "OmxExecutionEvidence",
+    "OmxFeedbackTracker",
+    "RosOmxActionExecutor",
+    "action_endpoint_for_device",
+]

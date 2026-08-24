@@ -379,6 +379,8 @@ def test_a_load_step_commands_the_prepared_omx_before_recording_cargo() -> None:
 
     assert report.succeeded == (100, 4)
     assert [command["kind"] for command in simulator.commands] == ["prepare", "load"]
+    assert simulator.commands[1]["handover_group_id"] == "group-1"
+    assert simulator.commands[1]["pinky_id"] == "PK_01"
 
 
 def test_a_frozen_load_uses_its_zone_workcell_instead_of_the_job_default() -> None:
