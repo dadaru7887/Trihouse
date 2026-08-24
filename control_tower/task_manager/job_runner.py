@@ -463,13 +463,14 @@ def _step_device(step: JobStepDetail, assignment: object) -> str | None:
     """Name the mobile executor so the Gateway can reject a mismatched robot.
 
     Arm and worker steps are left unnamed: the Gateway resolves those from the
-    Job's own assignment, and sending a robot ID for them would be rejected as
-    a device mismatch.
+    Job's own assignment. This must remain true after a Gateway reload has
+    populated ``step.assigned_device_id`` for an arm; otherwise the replay's
+    idempotency fingerprint differs from its original unnamed request.
     """
-    if step.assigned_device_id is not None:
-        return step.assigned_device_id
     if step.executor_type != "mobile":
         return None
+    if step.assigned_device_id is not None:
+        return step.assigned_device_id
     if isinstance(assignment, dict):
         mobile = assignment.get("mobile_id")
         if isinstance(mobile, str) and mobile:

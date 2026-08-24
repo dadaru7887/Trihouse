@@ -405,6 +405,34 @@ def test_a_non_mobile_step_is_dispatched_without_a_robot_identity() -> None:
     assert request.assigned_device_id is None
 
 
+def test_an_arm_repoll_keeps_the_original_unset_dispatch_identity() -> None:
+    """A persisted OMX assignment must not change an arm dispatch's retry fingerprint."""
+    job = _order_job(
+        1,
+        state="assigned",
+        assignment=_assignment(
+            "PK_01", "OMX_01", "PACKING-01-DOCK-01", "TRIHOUSE-TEST-01-CHG-01"
+        ),
+        steps=(
+            JobStepDetail(
+                100,
+                10,
+                "prepare",
+                "arm",
+                "pending",
+                assigned_device_id="OMX_01",
+                input={"dependencies": [], "omx_id": "OMX_01"},
+            ),
+        ),
+    )
+    gateway = FakeGateway([job])
+
+    JobRunner(gateway).run_once()
+
+    _, request = gateway.dispatches[0]
+    assert request.assigned_device_id is None
+
+
 def test_one_job_failing_does_not_stop_the_rest_of_the_cycle() -> None:
     """A polling daemon must survive a single conflicting job."""
     gateway = FakeGateway([_order_job(1)])
