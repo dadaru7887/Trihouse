@@ -79,6 +79,7 @@ def known_product_codes(*, zone: str | None = None) -> tuple[str, ...]:
 # 입고(store, 바구니→선반) 전용 카탈로그. 냉동만두 입고(2026-08-23, 사용자
 # 확인)를 시작으로 하나씩 채워진다 — 출고용 체크포인트(_CATALOG)를 방향만
 # 바꿔서 쓰면 안 된다(집는 것과 내려놓는 것은 다른 모션이라 학습이 따로 필요).
+# 냉장 커피 입고(2026-08-24, 사용자 확인) 추가.
 # 아직 없는 product_code는 store.py가 UnknownStorePolicyError로 fail-closed
 # 하고, --policy-repo-id-override로만(배관 테스트 목적 한정, 의미상 올바른
 # 동작 아님) 우회 가능하다.
@@ -89,6 +90,11 @@ _STORE_CATALOG: dict[str, PolicyEntry] = {
             "dumpling", "냉동만두",
             "2usang/act_trihouse-dumpling-inbound", "2usang/trihouse-dumpling-inbound",
             "frozen",
+        ),
+        PolicyEntry(
+            "coffee", "커피",
+            "2usang/act_trihouse-coffee-inbound", "2usang/trihouse-coffee-inbound",
+            "chilled",
         ),
     )
 }

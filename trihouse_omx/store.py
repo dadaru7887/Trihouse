@@ -7,12 +7,13 @@ mock, 1·2번은 로컬 스텁). 차이는 두 가지뿐이다:
 
   1. 에피소드가 끝난 뒤 grasp_check.check_grasp 대신 grasp_check.check_release로
      "물체를 실제로 놓았는지"를 본다 (파지 확인의 반대 방향).
-  2. policy_catalog.lookup_store를 쓰는데, 컨텍스트 문서 9번 항목대로 입고용
-     체크포인트가 아직 하나도 학습되지 않아 이 카탈로그는 비어 있다. 그래서 기본
-     실행은 UnknownStorePolicyError로 fail-closed한다 — 출고 체크포인트를 방향만
-     바꿔 쓰면 안 되기 때문. 코드 경로(연결 유지·정책 스왑·추론 루프)만 확인하고
-     싶으면 --policy-repo-id-override로 임의 체크포인트(예: 출고용)를 강제 지정할
-     수 있는데, 이건 배관 테스트일 뿐 실제 놓는 동작으로서 의미는 없다.
+  2. policy_catalog.lookup_store를 쓰는데, 입고용 체크포인트는 냉동만두
+     (2026-08-23)와 냉장 커피(2026-08-24)만 학습돼 있고 나머지 product_code는
+     아직 없다. 카탈로그에 없는 product_code는 기본 실행이 UnknownStorePolicyError로
+     fail-closed한다 — 출고 체크포인트를 방향만 바꿔 쓰면 안 되기 때문. 코드
+     경로(연결 유지·정책 스왑·추론 루프)만 확인하고 싶으면 --policy-repo-id-override로
+     임의 체크포인트(예: 출고용)를 강제 지정할 수 있는데, 이건 배관 테스트일 뿐
+     실제 놓는 동작으로서 의미는 없다.
 
 실행 전: source ~/venv/il/bin/activate
 실행 예 (입고 정책이 생기기 전, 배관 테스트용):
@@ -399,8 +400,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--zone", required=True, choices=KNOWN_ZONES,
         help="창고 구역. product_code가 이 구역 소속이 아니면 policy_catalog가 fail-closed로 "
-             "거절한다. 입고(place) 정책은 zone과 무관하게 아직 하나도 없어(policy_catalog.py) "
-             "--policy-repo-id-override 없이는 항상 UnknownStorePolicyError로 끝난다.",
+             "거절한다. 입고(place) 정책은 아직 dumpling(frozen)/coffee(chilled)만 있어서 "
+             "(policy_catalog.py) 그 외 product_code는 --policy-repo-id-override 없이는 "
+             "항상 UnknownStorePolicyError로 끝난다.",
     )
     parser.add_argument(
         "--front-cam", default=None,

@@ -139,6 +139,16 @@ _FROZEN_STORE_QUEUE: tuple[MockOrder, ...] = (
     ),
 )
 
+_CHILLED_STORE_QUEUE: tuple[MockOrder, ...] = (
+    MockOrder(
+        order_id="mock-store-chilled-1",
+        job_step_id=2101,
+        assignment_revision=1,
+        items=(MockOrderItem(1, "coffee", 1),),
+        pinky=MockPinkyArrival(already_arrived=True),
+    ),
+)
+
 _CHILLED_DELIVER_QUEUE: tuple[MockOrder, ...] = (
     MockOrder(
         order_id="mock-deliver-chilled-1",
@@ -173,10 +183,10 @@ _AMBIENT_DELIVER_QUEUE: tuple[MockOrder, ...] = (
     ),
 )
 
-# 입고(place, 바구니→선반)는 zone과 무관하게 아직 정책이 하나도 없다
-# (policy_catalog.py의 _STORE_CATALOG가 통째로 비어있음) — 그래서
-# 냉장/상온 입고 기본 큐는 계속 비워 둔다. --order로 직접 넣으면
-# policy_catalog가 UnknownStorePolicyError로 fail-closed 잡아준다.
+# 입고(place, 바구니→선반) 정책은 dumpling(frozen)/coffee(chilled)만 학습돼
+# 있다(policy_catalog.py의 _STORE_CATALOG). 상온 입고는 아직 하나도 없어 기본
+# 큐를 계속 비워 둔다. --order로 직접 넣으면 policy_catalog가
+# UnknownStorePolicyError로 fail-closed 잡아준다.
 _DELIVER_QUEUES: dict[str, tuple[MockOrder, ...]] = {
     "frozen": _FROZEN_DELIVER_QUEUE,
     "chilled": _CHILLED_DELIVER_QUEUE,
@@ -184,7 +194,7 @@ _DELIVER_QUEUES: dict[str, tuple[MockOrder, ...]] = {
 }
 _STORE_QUEUES: dict[str, tuple[MockOrder, ...]] = {
     "frozen": _FROZEN_STORE_QUEUE,
-    "chilled": (),
+    "chilled": _CHILLED_STORE_QUEUE,
     "ambient": (),
 }
 
