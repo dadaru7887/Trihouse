@@ -16,6 +16,8 @@
 04_training/         오프라인 학습 스크립트 (SAC+TGRPO/Dr.GRPO/DAPO)
 05_docs/             변천사(EVOLUTION.md), 알고리즘 현황(ALGORITHMS.md), 실험 제안(EXPERIMENT_DESIGN.md), 시나리오 가이드(SCENARIO_DESIGN.md)
 06_world_model/      학습된 world-model 앙상블 + VLM-world-model 데모 (전부 미검증, 코드만 준비됨)
+07_distillation/      HighLevelPolicy(고수준 skill 선택) distillation — soft teacher 학습 +
+                       ablation + 배포용 uncertainty fallback 게이팅 (2026-08-25, 정확도 40.2%)
 train.sh             CLI 진입점 (학습 + VLM 비교 둘 다 여기서)
 ```
 
@@ -55,3 +57,4 @@ train.sh             CLI 진입점 (학습 + VLM 비교 둘 다 여기서)
 - 다음에 시도해볼 ablation 아이디어 8개 + 우선순위: `05_docs/EXPERIMENT_DESIGN.md`
 - 데이터 수집 시나리오(스토리형 8개 + 운행 체크리스트 + 비상상황 우선순위): `05_docs/SCENARIO_DESIGN.md`
 - world-model 로드맵 데모 코드(구조만 확인됨, 미검증): `06_world_model/`
+- HighLevelPolicy distillation(soft teacher 학습, ablation, 배포용 fallback 게이팅): `07_distillation/README.md`
