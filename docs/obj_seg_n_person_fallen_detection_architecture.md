@@ -295,3 +295,196 @@ code/eval_end_to_end.py     → from dataloader.roboflow_labels import ...
 - [x] 원본이 보고한 수치와 그 한계 조건을 구분
 - [ ] 배달본을 실제로 실행해 수치 재현 (23MB 가중치 + Roboflow export 필요)
 - [ ] `EMERGENCY_CANDIDATE`의 관제·DB 경로 확인
+
+---
+
+# 11. 판정 기준 전체 정리 (input → output)
+
+> 2026-08-29 코드 기준. 시간축 숫자는 추론이 아니라 실제 `FallMonitor`를 15 FPS로 돌려서 뽑았다.
+
+## 11-0. 전체 흐름 한 장
+
+```text
+INPUT: BGR 프레임 (RTSP / mp4 / 카메라)
+   │
+   ├─[1] YOLOE-seg 추론 ─────────────────► Detection(class_id, confidence, mask, track_id) 목록
+   │        conf≥0.25, imgsz=640, mask prob>0.5, track(persist=True)
+   │
+   ├─[2] 사람만 선별 ────────────────────► track_id 별 사람 목록
+   │        tracking ON  → 전원, track_id 별로 독립 상태
+   │        tracking OFF → 최고 confidence 1명 (신원이 없으므로)
+   │
+   ├─[3] 사람마다 자세·움직임 측정 ──────► (fallen?, low_motion?)
+   │        규칙  : 픽셀 종횡비 ≥ 0.9
+   │        분류기: P(fallen) ≥ 0.5   ← 켰을 때만
+   │        움직임: |Δcentroid|/대각선 ≤ 0.015  (항상 규칙)
+   │
+   ├─[4] 사람마다 시간축 상태 전이 ──────► NORMAL … EMERGENCY_CANDIDATE
+   │        1.0s 유지 → FALLEN, 정지 5.0s → EMERGENCY_CANDIDATE
+   │
+   └─[5] 프레임 결론 = 가장 나쁜 상태 ───► FrameVerdict(state, confidence, track_id, events)
+            │
+            ├─ 스로틀(상태 변화 즉시 / 무변화 0.3s 주기)
+            │     └─► POST /internal/v1/vision/person-detections  → 로봇 안전 감속
+            └─ 낙상 이벤트(스로틀 없음)
+                  └─► WORKER_FALL_CONFIRMATION_REQUEST  → 관제 확인 요청
+```
+
+## 11-1. [1] 사람·장애물을 무엇으로 가르는가
+
+**가르는 주체는 모델이다.** 저장소 쪽에는 사람/장애물을 나누는 기하 규칙이 없다. YOLOE-seg가 `nc=2`로 학습됐고, 코드가 하는 일은 클래스 번호를 이름에 대응시키는 것뿐이다.
+
+| 항목 | 값 | 근거 |
+| --- | --- | --- |
+| 클래스 | `0 = obstacle`, `1 = person` | `data.yaml: names: ['obstacle','person']` |
+| `person_class_id` | `1` (설정값, 상수 아님) | [detector.py:DetectorConfig](../model/perception/segmentation/runtime/detector.py) |
+| confidence 하한 | `0.25` | [realtime.yaml](../model/worker/configs/realtime.yaml) |
+| 입력 크기 | `640` | 같음 |
+| mask 이진화 | 확률 `> 0.5` | `detections_from_result(mask_threshold=0.5)` |
+| tracking | `track(persist=True)` | `persist` 없으면 매 프레임 번호를 다시 매겨 신원이 안 됨 |
+
+**출력 1건**: `Detection(class_id, confidence, mask, track_id)`. `mask`는 프레임 크기의 bool 배열, `track_id`는 tracking이 꺼져 있으면 빈 문자열.
+
+검출 0건과 추론 실패는 다르다 — 앞은 빈 목록, 뒤는 예외다.
+
+**실측된 한계**: 배경 물체가 사람으로 잡히면 이후 단계는 그대로 속는다. `re_3` t=74s에서 벽의 금속 체인이 종횡비 3.54로 잡혔고 confidence(≥0.25)로 걸러지지 않았다.
+
+## 11-2. [3] 사람이 "쓰러진 자세"인지 무엇으로 판단하는가
+
+두 가지 모드가 있고, **기본은 규칙**이다.
+
+### 모드 A — 종횡비 규칙 (기본)
+
+```
+fallen ⟺ (bbox 가로 화소수) / (bbox 세로 화소수) ≥ 0.9      ← 픽셀 좌표
+```
+
+`0.9`는 무낙상 영상 두 편에서 오탐 0을 확인한 하한이다. **0.7까지 내리면 `re_2`에서 오탐이 났다 — 이 밑으로 내리지 않는다.**
+
+한계가 실측으로 기록돼 있다: 비율이 임계값 밑이면 애초에 의심 단계에 들어가지 못하고, **이 recall 구멍은 시간축 로직으로 못 메운다.** 2차 신호가 있어야 한다 — 그것이 모드 B다.
+
+### 모드 B — 학습된 분류기 (`FALLEN_CLASSIFIER_*` 설정 시)
+
+```
+fallen ⟺ P(fallen | 5개 피처) ≥ threshold
+```
+
+`threshold`는 0.5로 덮어쓰지 않고 학습 때 k-fold로 고른 값을 번들에서 읽는다(이 번들은 0.5).
+
+구조: `StandardScaler` → `LogisticRegression`. **피처는 전부 정규화(0..1) 좌표**에서 잰다 — 학습이 `masks.xyn` 위에서 됐기 때문이며, 픽셀 좌표를 넣으면 계수가 가장 큰 신호가 조용히 틀어진다(§6-4).
+
+| # | 피처 | 정의 | 계수 | scaler 평균 |
+| --- | --- | --- | --- | --- |
+| 1 | `aspect_ratio` | 정규화 bbox 가로/세로 | **+5.273** | 0.7195 |
+| 2 | `pca_angle` | mask 화소 공분산의 최대 고유벡터 각도 `[0,180)` — 누운 **방향** | −0.894 | 90.01 |
+| 3 | `centroid_y` | mask 중심의 세로 위치 (0=위, 1=아래) | +0.543 | 0.4578 |
+| 4 | `contact_person_iou` | 다른 **사람**과의 최대 bbox IoU | +0.335 | 0.0200 |
+| 5 | `contact_obstacle_iou` | **장애물**과의 최대 bbox IoU | **0.000** | 0.0000 |
+
+- 자기 자신(IoU ≥ 0.95)은 접촉 상대에서 제외한다.
+- 접촉 피처는 "기대는 낙상"용이다. 171307 실측에서 기대기 전 0.000 → 기댄 뒤 0.05~0.13으로 올라 GT와 일치했고, 같은 구간에서 종횡비는 거의 무신호였다.
+- **⚠ 5번은 이 번들에서 죽어 있다.** 계수가 정확히 0이고 scaler 평균도 0 — 학습 데이터에 사람이 장애물과 겹친 인스턴스가 없었다. 코드는 계산해 넘기지만 이 번들은 쓰지 않는다.
+
+### 움직임 — 어느 모드든 규칙
+
+```
+low_motion ⟺ |centroid(t) − centroid(t−1)| / 프레임 대각선 ≤ 0.015
+```
+
+- centroid는 bbox 중심이 아니라 **mask 화소 평균**이다. bbox 중심을 쓰면 팔다리 하나가 튀어나올 때 중심이 크게 흔들려 정지를 움직임으로 오독한다.
+- 사람이 (다시) 나타난 첫 프레임은 `motion = 0` → `low_motion = True`.
+- 분류기를 켜도 움직임은 계속 규칙이 맡는다. 분류기는 한 프레임만 보므로 시간축 신호를 낼 수 없다.
+- **`motion_threshold = 0.015`는 sweep 검증되지 않은 값이다.** 재보정이 미착수 상태다(§8).
+
+## 11-3. [4] 비상까지 시간축: 몇 초, 몇 프레임
+
+전이는 **시간 기준**이고 프레임은 표본일 뿐이다. 아래 프레임 번호는 15 FPS로 사람이 끊김 없이 잡히는 경우다. 한 프레임에 전이는 **최대 한 칸**이므로, FPS가 아무리 높아도 비상까지 최소 4프레임이 필요하다.
+
+### 임계값
+
+| 이름 | 값 | 뜻 |
+| --- | --- | --- |
+| `fall_confirm_seconds` | 1.0 s | 이만큼 쓰러진 자세가 유지돼야 `FALLEN` |
+| `immobile_seconds` | 5.0 s | **정지가 시작된 시점**부터 이만큼 지나야 비상 |
+| `recovery_confirm_seconds` | 1.0 s | 이만큼 연속 "안 넘어짐"이어야 `NORMAL` 복귀 |
+| `track_timeout_seconds` | 3.0 s | 이만큼 안 보이면 그 사람 상태를 버림 |
+
+### 정상 경로 (계속 쓰러져 정지, 15 FPS)
+
+| 프레임 | 시각 | 전이 | 조건 |
+| --- | --- | --- | --- |
+| 0 | 0.000 s | `NORMAL → FALL_SUSPECTED` | 첫 "쓰러진 자세" 프레임 |
+| 15 | 1.000 s | `FALL_SUSPECTED → FALLEN` | 자세가 `fall_confirm_seconds` 유지 |
+| 16 | 1.067 s | `FALLEN → IMMOBILE` | `low_motion` 인 첫 프레임 → **정지 시계 시작** |
+| 91 | 6.067 s | `IMMOBILE → EMERGENCY_CANDIDATE` | 정지 시작 + `immobile_seconds` |
+
+**→ 첫 낙상 프레임부터 관제 알람까지 6.067초 / 92프레임.**
+
+### 알람이 안 뜨는 경우 (설계 의도)
+
+| 상황 | 결과 |
+| --- | --- |
+| 쓰러졌지만 계속 움직임(버둥거림) | `FALLEN`에서 멈춤. `IMMOBILE`에 못 가므로 비상 없음 |
+| 짧은 낙상 (정지 5초 미만) | `IMMOBILE`까지 갔다가 회복. 비상 없음 |
+| 종횡비가 0.9 미만 | `FALL_SUSPECTED`조차 안 됨 (규칙 모드의 recall 구멍) |
+
+### 회복
+
+| 현재 상태 | "안 넘어짐" 판정이 나오면 |
+| --- | --- |
+| `NORMAL` / `FALL_SUSPECTED` | **즉시** `NORMAL`. 아직 안전 증거가 쌓이지 않았다 |
+| `FALLEN` / `IMMOBILE` / `EMERGENCY_CANDIDATE` | `recovery_confirm_seconds`(1.0s) **연속**이어야 `NORMAL`. 노이즈 한 프레임이 증거를 지우지 못하게 하는 디바운스 |
+
+**미세 움직임 처리**: 숨쉬기 때문에 `FALLEN ↔ IMMOBILE`이 계속 뒤집혀도 정지 시계(`immobile_since`)는 리셋되지 않는다. 리셋은 `NORMAL` 복귀에서만 일어난다. 이 장치가 없으면 14초를 쓰러져 있어도 5초 연속을 한 번도 못 채워 알람이 영영 안 뜬다.
+
+**탐지가 끊긴 프레임**: 판정은 유지하고 회복 시계만 멈춘다. 사람이 화면 밖에 있던 시간이 "정상이었다"는 증거가 되면 안 된다. `track_timeout_seconds`(3.0s)를 넘기면 그 사람 몫 상태를 통째로 버린다.
+
+**ReID가 없다**: 3초 넘게 끊긴 뒤 같은 사람이 돌아오면 새 `track_id`를 받아 상태머신이 처음부터 시작한다. 구조적 한계로 인정한 부분이다.
+
+### 이벤트 발행
+
+`EMERGENCY_CANDIDATE` 진입 시 **track마다 한 번만** 발행한다(`event_sent`). `NORMAL`로 완전히 복귀해야 다시 발행될 수 있다.
+
+## 11-4. [5] OUTPUT: 무엇이 어디로 나가는가
+
+프레임 하나의 결론은 **그 화면에서 가장 나쁜 상태**다. 앞에 선 행인이 뒤에 누운 사람을 가려서는 안 된다.
+
+```
+심각도: NO_DETECTION < NORMAL < FALL_SUSPECTED < FALLEN < IMMOBILE < EMERGENCY_CANDIDATE
+```
+
+### 출력 1 — 사람 관측 (로봇 안전 감속용)
+
+```json
+{"camera_id": "CAM-PK-01", "confidence": 0.91, "pose_class": "IMMOBILE",
+ "track_id": "7", "ttl_ms": 600, "observed_at_ms": 1756...}
+```
+
+- **전송 규칙**: 상태가 바뀌면 즉시. 안 바뀌면 `ttl_ms/2` = **0.3초 주기(≈3.3 Hz)**. 15 Hz를 그대로 흘리면 TCP 8788이 관측으로 차서 주행 명령이 뒤로 밀린다.
+- `NO_DETECTION`은 **보내지 않는다.** 안전 gate는 TTL 만료로 잊는 것이 계약이고 confidence 0을 받지 않는다.
+- 도착지: `POST /internal/v1/vision/person-detections` → `config/cameras.yaml`의 `attached_to`가 정한 로봇으로 **중계**. 5080은 로봇에 직접 꽂히지 않는다.
+
+### 출력 2 — 낙상 확인 요청 (관제용)
+
+```json
+{"type": "WORKER_FALL_CONFIRMATION_REQUEST", "state": "EMERGENCY_CANDIDATE",
+ "track_id": "7", "timestamp": 1756...}
+```
+
+스로틀을 타지 않고 항상 나간다. 사람마다 따로 나므로 한 프레임에 둘 이상일 수 있다.
+
+**이 이벤트는 "넘어졌다"는 결론이 아니라 사람이 재확인하는 절차의 입구다.**
+
+### ⚠ 기록되지 않는다
+
+`pose_class`는 pydantic 필드로만 존재하고 이 값을 쓰는 SQL이 없다. `EMERGENCY_CANDIDATE`는 로봇을 감속시키고 사라지며, 나중에 "그날 몇 시에 누가 쓰러졌나"를 되짚을 기록이 남지 않는다(§5-3).
+
+## 11-5. 기본값 요약
+
+| 설정 | 기본값 | 켜는 방법 |
+| --- | --- | --- |
+| tracking | **ON** | `realtime.yaml: inference.tracking` / `live_runtime`은 코드에서 `tracking=True` |
+| 낙상 분류기 | **OFF** (종횡비 규칙) | `FALLEN_CLASSIFIER_BUNDLE` + `FALLEN_CLASSIFIER_SHA256` 둘 다 |
+| 파인튜닝 seg 가중치 | 미배포 | `SEGMENTATION_WEIGHTS_FILE` (§9-2 5번, 미완) |
+
+환경변수를 **하나만** 채우면 런타임이 조용히 꺼지지 않고 기동을 거부한다.
