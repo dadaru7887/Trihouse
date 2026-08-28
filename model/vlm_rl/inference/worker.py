@@ -36,6 +36,15 @@ class Policy(Protocol):
     def select(self, state: tuple[float, ...]) -> tuple[int, tuple[float, float, float]]: ...
 
 
+class SkillSelector(Protocol):
+    """Distilled selector that may only re-rank already-bounded candidates."""
+
+    selector_name: str
+    ensemble_sha256: str
+
+    def select_skill_or_fallback(self, state: tuple[float, ...]) -> Any: ...
+
+
 class ProposalClient(Protocol):
     def create(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
@@ -73,11 +82,13 @@ def _validated_worst_observation(vlm_result: dict[str, Any]) -> dict[str, Any] |
 
 class RecoveryInferenceWorker:
     def __init__(self, vlm: Vlm, policy: Policy, proposal_client: ProposalClient,
-                 *, safety_gate_enabled: bool = True):
+                 *, safety_gate_enabled: bool = True,
+                 skill_selector: SkillSelector | None = None):
         self.vlm = vlm
         self.policy = policy
         self.proposal_client = proposal_client
         self.safety_gate_enabled = safety_gate_enabled
+        self.skill_selector = skill_selector
 
     def process(
         self,
@@ -153,9 +164,30 @@ class RecoveryInferenceWorker:
             if not ranked:
                 return None
             _, skill, coord, action = min(ranked, key=lambda item: item[0])
+            skill_selection, learned_skill = self._selector_evidence(state.to_vector())
+            if learned_skill is not None:
+                preferred = [item for item in ranked if item[1] == learned_skill]
+                if preferred:
+                    _, skill, coord, action = min(preferred, key=lambda item: item[0])
+                    skill_selection["source"] = "distilled_ensemble"
+                    skill_selection["use_learned"] = True
+                else:
+                    # The learned skill stays on the record for audit, but it was not
+                    # applied: the motion boundary discarded every candidate carrying it.
+                    skill_selection["reason"] = (
+                        f"{skill_selection['reason']}; no bounded candidate for "
+                        f"{SKILL_NAMES[learned_skill]}"
+                    )
         else:
             skill, coord = self.policy.select(state.to_vector())
             action = canonicalize_recovery_action(skill, coord, pose)
+            skill_selection, learned_skill = self._selector_evidence(state.to_vector())
+            if learned_skill is not None:
+                # A single-select policy offers no candidate group to re-rank, so the
+                # distilled verdict is recorded without being applied.
+                skill_selection["reason"] = (
+                    f"{skill_selection['reason']}; no candidate group to re-rank"
+                )
         named_state = asdict(state)
         named_state.pop("state_schema_id")
         proposal = {
@@ -178,10 +210,44 @@ class RecoveryInferenceWorker:
             "selected_skill_name": SKILL_NAMES[skill],
             "selected_coord": list(action.coord),
             "candidate_evidence": candidate_evidence,
+            "skill_selection": skill_selection,
             "safety_gate_enabled": self.safety_gate_enabled,
         }
         response = self.proposal_client.create(proposal)
         return {**response, "_local_proposal": proposal}
+
+    def _selector_evidence(
+        self, state: tuple[float, ...]
+    ) -> tuple[dict[str, Any], int | None]:
+        """Consult the distilled selector and report the verdict as not yet applied.
+
+        Returns the evidence plus the skill the gate would like to use. Only the caller
+        that actually re-ranks bounded candidates may mark the evidence as applied, so
+        an unusable verdict can never be recorded as one that steered the robot.
+        """
+        if self.skill_selector is None:
+            return {
+                "source": "goal_distance",
+                "use_learned": False,
+                "reason": "distilled selector is not configured",
+            }, None
+        decision = self.skill_selector.select_skill_or_fallback(state)
+        proposed = decision.skill if decision.use_learned else None
+        evidence: dict[str, Any] = {
+            "source": "goal_distance_fallback",
+            "use_learned": False,
+            "entropy": float(decision.entropy),
+            "unanimous": bool(decision.unanimous),
+            "mean_probs": [float(value) for value in decision.mean_probs],
+            "reason": decision.reason,
+            "learned_skill_id": proposed,
+            "learned_skill_name": decision.skill_name if proposed is not None else None,
+            "selector_lineage": {
+                "model": self.skill_selector.selector_name,
+                "ensemble_sha256": self.skill_selector.ensemble_sha256,
+            },
+        }
+        return evidence, proposed
 
     def observe_state(
         self,

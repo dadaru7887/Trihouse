@@ -425,6 +425,10 @@ export VISION_RTSP_URL='rtsp://<pc1-lan-ip>:8554/pinky/CAM-PK-01'
 export SEGMENTATION_WEIGHTS='<approved-segmentation-weights>'
 export RECOVERY_POLICY_CHECKPOINT='<approved-recovery-policy>'
 export RECOVERY_POLICY_SHA256='<approved-policy-sha256>'
+# 선택: distilled skill selector. 둘 다 설정해야 켜지고, 하나만 설정하면 기동을 거부한다.
+# 비워두면 goal-distance 후보 선택만 사용한다(distillation 도입 전과 동일).
+# export RECOVERY_SELECTOR_ENSEMBLE='<approved-selector-ensemble>'
+# export RECOVERY_SELECTOR_SHA256='<approved-selector-sha256>'
 python3 -m model.vlm_rl.inference.runtime --runtime-mode physical
 ```
 

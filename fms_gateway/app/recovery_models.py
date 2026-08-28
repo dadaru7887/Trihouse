@@ -120,6 +120,56 @@ class RecoveryPerceptionEvidence(BaseModel):
         return self
 
 
+class RecoverySkillSelection(BaseModel):
+    """How the winning recovery skill was chosen among boundary-safe candidates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: Literal["distilled_ensemble", "goal_distance_fallback", "goal_distance"]
+    use_learned: bool
+    reason: str
+    entropy: float | None = None
+    unanimous: bool | None = None
+    mean_probs: list[float] | None = None
+    learned_skill_id: int | None = None
+    learned_skill_name: str | None = None
+    selector_lineage: dict[str, str] | None = None
+
+    @field_validator("entropy")
+    @classmethod
+    def finite_entropy(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("selector entropy must be finite")
+        return value
+
+    @field_validator("mean_probs")
+    @classmethod
+    def finite_mean_probs(cls, values: list[float] | None) -> list[float] | None:
+        if values is None:
+            return values
+        if len(values) != len(SKILL_NAMES):
+            raise ValueError("selector mean_probs must cover the frozen five-skill ontology")
+        if not all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in values):
+            raise ValueError("selector mean_probs must be finite probabilities")
+        return values
+
+    @model_validator(mode="after")
+    def learned_skill_matches_the_frozen_ontology(self):
+        if self.learned_skill_id is None:
+            if self.use_learned:
+                raise ValueError("a trusted selection must name the learned skill")
+            if self.learned_skill_name is not None:
+                raise ValueError("learned_skill_name requires learned_skill_id")
+            return self
+        if isinstance(self.learned_skill_id, bool) or not 0 <= self.learned_skill_id < len(SKILL_NAMES):
+            raise ValueError("learned skill is outside the frozen ontology")
+        if self.learned_skill_name != SKILL_NAMES[self.learned_skill_id]:
+            raise ValueError("learned_skill_name does not match learned_skill_id")
+        if self.use_learned and self.source != "distilled_ensemble":
+            raise ValueError("a trusted selection must be sourced from the distilled ensemble")
+        return self
+
+
 class RecoveryProposalCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -139,6 +189,7 @@ class RecoveryProposalCreate(BaseModel):
     selected_skill_name: str
     selected_coord: tuple[float, float, float]
     candidate_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    skill_selection: RecoverySkillSelection | None = None
     safety_gate_enabled: bool
 
     @model_validator(mode="after")

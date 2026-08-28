@@ -17,6 +17,7 @@ from model.worker.person.fall_monitor import FallMonitor, MonitorConfig
 from model.worker.person.posture import PostureConfig, PostureEstimator
 
 from .completion_runtime import build_completion
+from .distilled_selector import build_selector_from_env
 from .navigation_context import GatewayNavigationContextSource
 from .policy_runtime import ApprovedPolicyRuntime
 from .proposal_client import GatewayProposalClient
@@ -135,11 +136,14 @@ def run_live_inference(*, safety_gate_enabled: bool) -> None:
         device=os.environ.get("VLM_RL_DEVICE", "cuda"),
     )
     proposal_client = GatewayProposalClient(gateway_url)
+    # Optional: absent selector environment keeps the pre-distillation ranking.
+    skill_selector = build_selector_from_env(os.environ)
     worker = RecoveryInferenceWorker(
         vlm,
         policy,
         proposal_client,
         safety_gate_enabled=safety_gate_enabled,
+        skill_selector=skill_selector,
     )
     context_source = GatewayNavigationContextSource(gateway_url, device_id)
     camera_id = rtsp_url.rstrip("/").rsplit("/", 1)[-1]

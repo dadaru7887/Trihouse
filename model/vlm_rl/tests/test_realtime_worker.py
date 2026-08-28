@@ -136,3 +136,129 @@ def test_navigation_source_marks_no_progress_as_stuck_without_robot_self_judgeme
     second = source.get()
     assert second.stuck_seconds == 4.5
     assert second.navigation_state == "stuck"
+
+
+class GroupPolicy(FakePolicy):
+    """Two boundary-safe candidates: REROUTE_LEFT is the goal-distance winner."""
+
+    def select_group(self, state, *, k, m):
+        return [(1, (0.1, 0.1, 0.0), -0.2), (2, (0.1, -0.1, 0.0), -0.2)] * 3
+
+
+class FakeSelector:
+    selector_name = "high-level-distilled-ensemble"
+    ensemble_sha256 = "e" * 64
+
+    def __init__(self, decision):
+        self.decision = decision
+        self.calls = []
+
+    def select_skill_or_fallback(self, state):
+        self.calls.append(state)
+        return self.decision
+
+
+def decision(**overrides):
+    from model.vlm_rl.inference.distilled_selector import SelectorDecision
+
+    values = {
+        "use_learned": True, "skill": 2, "skill_name": "REROUTE_RIGHT",
+        "mean_probs": (0.05, 0.15, 0.7, 0.05, 0.05), "entropy": 1.02,
+        "unanimous": True, "reason": "entropy=1.02<=1.5, unanimous=True",
+    }
+    values.update(overrides)
+    return SelectorDecision(**values)
+
+
+def test_trusted_selector_overrides_the_goal_distance_winner() -> None:
+    client = RecordingProposalClient()
+    selector = FakeSelector(decision())
+    worker = RecoveryInferenceWorker(FakeVlm(), GroupPolicy(), client, skill_selector=selector)
+
+    worker.process(object(), detections(), context())
+
+    proposal = client.payloads[0]
+    assert proposal["selected_skill_id"] == 2
+    assert proposal["selected_skill_name"] == "REROUTE_RIGHT"
+    assert proposal["skill_selection"]["source"] == "distilled_ensemble"
+    assert proposal["skill_selection"]["entropy"] == 1.02
+    assert proposal["skill_selection"]["unanimous"] is True
+    assert proposal["skill_selection"]["selector_lineage"]["ensemble_sha256"] == "e" * 64
+    assert selector.calls == [tuple(proposal["state"].values())]
+
+
+def test_uncertain_selector_keeps_the_existing_goal_distance_winner() -> None:
+    client = RecordingProposalClient()
+    selector = FakeSelector(decision(use_learned=False, skill=None, skill_name=None,
+                                     entropy=1.58, unanimous=False, reason="uncertain"))
+    worker = RecoveryInferenceWorker(FakeVlm(), GroupPolicy(), client, skill_selector=selector)
+
+    worker.process(object(), detections(), context())
+
+    proposal = client.payloads[0]
+    assert proposal["selected_skill_id"] == 1
+    assert proposal["skill_selection"]["source"] == "goal_distance_fallback"
+    assert proposal["skill_selection"]["entropy"] == 1.58
+
+
+def test_selector_never_revives_a_skill_that_failed_the_motion_boundary() -> None:
+    client = RecordingProposalClient()
+    # BACKUP is confidently selected but was never sampled, so no bounded candidate exists.
+    selector = FakeSelector(decision(skill=0, skill_name="BACKUP"))
+    worker = RecoveryInferenceWorker(FakeVlm(), GroupPolicy(), client, skill_selector=selector)
+
+    worker.process(object(), detections(), context())
+
+    proposal = client.payloads[0]
+    assert proposal["selected_skill_id"] == 1
+    assert proposal["skill_selection"]["source"] == "goal_distance_fallback"
+    assert "no bounded candidate" in proposal["skill_selection"]["reason"]
+
+
+def test_worker_without_a_selector_reports_the_unchanged_goal_distance_source() -> None:
+    client = RecordingProposalClient()
+    worker = RecoveryInferenceWorker(FakeVlm(), GroupPolicy(), client)
+
+    worker.process(object(), detections(), context())
+
+    proposal = client.payloads[0]
+    assert proposal["selected_skill_id"] == 1
+    assert proposal["skill_selection"] == {
+        "source": "goal_distance", "use_learned": False,
+        "reason": "distilled selector is not configured",
+    }
+
+
+def test_unapplied_learned_skill_is_recorded_but_not_marked_as_used() -> None:
+    client = RecordingProposalClient()
+    selector = FakeSelector(decision(skill=0, skill_name="BACKUP"))
+    worker = RecoveryInferenceWorker(FakeVlm(), GroupPolicy(), client, skill_selector=selector)
+
+    worker.process(object(), detections(), context())
+
+    selection = client.payloads[0]["skill_selection"]
+    assert selection["use_learned"] is False
+    assert selection["learned_skill_name"] == "BACKUP"
+
+
+@pytest.mark.parametrize("selector_decision", [
+    decision(),
+    decision(skill=0, skill_name="BACKUP"),
+    decision(use_learned=False, skill=None, skill_name=None, entropy=1.58,
+             unanimous=False, reason="uncertain"),
+])
+def test_a_selection_marked_used_always_matches_the_skill_that_was_proposed(selector_decision) -> None:
+    client = RecordingProposalClient()
+    worker = RecoveryInferenceWorker(
+        FakeVlm(), GroupPolicy(), client, skill_selector=FakeSelector(selector_decision)
+    )
+
+    worker.process(object(), detections(), context())
+
+    proposal = client.payloads[0]
+    selection = proposal["skill_selection"]
+    if selection["use_learned"]:
+        assert selection["source"] == "distilled_ensemble"
+        assert selection["learned_skill_id"] == proposal["selected_skill_id"]
+    else:
+        assert selection["source"] != "distilled_ensemble"

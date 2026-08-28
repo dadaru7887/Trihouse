@@ -332,6 +332,11 @@ class MySqlRecoveryRepository:
     def _json_value(value: Any) -> Any:
         return json.loads(value) if isinstance(value, str) else value
 
+    @staticmethod
+    def _optional_json(value: Any) -> str | None:
+        """Store an absent selector verdict as SQL NULL, not as a JSON null."""
+        return None if value is None else json.dumps(value, separators=(",", ":"))
+
     def list_pending_commands(self) -> list[dict[str, Any]]:
         with self.database.connection() as connection:
             cursor = connection.cursor(dictionary=True)
@@ -589,9 +594,10 @@ class MySqlRecoveryRepository:
                 "INSERT INTO recovery_proposals "
                 "(proposal_id,recovery_episode_uuid,step_no,device_id,map_name,map_revision,"
                 "trigger_type,state_schema_id,named_state,perception_evidence,vlm_lineage,"
-                "policy_lineage,candidate_evidence,selected_skill_id,selected_skill_name,action_family,"
-                "selected_coord,canonical_action,safety_gate_enabled,request_sha256,proposal_sha256) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "policy_lineage,candidate_evidence,skill_selection,selected_skill_id,selected_skill_name,"
+                "action_family,selected_coord,canonical_action,safety_gate_enabled,"
+                "request_sha256,proposal_sha256) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (request["proposal_id"], request["recovery_episode_uuid"], request["step_no"],
                  request["device_id"], request["map_name"], request["map_revision"],
                  request["trigger_type"], request["state_schema_id"],
@@ -600,6 +606,7 @@ class MySqlRecoveryRepository:
                  json.dumps(vlm, separators=(",", ":")),
                  json.dumps(policy, separators=(",", ":")),
                  json.dumps(request.get("candidate_evidence", []), separators=(",", ":")),
+                 self._optional_json(request.get("skill_selection")),
                  action.skill, action.skill_name,
                  action.action_family, json.dumps(request["selected_coord"], separators=(",", ":")),
                  json.dumps(canonical_action, separators=(",", ":")), int(request["safety_gate_enabled"]),
