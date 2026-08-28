@@ -1,0 +1,40 @@
+{
+  "generated": "2026-08-24",
+  "note": "eval_end_to_end.py 실행 결과를 수기로 정리함 (retrain_on_predicted_masks.py는 별도 metrics.json을 안 남김)",
+  "classifier": {
+    "weights_file": "classifier/fallen_classifier_contact_seed42.joblib",
+    "features": ["aspect_ratio", "pca_angle", "centroid_y", "contact_person_iou", "contact_obstacle_iou"],
+    "model_type": "logreg",
+    "seed": 42,
+    "cv_threshold_selection": {
+      "method": "5-fold on train+valid (predicted masks from A weights), test never touched",
+      "threshold": 0.50,
+      "cv_precision": 0.924,
+      "cv_recall": 0.887
+    }
+  },
+  "test_set_end_to_end": {
+    "description": "eval_end_to_end.py, seg_weights=A(seed_2026), classifier=fallen_classifier_contact_seed42, test split(161 instances, fallen=37)",
+    "overall": {"precision": 0.535, "recall": 0.622, "tp": 23, "fp": 20, "fn": 14},
+    "non_occluded": {"precision": 0.875, "recall": 0.840, "tp": 21, "fp": 3, "fn": 4, "note": "162744 기준, 목표(0.7~0.8) 달성"},
+    "occluded": {"precision": 0.105, "recall": 0.167, "note": "171506 기준, 단일 프레임 분류기로는 구조적 한계로 인정하고 감(depth/시간축 정보 필요)"}
+  },
+  "baseline_comparison": {
+    "description": "원본 aug_best.pt(A 이전) vs A 파인튜닝, 둘 다 fallen_classifier_contact 사용, test split 기준",
+    "segmentation_only_person_recall": {"before_A": 0.604, "after_A": 0.881},
+    "end_to_end_recall_37_fallen_instances": {"before_A": 0.378, "after_A": 0.595},
+    "rule_only_no_classifier_recall": {"before_A": 0.162, "after_A": 0.324}
+  },
+  "raw_video_validation": {
+    "description": "video_monitor.py를 실제 raw mp4에 프레임 단위로 돌린 결과, GT는 사용자 육안 확인",
+    "162744": {"real_falls": "2개, 각 약 4초(5s 미만)", "result": "EMERGENCY_CANDIDATE 정상적으로 미발생 (짧은 낙상은 알람 안 뜨는 게 설계 의도)", "known_issue": "t=9.15s에 실제 오탐 1건 확인됨(회복 인식 지연, 원인 미해결)"},
+    "170622": {"real_falls": "확인 가능 2개(11~26s, ~62s)", "result": "t=17.60s(이론값과 소수점까지 일치), t=69.90s 정확히 감지"},
+    "171307": {"real_falls": "1개(leaning형, 21~34s)", "result": "t=29.60s 감지, 다중인원 추적+접촉 피처로 최초 성공"},
+    "162137": {"real_falls": "여러 개, 긴 낙상(16초/31초) 포함, 5초 경계 테스트 포함", "result": "긴 낙상 전부 정확히 감지, 5초 경계 테스트(9번 에피소드) 정확히 통과, 1번 에피소드는 시작~탐지소실~해제까지 전 과정 GT와 일치"}
+  },
+  "known_open_issues": [
+    "회복 인식 지연 -- 162744에서 확인된 실제 오탐 1건, 원인 미해결(mask 지연 가능성, posture_change 임계값 시도했으나 미해결)",
+    "track_id 재식별 불가 -- 긴 카메라 끊김 후 같은 사람이 새 track_id를 받으면 그 사람 몫 모니터가 새로 시작됨(ReID 없이는 구조적 한계)",
+    "시간 임계값(fall_confirm_seconds/immobile_seconds/motion_threshold) 재보정 미착수 -- 원본 repo 기본값 그대로 사용 중"
+  ]
+}
