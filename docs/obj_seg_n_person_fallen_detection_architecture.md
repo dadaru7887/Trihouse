@@ -154,11 +154,11 @@ VLM+RL은 `recovery_proposals` 등 전용 테이블이 있는데, 낙상 쪽은 
 
 | 구성 요소 | 배달본 | 운영 코드 |
 | --- | --- | --- |
-| 자세 신호 | 분류기 5개 피처 | bbox 종횡비 1개 |
-| PCA 주축 각도 | 있음 | **없음** |
-| centroid 높이 | 있음 | **없음** |
-| 접촉 IoU (사람-사람 / 사람-장애물) | 있음 | **없음** |
-| 판정기 | logreg (`joblib`) | 임계값 비교 |
+| 자세 신호 | 분류기 5개 피처 | **이식 완료** — 분류기 켜면 5개, 끄면 종횡비 1개 |
+| PCA 주축 각도 | 있음 | **이식 완료** |
+| centroid 높이 | 있음 | **이식 완료** |
+| 접촉 IoU (사람-사람 / 사람-장애물) | 있음 | **이식 완료** |
+| 판정기 | logreg (`joblib`) | **이식 완료** (기본 꺼짐, §6-4) |
 | 다중 인원 | `track(persist=True)` + track_id별 모니터 | **이식 완료** (2026-08-29, §5-1) |
 | `note_no_detection()` | 있음 | **이식 완료** (2026-08-29) |
 | 오실레이션 안전장치 | `fallen_since` | **`immobile_since`** (의미 보존, §6-2) |
@@ -184,6 +184,20 @@ VLM+RL은 `recovery_proposals` 등 전용 테이블이 있는데, 낙상 쪽은 
    **여기서는 `immobile_since`(첫 `IMMOBILE` 진입 시각)로 풀었다 — 의도적으로 원본과 다르다.** 원본 방식은 `immobile_seconds`의 의미를 "정지가 지속된 시간"에서 "넘어진 뒤 경과한 시간"으로 바꾼다. [test_person_policy.py](../model/worker/tests/test_person_policy.py)가 전자를 명시적으로 문서화하고 있었고("자세 확정 1초 → 정지 지속 5초 → 확정 후보"), 원본 방식을 그대로 넣자 그 테스트가 깨졌다. 낙상 후 버둥거리는 사람은 아직 "일어나지 못하고 있는" 것이 아니므로 의미를 보존하는 쪽을 택했다.
 
    `immobile_since`는 `FALLEN ↔ IMMOBILE` 플립으로는 리셋되지 않고 **진짜 회복(`NORMAL` 복귀)에서만** 리셋된다. 오실레이션 버그는 원본과 동일하게 해결되며, 기존 테스트도 그대로 통과한다. 이 선택은 [test_fall_monitor.py](../model/worker/tests/test_fall_monitor.py)의 `test_the_escalation_clock_measures_stillness_not_time_since_falling`으로 고정해 뒀다.
+
+### 6-4. 피처와 분류기 이식 (2026-08-29)
+
+[features.py](../model/worker/person/features.py)가 다섯 피처를, [classifier.py](../model/worker/person/classifier.py)가 번들 적재를 맡는다. 이식하면서 걸린 것 두 가지.
+
+**좌표계가 계약의 일부다.** 배달본은 학습·추론 모두 ultralytics의 `masks.xyn`/`boxes.xyxyn`, 즉 프레임 크기로 나눈 0..1 좌표에서 쟀다. 우리 `posture.py`는 픽셀 좌표에서 잰다. 프레임이 정사각형이 아니면 두 값이 다르다 — 640×480에서 200×100 mask의 종횡비는 픽셀로 2.0, 정규화로 1.5다. `aspect_ratio`는 번들 계수가 **+5.273으로 압도적**이라 픽셀 비율을 그대로 넣으면 가장 강한 신호가 조용히 틀어진다. 그래서 분류기용 피처는 정규화 좌표로 재고, 규칙 경로는 픽셀 기준을 그대로 뒀다 — `posture.py`의 0.9는 픽셀 비율 위에서 실측된 값이라 기준을 바꾸면 그 측정이 무효가 된다.
+
+**`contact_obstacle_iou`는 이 번들에서 죽은 피처다.** 계수가 정확히 `0.000`, scaler 평균도 `0.0000` — 학습 데이터에서 사람이 장애물과 겹친 인스턴스가 하나도 없었다는 뜻이다. 코드는 값을 계산해 넘기지만 이 번들은 그 값을 쓰지 않는다. "선반에 기대어 쓰러진" 경우를 잡는 신호는 실질적으로 `contact_person_iou`(계수 +0.335)뿐이다. 데이터가 더 모이면 재학습이 필요한 지점이다.
+
+적재는 저장소의 다른 승인 산출물과 같은 절차를 밟는다 — 승인 플래그 + SHA-256, 그리고 번들이 프롬프트 피처를 요구하거나 피처 개수가 다르면 거절. 임계값은 0.5로 덮어쓰지 않고 학습 때 k-fold로 고른 `bundle["threshold"]`를 쓴다.
+
+기본은 **꺼짐**이다. `FALLEN_CLASSIFIER_BUNDLE`과 `FALLEN_CLASSIFIER_SHA256`을 둘 다 설정해야 켜지고, 하나만 설정하면 기동을 거부한다. 꺼져 있으면 종횡비 규칙 그대로다.
+
+움직임 판정은 분류기가 켜져도 `posture.py`가 계속 맡는다 — 분류기는 한 프레임만 보므로 시간축 신호를 낼 수 없다.
 
 ### 6-3. 규칙 OR를 뺀 이유 — 실행 검증
 
@@ -260,8 +274,8 @@ code/eval_end_to_end.py     → from dataloader.roboflow_labels import ...
 
 1. ~~**버그 픽스 먼저**~~ — **완료 (2026-08-29)**. §6-2 참고.
 2. ~~**다중 인원 배선**~~ — **완료 (2026-08-29)**. §5-1 참고.
-3. **피처 확장** — `posture.py`에 PCA 각도 / centroid_y / 접촉 IoU 추가. 측정과 판정을 나눠 둔 설계 덕분에 `fall_monitor.py`는 안 건드려도 된다.
-4. **분류기 도입** — `joblib` 번들 로딩 + threshold. VLM+RL의 distilled selector와 같은 문제를 푼다(승인된 체크포인트 검증, 불확실할 때 규칙으로 fallback)므로 [distilled_selector.py](../model/vlm_rl/inference/distilled_selector.py)의 게이팅 패턴을 참고할 수 있다.
+3. ~~**피처 확장**~~ — **완료 (2026-08-29)**. §6-4 참고.
+4. ~~**분류기 도입**~~ — **완료 (2026-08-29)**. §6-4 참고.
 5. **가중치 배포** — 23MB 파인튜닝 가중치를 `/models` 마운트에 두고 `SEGMENTATION_WEIGHTS_FILE`로 가리킨다. 원본 권고는 기존 `aug_best.pt`를 **대체하지 말고 병행 검증**부터.
 
 ### 9-3. 확인 필요

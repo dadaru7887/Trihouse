@@ -26,12 +26,13 @@ ROS 발행을 하지 않는다. `PersonDetection` 을 내는 노드는 이 결�
 
 import argparse
 import json
-import math
+import os
 import time
 from pathlib import Path
 
 import yaml
 
+from model.worker.person.classifier import build_classifier_from_env
 from model.worker.person.fall_monitor import MonitorConfig
 from model.worker.person.frame import NO_DETECTION, PersonFrameEvaluator
 from model.worker.person.posture import PostureConfig
@@ -143,6 +144,8 @@ def main(argv: list[str] | None = None) -> int:
     camera_id = resolve_camera_id(args.source, args.camera_id)
     evaluator = PersonFrameEvaluator(
         camera_id=camera_id, posture=posture_config, monitor=monitor_config,
+        # 없으면 종횡비 규칙 그대로. 환경변수 둘 다 있어야 켜진다.
+        classifier=build_classifier_from_env(os.environ),
     )
 
     device = detector.load()

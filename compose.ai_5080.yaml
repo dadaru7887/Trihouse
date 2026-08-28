@@ -37,6 +37,9 @@ services:
       # Optional distilled skill selector; both empty keeps goal-distance ranking.
       RECOVERY_SELECTOR_ENSEMBLE: ${RECOVERY_SELECTOR_ENSEMBLE:-}
       RECOVERY_SELECTOR_SHA256: ${RECOVERY_SELECTOR_SHA256:-}
+      # Optional fallen classifier; both empty keeps the aspect-ratio rule.
+      FALLEN_CLASSIFIER_BUNDLE: ${FALLEN_CLASSIFIER_BUNDLE:-}
+      FALLEN_CLASSIFIER_SHA256: ${FALLEN_CLASSIFIER_SHA256:-}
       VLM_MODEL_REVISION: ${VLM_MODEL_REVISION:-main}
       VLM_RL_RUNTIME_MODE: physical
       VLM_RL_SAFETY_GATE_ENABLED: "true"

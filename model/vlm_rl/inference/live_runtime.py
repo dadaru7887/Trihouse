@@ -13,6 +13,7 @@ from urllib import request
 from model.perception.segmentation.runtime.detector import (
     Detector, DetectorConfig,
 )
+from model.worker.person.classifier import build_classifier_from_env
 from model.worker.person.fall_monitor import MonitorConfig
 from model.worker.person.frame import NO_DETECTION, PersonFrameEvaluator
 from model.worker.person.posture import PostureConfig
@@ -36,7 +37,7 @@ class PersonSafetyReporter:
     """
 
     def __init__(self, gateway_url: str, camera_id: str, *, ttl_ms: int = 600,
-                 person_class_id: int = 1):
+                 person_class_id: int = 1, classifier: Any | None = None):
         self.url = gateway_url.rstrip("/") + "/internal/v1/vision/person-detections"
         self.camera_id = camera_id
         self.ttl_ms = ttl_ms
@@ -45,6 +46,7 @@ class PersonSafetyReporter:
             camera_id=camera_id,
             posture=PostureConfig(),
             monitor=MonitorConfig(fall_aspect_ratio=0.9),
+            classifier=classifier,
         )
         self.last_report_at = 0.0
         self.last_state = ""
@@ -149,7 +151,8 @@ def run_live_inference(*, safety_gate_enabled: bool) -> None:
     context_source = GatewayNavigationContextSource(gateway_url, device_id)
     camera_id = rtsp_url.rstrip("/").rsplit("/", 1)[-1]
     person_reporter = PersonSafetyReporter(
-        gateway_url, camera_id, person_class_id=person_class_id
+        gateway_url, camera_id, person_class_id=person_class_id,
+        classifier=build_classifier_from_env(os.environ),
     )
     capture = cv2.VideoCapture(rtsp_url)
     if not capture.isOpened():

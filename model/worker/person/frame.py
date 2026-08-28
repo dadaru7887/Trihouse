@@ -21,6 +21,7 @@ from model.worker.person.fall_monitor import FallState, MonitorConfig
 from model.worker.person.policy import (
     BoundingBox, FallSuspectedEvent, PersonObservation, PersonPolicy,
 )
+from model.worker.person.features import fallen_features
 from model.worker.person.posture import PostureConfig, TrackedPostureEstimator
 
 
@@ -51,9 +52,12 @@ class FrameVerdict:
 class PersonFrameEvaluator:
     def __init__(self, *, camera_id: str, posture: PostureConfig, monitor: MonitorConfig,
                  track_timeout_seconds: float = 3.0,
-                 required_consecutive_frames: int = 3) -> None:
+                 required_consecutive_frames: int = 3,
+                 classifier: Any | None = None) -> None:
         self.camera_id = camera_id
-        self.person_class_id_source = None
+        # 있으면 자세 판정을 분류기가 맡는다. 없으면 종횡비 규칙 그대로다.
+        # 움직임은 어느 쪽이든 `posture` 가 잰다 — 분류기는 한 프레임만 본다.
+        self.classifier = classifier
         self._posture = TrackedPostureEstimator(posture)
         self._policy = PersonPolicy(
             required_consecutive_frames=required_consecutive_frames,
@@ -81,13 +85,22 @@ class PersonFrameEvaluator:
             if measurement is None:
                 continue
             seen.add(person.track_id)
+            fallen = measurement.low_posture
+            if self.classifier is not None:
+                # 접촉 피처는 다른 사람과 장애물까지 봐야 나온다. 사람만 걸러
+                # 넘기면 "선반에 기대어 쓰러진" 경우의 신호가 사라진다.
+                features = fallen_features(
+                    person, detections, frame_shape, person_class_id=person_class_id
+                )
+                if features is not None:
+                    fallen = bool(self.classifier.is_fallen(features))
             observation = PersonObservation(
                 camera_id=self.camera_id,
                 track_id=person.track_id,
                 timestamp_s=timestamp_s,
                 box=_bounding_box(person.mask),
                 confidence=float(person.confidence),
-                low_posture=measurement.low_posture,
+                low_posture=fallen,
                 moving=measurement.moving,
             )
             # 한 관측으로 상태와 이벤트를 함께 받는다. 따로 물으면 시간축이
