@@ -72,13 +72,46 @@ class PersonPolicy:
         *,
         required_consecutive_frames: int,
         monitor: MonitorConfig | None = None,
+        track_timeout_seconds: float = 3.0,
     ) -> None:
         if required_consecutive_frames < 1:
             raise ValueError('invalid person policy thresholds')
+        if track_timeout_seconds <= 0:
+            raise ValueError('invalid person policy thresholds')
         self._required_frames = required_consecutive_frames
         self._monitor_config = monitor or MonitorConfig()
+        self._track_timeout_seconds = track_timeout_seconds
         self._roi_frames: dict[tuple[str, str, str], int] = {}
         self._fall_monitors: dict[tuple[str, str], FallMonitor] = {}
+        self._last_seen: dict[tuple[str, str], float] = {}
+
+    @property
+    def tracked_count(self) -> int:
+        return len(self._fall_monitors)
+
+    def note_present_tracks(self, camera_id: str, seen_track_ids: set[str],
+                            timestamp_s: float) -> None:
+        """이번 프레임에 어떤 track 이 보였는지 알린다.
+
+        안 보인 track 은 두 가지로 나뉜다. 잠깐 안 보이는 것은 관측 공백이므로
+        판정은 그대로 두고 회복 시계만 멈춘다 — 사라진 동안 흐른 시간이 "정상
+        이었다" 는 증거가 되면 안 된다. `track_timeout_seconds` 를 넘겨 안
+        보이면 그 사람 몫 상태를 통째로 버린다. tracker 가 그 번호를 다시 쓰지
+        않으므로 남겨 두면 영영 쌓이기만 한다.
+
+        오래 끊긴 뒤 같은 사람이 새 track_id 로 돌아오면 그 사람 몫 상태머신은
+        새로 시작한다. ReID 없이는 구조적 한계다.
+        """
+        for key in list(self._fall_monitors):
+            if key[0] != camera_id or key[1] in seen_track_ids:
+                continue
+            if timestamp_s - self._last_seen.get(key, timestamp_s) >= self._track_timeout_seconds:
+                del self._fall_monitors[key]
+                self._last_seen.pop(key, None)
+                for roi_key in [item for item in self._roi_frames if item[:2] == key]:
+                    del self._roi_frames[roi_key]
+            else:
+                self._fall_monitors[key].note_no_detection()
 
     def observe_roi(self, observation: PersonObservation, roi: PolygonRoi) -> RoiPresenceEvent:
         overlaps = self._box_overlaps_polygon(observation.box, roi.points)
@@ -99,6 +132,23 @@ class PersonPolicy:
             return None
         return FallSuspectedEvent(observation.camera_id, observation.track_id, observation.timestamp_s)
 
+    def observe(self, observation: PersonObservation) -> dict:
+        """관측 하나로 시간축을 **한 칸만** 민다. 상태와 이벤트를 함께 준다.
+
+        상태와 이벤트를 따로 물으면 `observe_fall` 과 `fall_state` 가 각각
+        전이시켜 같은 관측으로 두 칸이 나간다. 두 값이 다 필요한 호출부는
+        이것을 쓴다.
+        """
+        result = self._advance(observation)
+        return {
+            'state': result['state'],
+            'event': (
+                FallSuspectedEvent(observation.camera_id, observation.track_id,
+                                   observation.timestamp_s)
+                if result['event'] else None
+            ),
+        }
+
     def fall_state(self, observation: PersonObservation) -> str:
         """지금 상태 이름. 이벤트 없이 진행 상황만 보고 싶을 때 쓴다."""
         return self._advance(observation)['state']
@@ -109,6 +159,7 @@ class PersonPolicy:
         if monitor is None:
             monitor = FallMonitor(self._monitor_config)
             self._fall_monitors[key] = monitor
+        self._last_seen[key] = observation.timestamp_s
         return monitor.advance(
             observation.timestamp_s,
             fallen=observation.low_posture,

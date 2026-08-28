@@ -207,24 +207,164 @@ def test_a_local_camera_index_must_be_told_its_identity() -> None:
     assert resolve_camera_id("0", "CAM-PK-01") == "CAM-PK-01"
 
 
-def test_losing_the_person_also_stops_the_recovery_clock() -> None:
-    """Both stages must forget the person together.
+# ------------------------------------------------- 다중 인원: track 식별
 
-    `posture.reset()` alone drops the movement baseline but leaves the monitor's
-    recovery candidate running, so wall-clock time with nobody on camera counts
-    as continuous "not fallen" evidence.
-    """
-    from model.worker.person.worker import note_person_lost
 
-    posture = PostureEstimator(PostureConfig())
-    monitor = FallMonitor(MonitorConfig(fall_confirm_seconds=1, recovery_confirm_seconds=1))
-    monitor.advance(0, fallen=True, low_motion=True)
-    monitor.advance(1.5, fallen=True, low_motion=True)
-    monitor.advance(2, fallen=False, low_motion=True)
-    assert monitor.recovery_since == 2
+class FakeBoxes:
+    def __init__(self, classes, scores, ids=None):
+        self.cls = FakeTensor(classes)
+        self.conf = FakeTensor(scores)
+        self.id = FakeTensor(ids) if ids is not None else None
 
-    assert note_person_lost(posture, monitor) == "NO_DETECTION"
 
-    assert monitor.recovery_since is None
-    assert monitor.state is FallState.FALLEN
-    assert posture._last_centroid is None
+class FakeTensor:
+    def __init__(self, values):
+        self._values = np.asarray(values)
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self._values
+
+
+class FakeMasks:
+    def __init__(self, count):
+        self.data = [FakeTensor(np.ones((4, 4)))] * count
+
+    def __len__(self):
+        return len(self.data)
+
+
+class FakeResult:
+    def __init__(self, classes, scores, ids=None):
+        self.masks = FakeMasks(len(classes))
+        self.boxes = FakeBoxes(classes, scores, ids)
+
+
+def test_tracked_results_carry_their_track_id() -> None:
+    """Per-person state needs an identity that survives across frames."""
+    from model.perception.segmentation.runtime.detector import detections_from_result
+
+    detections = detections_from_result(FakeResult([1, 1], [0.9, 0.8], ids=[7, 12]))
+
+    assert [item.track_id for item in detections] == ["7", "12"]
+
+
+def test_untracked_results_still_parse_without_a_track_id() -> None:
+    """`predict` has no ids; that path must keep working unchanged."""
+    from model.perception.segmentation.runtime.detector import detections_from_result
+
+    detections = detections_from_result(FakeResult([1, 0], [0.9, 0.5]))
+
+    assert [item.track_id for item in detections] == ["", ""]
+    assert detections[0].class_id == 1
+
+
+class RecordingModel:
+    """Stands in for ultralytics YOLOE and records how it was called."""
+
+    def __init__(self):
+        self.predict_calls = []
+        self.track_calls = []
+
+    def predict(self, frame, **kwargs):
+        self.predict_calls.append(kwargs)
+        return [FakeResult([1], [0.9])]
+
+    def track(self, frame, **kwargs):
+        self.track_calls.append(kwargs)
+        return [FakeResult([1], [0.9], ids=[3])]
+
+
+def _loaded_detector(config: DetectorConfig) -> tuple:
+    from model.perception.segmentation.runtime.detector import Detector
+
+    detector = Detector.__new__(Detector)
+    detector.config = config
+    detector._model = RecordingModel()
+
+    class Device:
+        resolved = "cpu"
+
+    detector._device = Device()
+    return detector, detector._model
+
+
+def test_detection_without_tracking_keeps_calling_predict() -> None:
+    detector, model = _loaded_detector(DetectorConfig())
+
+    detections = detector.detect(object())
+
+    assert model.track_calls == []
+    assert len(model.predict_calls) == 1
+    assert detections[0].track_id == ""
+
+
+def test_tracking_mode_asks_the_model_to_persist_identities() -> None:
+    """Without persist=True every frame restarts numbering from scratch."""
+    detector, model = _loaded_detector(DetectorConfig(tracking=True))
+
+    detections = detector.detect(object())
+
+    assert model.predict_calls == []
+    assert model.track_calls[0]["persist"] is True
+    assert detections[0].track_id == "3"
+
+
+# ------------------------------------------------- 다중 인원: 자세 측정 분리
+
+
+def _mask_at(x: int, y: int, width: int = 40, height: int = 20):
+    mask = np.zeros((200, 200), dtype=bool)
+    mask[y:y + height, x:x + width] = True
+    return mask
+
+
+def test_two_tracks_do_not_share_a_movement_baseline() -> None:
+    """One person walking must not make a motionless person look like they moved."""
+    from model.worker.person.posture import TrackedPostureEstimator
+
+    estimator = TrackedPostureEstimator(PostureConfig())
+    diagonal = math.hypot(200, 200)
+
+    estimator.measure("a", _mask_at(0, 0), diagonal)
+    estimator.measure("b", _mask_at(150, 150), diagonal)
+    # "a" has not moved at all; "b" walks far away.
+    still = estimator.measure("a", _mask_at(0, 0), diagonal)
+    walked = estimator.measure("b", _mask_at(150, 20), diagonal)
+
+    assert still.motion == 0.0
+    assert not still.moving
+    assert walked.moving
+
+
+def test_a_track_that_disappears_loses_its_baseline() -> None:
+    """Reappearing far away is not evidence of movement across the gap."""
+    from model.worker.person.posture import TrackedPostureEstimator
+
+    estimator = TrackedPostureEstimator(PostureConfig())
+    diagonal = math.hypot(200, 200)
+
+    estimator.measure("a", _mask_at(0, 0), diagonal)
+    estimator.forget_missing(seen_track_ids=set())
+
+    reappeared = estimator.measure("a", _mask_at(150, 150), diagonal)
+    assert reappeared.motion == 0.0
+
+
+def test_a_present_track_keeps_its_baseline_when_another_disappears() -> None:
+    from model.worker.person.posture import TrackedPostureEstimator
+
+    estimator = TrackedPostureEstimator(PostureConfig())
+    diagonal = math.hypot(200, 200)
+
+    estimator.measure("a", _mask_at(0, 0), diagonal)
+    estimator.measure("b", _mask_at(100, 100), diagonal)
+    estimator.forget_missing(seen_track_ids={"a"})
+
+    assert estimator.measure("a", _mask_at(60, 0), diagonal).moving
+    assert estimator.measure("b", _mask_at(100, 100), diagonal).motion == 0.0

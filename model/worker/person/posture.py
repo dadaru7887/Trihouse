@@ -97,3 +97,34 @@ class PostureEstimator:
 
     def reset(self) -> None:
         self._last_centroid = None
+
+
+class TrackedPostureEstimator:
+    """track 마다 `PostureEstimator` 를 따로 둔다.
+
+    `PostureEstimator` 는 centroid 를 하나만 기억한다. 한 화면에 두 사람이
+    있으면 그 하나를 번갈아 덮어써서, 걸어가는 사람의 위치가 가만히 있는
+    사람의 이동량으로 읽힌다 — 증상은 "가만히 누워 있는 사람이 계속 움직이는
+    것으로 잡혀 `IMMOBILE` 에 못 간다" 로 나타난다.
+    """
+
+    def __init__(self, config: PostureConfig) -> None:
+        self.config = config
+        self._by_track: dict[str, PostureEstimator] = {}
+
+    def measure(self, track_id: str, mask: Any, frame_diagonal: float) -> PostureMeasurement | None:
+        estimator = self._by_track.get(track_id)
+        if estimator is None:
+            estimator = PostureEstimator(self.config)
+            self._by_track[track_id] = estimator
+        return estimator.measure(mask, frame_diagonal)
+
+    def forget_missing(self, seen_track_ids: set[str]) -> None:
+        """이번 프레임에 안 잡힌 track 의 기준을 버린다.
+
+        `PostureEstimator.reset` 과 같은 이유다 — 사라진 동안 사람이 움직였다면
+        다시 잡혔을 때의 위치 차이는 이동이 아니라 관측 공백이다.
+        """
+        for track_id in list(self._by_track):
+            if track_id not in seen_track_ids:
+                del self._by_track[track_id]

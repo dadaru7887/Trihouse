@@ -24,7 +24,8 @@
 | 세그멘테이션 학습 | [model/perception/segmentation/training/](../model/perception/segmentation/training/) | `orchestrator.py`, `seed_runner.py` | 코드상 확인 |
 | 자세 **측정** | [model/worker/person/posture.py](../model/worker/person/posture.py) | `PostureEstimator.measure` | 코드상 확인 |
 | 시간축 **판정** | [model/worker/person/fall_monitor.py](../model/worker/person/fall_monitor.py) | `FallMonitor.advance` | 코드상 확인 |
-| 다중 인원 정책 | [model/worker/person/policy.py](../model/worker/person/policy.py) | `PersonPolicy` | **미사용** (§5) |
+| 다중 인원 정책 | [model/worker/person/policy.py](../model/worker/person/policy.py) | `PersonPolicy` | 코드상 확인 |
+| 프레임 평가(사람별) | [model/worker/person/frame.py](../model/worker/person/frame.py) | `PersonFrameEvaluator.evaluate` | 코드상 확인 |
 | 보고 스로틀 | [model/worker/person/reporting.py](../model/worker/person/reporting.py) | `ReportThrottle.should_report` | 코드상 확인 |
 | 독립 실행 worker | [model/worker/person/worker.py](../model/worker/person/worker.py) | `main` | 코드상 확인 |
 | VLM+RL 런타임 내 보고 | [model/vlm_rl/inference/live_runtime.py](../model/vlm_rl/inference/live_runtime.py) | `PersonSafetyReporter` | 코드상 확인 |
@@ -38,12 +39,13 @@
 
 ```text
 카메라 프레임 (RTSP 또는 mp4)
-  → YOLOE-seg 추론          detector.py:Detector.detect
-  → 사람 인스턴스 선택       detector.py:select_best  (※ 최고 confidence 1명만)
-  → 자세·움직임 측정         posture.py:PostureEstimator.measure
-  → 시간축 상태 전이         fall_monitor.py:FallMonitor.advance
-  → 스로틀링 후 보고         reporting.py:ReportThrottle.should_report
-  → Gateway POST            /internal/v1/vision/person-detections
+  → YOLOE-seg 추론 + tracking   detector.py:Detector.detect  (tracking=True → track(persist=True))
+  → 사람 전원, track_id 별로     frame.py:PersonFrameEvaluator.evaluate
+       ├ 자세·움직임 측정        posture.py:TrackedPostureEstimator.measure
+       └ 시간축 상태 전이        policy.py:PersonPolicy.observe → fall_monitor.py:FallMonitor.advance
+  → 프레임 결론 = 가장 나쁜 상태 frame.py:FrameVerdict
+  → 스로틀링 후 보고            reporting.py:ReportThrottle.should_report
+  → Gateway POST               /internal/v1/vision/person-detections
 ```
 
 | 단계 | 실제 입력 | 실제 출력 | 파일:함수 |
@@ -118,14 +120,21 @@ NORMAL ──fallen──> FALL_SUSPECTED ──1.0s 유지──> FALLEN ──
 
 읽으면서 발견한, 문서에 안 적혀 있던 사실들이다.
 
-### 5-1. `PersonPolicy`는 아무도 안 쓴다 — 코드상 확인
+### 5-1. 다중 인원 — 해결 (2026-08-29)
 
-[policy.py:PersonPolicy](../model/worker/person/policy.py)는 `(camera_id, track_id)`별로 독립 `FallMonitor`를 두는 **다중 인원 설계**를 이미 갖고 있다. 그런데 `PersonPolicy`를 import하는 곳은 자기 단위 테스트뿐이다. 운영 경로 둘 다 `FallMonitor`를 직접 하나만 만든다:
+**이전 상태**: [policy.py:PersonPolicy](../model/worker/person/policy.py)는 `(camera_id, track_id)`별 독립 `FallMonitor`를 두는 다중 인원 설계를 이미 갖고 있었는데, import하는 곳이 자기 단위 테스트뿐이었다. 운영 경로 둘 다 `FallMonitor` 하나를 공유하고 `select_best`로 1명만 봐서, **두 사람이 있으면 한 사람의 회복이 다른 사람의 증거를 지웠다.**
 
-- [worker.py:142](../model/worker/person/worker.py#L142) — `monitor = FallMonitor(monitor_config)` 하나
-- [live_runtime.py:36](../model/vlm_rl/inference/live_runtime.py#L36) — `self.monitor = FallMonitor(...)` 하나
+이식하면서 드러난 것은 단일 인물 가정이 세 겹이었다는 점이다.
 
-그리고 둘 다 `select_best`로 **최고 confidence 사람 1명만** 본다. 즉 화면에 두 사람이 있으면 한 사람의 회복이 다른 사람의 증거를 지운다. 원본 배달본 README가 "이전 버전의 임시방편이 다중 인원 영상 지연의 원인일 가능성"이라고 지목한 바로 그 구조다.
+1. `Detection`에 `track_id`가 없었다 → `Detector`에 `tracking` 옵션 추가. 켜면 `predict` 대신 `track(persist=True)`로 돌린다. `persist=True`가 없으면 tracker가 프레임마다 번호를 다시 매겨 신원이 아니게 된다.
+2. `PostureEstimator`가 `_last_centroid`를 **하나만** 들고 있었다 → `TrackedPostureEstimator`. 걸어가는 사람의 위치가 가만히 누운 사람의 이동량으로 읽히던 문제다.
+3. `PersonPolicy`에 track 소멸 처리가 없었다 → `note_present_tracks()`. 잠깐 안 보이면 회복 시계만 멈추고(§6-2의 `note_no_detection`), `track_timeout_seconds`(3.0s)를 넘기면 그 사람 몫 상태를 버린다.
+
+이 셋을 잇는 것이 [frame.py:PersonFrameEvaluator](../model/worker/person/frame.py)이고, 호출부 둘이 이제 이것만 쓴다. 프레임 하나의 결론은 **그 화면에서 가장 나쁜 상태**다 — 서 있는 행인이 바닥에 누운 사람을 가려서는 안 된다.
+
+tracking이 꺼져 있으면 `track_id`가 비고, 전원을 빈 id 하나에 몰면 고치려던 버그가 그대로 재현된다. 그래서 그때는 예전처럼 `select_best`로 한 명만 본다 — 다중 인원 상태는 tracking이 켜져 있어야만 성립한다.
+
+**남은 한계**: ReID가 없어 카메라가 `track_timeout_seconds` 넘게 끊기면 같은 사람이 새 track_id를 받아 상태머신이 새로 시작한다. 원본도 구조적 한계로 인정한 부분이다.
 
 ### 5-2. `MonitorConfig.fall_aspect_ratio`는 운영에서 죽은 값 — 코드상 확인
 
@@ -150,7 +159,7 @@ VLM+RL은 `recovery_proposals` 등 전용 테이블이 있는데, 낙상 쪽은 
 | centroid 높이 | 있음 | **없음** |
 | 접촉 IoU (사람-사람 / 사람-장애물) | 있음 | **없음** |
 | 판정기 | logreg (`joblib`) | 임계값 비교 |
-| 다중 인원 | `track(persist=True)` + track_id별 모니터 | 최고 confidence 1명 |
+| 다중 인원 | `track(persist=True)` + track_id별 모니터 | **이식 완료** (2026-08-29, §5-1) |
 | `note_no_detection()` | 있음 | **이식 완료** (2026-08-29) |
 | 오실레이션 안전장치 | `fallen_since` | **`immobile_since`** (의미 보존, §6-2) |
 
@@ -250,7 +259,7 @@ code/eval_end_to_end.py     → from dataloader.roboflow_labels import ...
 ### 9-2. 작업 순서 (제안)
 
 1. ~~**버그 픽스 먼저**~~ — **완료 (2026-08-29)**. §6-2 참고.
-2. **다중 인원 배선** — 이미 있는 `PersonPolicy`를 운영 경로에 연결. 새 코드를 쓰는 게 아니라 **이미 있는데 안 쓰이는 것을 쓰는** 일이다(§5-1).
+2. ~~**다중 인원 배선**~~ — **완료 (2026-08-29)**. §5-1 참고.
 3. **피처 확장** — `posture.py`에 PCA 각도 / centroid_y / 접촉 IoU 추가. 측정과 판정을 나눠 둔 설계 덕분에 `fall_monitor.py`는 안 건드려도 된다.
 4. **분류기 도입** — `joblib` 번들 로딩 + threshold. VLM+RL의 distilled selector와 같은 문제를 푼다(승인된 체크포인트 검증, 불확실할 때 규칙으로 fallback)므로 [distilled_selector.py](../model/vlm_rl/inference/distilled_selector.py)의 게이팅 패턴을 참고할 수 있다.
 5. **가중치 배포** — 23MB 파인튜닝 가중치를 `/models` 마운트에 두고 `SEGMENTATION_WEIGHTS_FILE`로 가리킨다. 원본 권고는 기존 `aug_best.pt`를 **대체하지 말고 병행 검증**부터.

@@ -6,8 +6,8 @@
 세 단계를 잇기만 한다. 판단은 각 단계 안에 있다.
 
     frame ─▶ Detector          1단계. 사람/장애물 검출          (yolo_inference_server)
-              └─▶ PostureEstimator  2단계. 자세·움직임 **측정**  (posture.py)
-                    └─▶ FallMonitor  시간축 상태 전이            (fall_monitor.py)
+              └─▶ PersonFrameEvaluator  2단계. 사람별 자세 측정 + 시간축 (frame.py)
+                    └─▶ TrackedPostureEstimator / PersonPolicy / FallMonitor
 
 한 번의 추론에서 두 갈래가 나온다.
 
@@ -32,8 +32,9 @@ from pathlib import Path
 
 import yaml
 
-from model.worker.person.fall_monitor import FallMonitor, MonitorConfig
-from model.worker.person.posture import PostureConfig, PostureEstimator
+from model.worker.person.fall_monitor import MonitorConfig
+from model.worker.person.frame import NO_DETECTION, PersonFrameEvaluator
+from model.worker.person.posture import PostureConfig
 from model.worker.person.reporting import ReportPolicy, ReportThrottle
 from model.perception.segmentation.runtime.detector import Detector, DetectorConfig
 
@@ -132,29 +133,17 @@ def _post(url: str, payload: dict) -> None:
         print(json.dumps({"type": "REPORT_FAILED", "detail": str(error)}), flush=True)
 
 
-def note_person_lost(posture: PostureEstimator, monitor: FallMonitor) -> str:
-    """A frame with nobody detected. Both stages forget the person together.
-
-    The posture baseline goes so the gap is not counted as movement, and the
-    monitor's recovery candidate goes so the gap is not counted as evidence that
-    a fallen person got up. The fall verdict itself stands — someone out of
-    frame may still be on the floor.
-    """
-    posture.reset()
-    monitor.note_no_detection()
-    return "NO_DETECTION"
-
-
 def main(argv: list[str] | None = None) -> int:
     import cv2
 
     args = parse_args(argv)
     detector_config, posture_config, monitor_config = load_settings(args.config)
     detector = Detector(args.weights, detector_config)
-    posture = PostureEstimator(posture_config)
-    monitor = FallMonitor(monitor_config)
     throttle = ReportThrottle(ReportPolicy(ttl_ms=args.ttl_ms))
     camera_id = resolve_camera_id(args.source, args.camera_id)
+    evaluator = PersonFrameEvaluator(
+        camera_id=camera_id, posture=posture_config, monitor=monitor_config,
+    )
 
     device = detector.load()
     print(json.dumps({"device": device.to_dict()}, ensure_ascii=False), flush=True)
@@ -169,40 +158,35 @@ def main(argv: list[str] | None = None) -> int:
             if not ok:
                 break
             timestamp = time.monotonic() - started
-            person = detector.detect_person(frame)
-            if person is None:
-                state = note_person_lost(posture, monitor)
-            else:
-                diagonal = math.hypot(person.mask.shape[1], person.mask.shape[0])
-                measurement = posture.measure(person.mask, diagonal)
-                if measurement is None:
-                    state = note_person_lost(posture, monitor)
-                else:
-                    result = monitor.advance(
-                        timestamp,
-                        fallen=measurement.low_posture,
-                        low_motion=not measurement.moving,
-                    )
-                    state = result["state"]
-                    # 상태가 그대로면 수명의 절반 주기로만 올린다. 15 Hz 를 그대로
-                    # 흘리면 TCP 8788 이 관측으로 차고 주행 명령이 뒤로 밀린다.
-                    if throttle.should_report(timestamp, f"PERSON:{state}"):
-                        observation = {
-                            "type": "person_detection",
-                            "camera_id": camera_id,
-                            "confidence": round(float(person.confidence), 4),
-                            "pose_class": state,
-                            "ttl_ms": args.ttl_ms,
-                            "observed_at_ms": int(time.time() * 1000),
-                        }
-                        print(json.dumps(observation, ensure_ascii=False), flush=True)
-                        if args.report_url:
-                            _post(args.report_url, observation)
-                    if result["event"]:
-                        # 낙상 확정은 사람이 재확인할 사건이라 늘 올린다.
-                        print(json.dumps({
-                            "type": FALL_EVENT, "state": state, "timestamp": time.time(),
-                        }, ensure_ascii=False), flush=True)
+            verdict = evaluator.evaluate(
+                detector.detect(frame), frame.shape, timestamp,
+                person_class_id=detector_config.person_class_id,
+            )
+            state = verdict.state
+            if state != NO_DETECTION:
+                # 상태가 그대로면 수명의 절반 주기로만 올린다. 15 Hz 를 그대로
+                # 흘리면 TCP 8788 이 관측으로 차고 주행 명령이 뒤로 밀린다.
+                if throttle.should_report(timestamp, f"PERSON:{state}"):
+                    observation = {
+                        "type": "person_detection",
+                        "camera_id": camera_id,
+                        "confidence": round(verdict.confidence, 4),
+                        "pose_class": state,
+                        "ttl_ms": args.ttl_ms,
+                        "observed_at_ms": int(time.time() * 1000),
+                    }
+                    if verdict.track_id:
+                        observation["track_id"] = verdict.track_id
+                    print(json.dumps(observation, ensure_ascii=False), flush=True)
+                    if args.report_url:
+                        _post(args.report_url, observation)
+            for event in verdict.events:
+                # 낙상 확정은 사람이 재확인할 사건이라 늘 올린다. 사람마다
+                # 따로 나므로 한 프레임에 둘 이상일 수 있다.
+                print(json.dumps({
+                    "type": FALL_EVENT, "state": state, "track_id": event.track_id,
+                    "timestamp": time.time(),
+                }, ensure_ascii=False), flush=True)
             cv2.putText(frame, state, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
             if not args.headless:
                 cv2.imshow("person + fall monitor", frame)

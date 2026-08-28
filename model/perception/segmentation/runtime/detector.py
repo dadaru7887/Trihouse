@@ -26,6 +26,11 @@ class DetectorConfig:
     # `data.yaml` 의 `names: ['obstacle', 'person']` 에서 온다. 클래스 순서가
     # 바뀌면 이 값도 바뀌므로 코드에 숫자를 박지 않고 설정으로 받는다.
     person_class_id: int = 1
+    # 켜면 `predict` 대신 `track(persist=True)` 로 돌려 프레임을 넘는 track_id 를
+    # 받는다. 사람별로 상태를 따로 들고 있으려면 이 신원이 있어야 한다. 기본이
+    # 꺼짐인 이유는 tracker 가 매 프레임 비용과 상태를 더하기 때문이다 — 사람
+    # 하나만 보는 호출부는 그 값을 치를 이유가 없다.
+    tracking: bool = False
 
     def __post_init__(self) -> None:
         if not 0.0 < self.confidence <= 1.0:
@@ -38,11 +43,17 @@ class DetectorConfig:
 
 @dataclass(frozen=True)
 class Detection:
-    """한 인스턴스의 검출 결과. `mask` 는 프레임 크기의 bool 배열이다."""
+    """한 인스턴스의 검출 결과. `mask` 는 프레임 크기의 bool 배열이다.
+
+    `track_id` 는 tracking 을 켰을 때만 채워진다. 빈 문자열은 "이 프레임의
+    검출일 뿐 프레임을 넘는 신원은 없다" 는 뜻이다 — 사람별 상태를 들고 있는
+    쪽이 그 차이를 알아야 한다.
+    """
 
     class_id: int
     confidence: float
     mask: Any
+    track_id: str = ""
 
 
 def resolve_weights(value: Path) -> Path:
@@ -85,11 +96,14 @@ def detections_from_result(result: Any, mask_threshold: float = 0.5) -> list[Det
     boxes = result.boxes
     classes = boxes.cls.detach().cpu().numpy().astype(int)
     scores = boxes.conf.detach().cpu().numpy()
+    raw_ids = getattr(boxes, "id", None)
+    ids = None if raw_ids is None else raw_ids.detach().cpu().numpy().astype(int)
     return [
         Detection(
             class_id=int(classes[index]),
             confidence=float(scores[index]),
             mask=masks.data[index].detach().cpu().numpy() > mask_threshold,
+            track_id="" if ids is None else str(int(ids[index])),
         )
         for index in range(len(classes))
     ]
@@ -118,13 +132,18 @@ class Detector:
 
     def detect(self, frame: Any) -> list[Detection]:
         device = self.load()
-        result = self._model.predict(
-            frame,
+        options = dict(
             conf=self.config.confidence,
             imgsz=self.config.image_size,
             device=device.resolved,
             verbose=False,
-        )[0]
+        )
+        if self.config.tracking:
+            # persist=True 가 없으면 tracker 가 프레임마다 새로 시작해 번호를
+            # 다시 매긴다 — track_id 가 있어도 프레임을 넘는 신원이 아니게 된다.
+            result = self._model.track(frame, persist=True, **options)[0]
+        else:
+            result = self._model.predict(frame, **options)[0]
         return detections_from_result(result)
 
     def detect_person(self, frame: Any) -> Detection | None:

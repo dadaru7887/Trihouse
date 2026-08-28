@@ -11,10 +11,11 @@ from typing import Any, Sequence
 from urllib import request
 
 from model.perception.segmentation.runtime.detector import (
-    Detector, DetectorConfig, select_best,
+    Detector, DetectorConfig,
 )
-from model.worker.person.fall_monitor import FallMonitor, MonitorConfig
-from model.worker.person.posture import PostureConfig, PostureEstimator
+from model.worker.person.fall_monitor import MonitorConfig
+from model.worker.person.frame import NO_DETECTION, PersonFrameEvaluator
+from model.worker.person.posture import PostureConfig
 
 from .completion_runtime import build_completion
 from .distilled_selector import build_selector_from_env
@@ -26,54 +27,47 @@ from .worker import DetectionEvidence, RecoveryInferenceWorker
 
 
 class PersonSafetyReporter:
-    """Send highest-confidence person posture to the 4060 safety route."""
+    """Send the worst person posture on this camera to the 4060 safety route.
 
-    def __init__(self, gateway_url: str, camera_id: str, *, ttl_ms: int = 600):
+    "Worst" rather than "most confident": a bystander standing in the foreground
+    must not mask someone on the floor behind them. Per-person state lives in
+    `PersonFrameEvaluator`, so one person recovering no longer clears another
+    person's fall.
+    """
+
+    def __init__(self, gateway_url: str, camera_id: str, *, ttl_ms: int = 600,
+                 person_class_id: int = 1):
         self.url = gateway_url.rstrip("/") + "/internal/v1/vision/person-detections"
         self.camera_id = camera_id
         self.ttl_ms = ttl_ms
-        self.posture = PostureEstimator(PostureConfig())
-        self.monitor = FallMonitor(MonitorConfig(fall_aspect_ratio=0.9))
+        self.person_class_id = person_class_id
+        self.evaluator = PersonFrameEvaluator(
+            camera_id=camera_id,
+            posture=PostureConfig(),
+            monitor=MonitorConfig(fall_aspect_ratio=0.9),
+        )
         self.last_report_at = 0.0
         self.last_state = ""
 
-    def observe(self, detection: Any | None, frame_shape: tuple[int, ...], now: float) -> None:
-        if detection is None:
-            self.posture.reset()
-            # Someone out of frame may still be on the floor, so the verdict
-            # stands; only the recovery candidate is dropped, or the unobserved
-            # gap would count as evidence that they got up.
-            self.monitor.note_no_detection()
-            return
-        measurement = self.posture.measure(
-            detection.mask,
-            math.hypot(frame_shape[1], frame_shape[0]),
+    def observe_frame(self, detections: Sequence[Any], frame_shape: tuple[int, ...],
+                      now: float) -> None:
+        verdict = self.evaluator.evaluate(
+            detections, frame_shape, now, person_class_id=self.person_class_id
         )
-        if measurement is None:
-            self.monitor.note_no_detection()
+        if verdict.state == NO_DETECTION:
             return
-        state = self.monitor.advance(
-            now,
-            fallen=measurement.low_posture,
-            low_motion=not measurement.moving,
-        )["state"]
+        state = verdict.state
         if state == self.last_state and now - self.last_report_at < self.ttl_ms / 2000.0:
             return
-        import numpy as np
-
-        ys, xs = np.nonzero(detection.mask)
         payload = {
             "camera_id": self.camera_id,
-            "confidence": float(detection.confidence),
+            "confidence": verdict.confidence,
             "ttl_ms": self.ttl_ms,
             "observed_at_ms": int(time.time() * 1000),
             "pose_class": state,
-            "bbox": {
-                "x_offset": int(xs.min()), "y_offset": int(ys.min()),
-                "width": int(xs.max() - xs.min() + 1),
-                "height": int(ys.max() - ys.min() + 1),
-            },
         }
+        if verdict.track_id:
+            payload["track_id"] = verdict.track_id
         outgoing = request.Request(
             self.url,
             data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
@@ -132,6 +126,8 @@ def run_live_inference(*, safety_gate_enabled: bool) -> None:
             image_size=int(os.environ.get("VISION_IMAGE_SIZE", "640")),
             device=os.environ.get("VISION_DEVICE", "cuda:0"),
             person_class_id=person_class_id,
+            # 사람마다 상태를 따로 들려면 프레임을 넘는 신원이 있어야 한다.
+            tracking=True,
         ),
     )
     vlm = QwenVlmInterpreter(os.environ.get("VLM_MODEL_REVISION", "main"))
@@ -152,7 +148,9 @@ def run_live_inference(*, safety_gate_enabled: bool) -> None:
     )
     context_source = GatewayNavigationContextSource(gateway_url, device_id)
     camera_id = rtsp_url.rstrip("/").rsplit("/", 1)[-1]
-    person_reporter = PersonSafetyReporter(gateway_url, camera_id)
+    person_reporter = PersonSafetyReporter(
+        gateway_url, camera_id, person_class_id=person_class_id
+    )
     capture = cv2.VideoCapture(rtsp_url)
     if not capture.isOpened():
         raise RuntimeError("5080 could not open the configured 4060 MediaMTX stream")
@@ -172,9 +170,7 @@ def run_live_inference(*, safety_gate_enabled: bool) -> None:
             detections = detection_evidence(
                 raw_detections, frame.shape, person_class_id=person_class_id
             )
-            person_reporter.observe(
-                select_best(raw_detections, person_class_id), frame.shape, time.monotonic()
-            )
+            person_reporter.observe_frame(raw_detections, frame.shape, time.monotonic())
             try:
                 context = context_source.get()
             except Exception:

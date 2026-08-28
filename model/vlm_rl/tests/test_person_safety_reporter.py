@@ -10,16 +10,6 @@ from model.vlm_rl.inference.live_runtime import PersonSafetyReporter
 from model.worker.person.fall_monitor import FallState
 
 
-class FakeDetection:
-    confidence = 0.9
-
-    def __init__(self, width: int, height: int):
-        self.mask = np.zeros((120, 160), dtype=bool)
-        self.mask[10:10 + height, 10:10 + width] = True
-
-
-LYING = FakeDetection(width=90, height=30)     # aspect ratio 3.0 -> fallen
-STANDING = FakeDetection(width=20, height=90)  # aspect ratio 0.22 -> not fallen
 SHAPE = (120, 160, 3)
 
 
@@ -37,28 +27,59 @@ def reporter(monkeypatch):
     return PersonSafetyReporter("http://gateway", "CAM-01")
 
 
-def test_the_reporter_reaches_fallen_from_a_lying_mask(reporter) -> None:
-    """Guards the fixture itself: the states below have to be reachable."""
-    reporter.observe(LYING, SHAPE, 0.0)
-    reporter.observe(LYING, SHAPE, 1.5)
+class TrackedDetection:
+    """A person detection carrying a cross-frame identity."""
 
-    assert reporter.monitor.state is FallState.FALLEN
+    class_id = 1
+
+    def __init__(self, track_id: str, *, width: int, height: int, x: int = 10,
+                 confidence: float = 0.9):
+        self.track_id = track_id
+        self.confidence = confidence
+        self.mask = np.zeros((120, 160), dtype=bool)
+        self.mask[10:10 + height, x:x + width] = True
+
+
+def lying(track_id: str, **kwargs) -> TrackedDetection:
+    return TrackedDetection(track_id, width=90, height=30, **kwargs)
+
+
+def upright(track_id: str, **kwargs) -> TrackedDetection:
+    return TrackedDetection(track_id, width=20, height=90, **kwargs)
+
+
+def test_a_walking_bystander_does_not_erase_a_fallen_person(reporter) -> None:
+    """The reporter used to take one person per frame and share one monitor."""
+    for step, bystander_x in enumerate([60, 80, 100, 60, 80, 100, 60, 80]):
+        reporter.observe_frame(
+            [lying("a"), upright("b", x=bystander_x, confidence=0.95)],
+            SHAPE, float(step),
+        )
+
+    assert reporter.last_state == FallState.EMERGENCY_CANDIDATE.value
+
+
+def test_the_reporter_reaches_fallen_from_a_lying_mask(reporter) -> None:
+    """Guards the fixtures themselves: the states below have to be reachable."""
+    reporter.observe_frame([lying("a")], SHAPE, 0.0)
+    reporter.observe_frame([lying("a")], SHAPE, 1.5)
+
+    assert reporter.last_state == FallState.FALLEN.value
 
 
 def test_time_off_camera_does_not_clear_a_fall(reporter) -> None:
-    reporter.observe(LYING, SHAPE, 0.0)
-    reporter.observe(LYING, SHAPE, 1.5)
+    reporter.observe_frame([lying("a")], SHAPE, 0.0)
+    reporter.observe_frame([lying("a")], SHAPE, 1.5)
     # One upright reading opens the recovery candidate, then they leave frame.
-    reporter.observe(STANDING, SHAPE, 2.0)
-    assert reporter.monitor.recovery_since == 2.0
+    reporter.observe_frame([upright("a")], SHAPE, 2.0)
+    assert reporter.last_state == FallState.FALLEN.value
 
-    for now in (3.0, 4.0, 5.0):
-        reporter.observe(None, SHAPE, now)
+    for now in (2.5, 3.0, 3.5):
+        reporter.observe_frame([], SHAPE, now)
 
-    assert reporter.monitor.recovery_since is None
     # Returning upright after the gap must not clear the fall on the first frame.
-    reporter.observe(STANDING, SHAPE, 6.0)
-    assert reporter.monitor.state is FallState.FALLEN
+    reporter.observe_frame([upright("a")], SHAPE, 6.0)
+    assert reporter.last_state == FallState.FALLEN.value
     # A full observed recovery_confirm_seconds is what clears it.
-    reporter.observe(STANDING, SHAPE, 7.5)
-    assert reporter.monitor.state is FallState.NORMAL
+    reporter.observe_frame([upright("a")], SHAPE, 7.5)
+    assert reporter.last_state == FallState.NORMAL.value

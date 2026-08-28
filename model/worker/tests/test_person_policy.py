@@ -5,7 +5,7 @@
 
 import unittest
 
-from model.worker.person.fall_monitor import MonitorConfig
+from model.worker.person.fall_monitor import FallState, MonitorConfig
 from model.worker.person.policy import BoundingBox, PersonObservation, PersonPolicy, PolygonRoi
 
 
@@ -86,3 +86,82 @@ class PersonPolicyTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PersonPolicyTrackLifecycleTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.policy = PersonPolicy(
+            required_consecutive_frames=3,
+            monitor=MonitorConfig(fall_confirm_seconds=1.0, immobile_seconds=5.0,
+                                  recovery_confirm_seconds=1.0),
+            track_timeout_seconds=3.0,
+        )
+
+    def _person(self, track_id: str, *, timestamp_s: float, low_posture: bool = False,
+                moving: bool = True) -> PersonObservation:
+        return PersonObservation('cam-1', track_id, timestamp_s, BoundingBox(20, 20, 40, 50),
+                                 0.9, low_posture, moving)
+
+    def test_one_persons_recovery_does_not_clear_another_persons_fall(self) -> None:
+        self.policy.fall_state(self._person('a', timestamp_s=0, low_posture=True, moving=False))
+        self.policy.fall_state(self._person('a', timestamp_s=1.5, low_posture=True, moving=False))
+        # A second person walks through, upright the whole time.
+        self.policy.fall_state(self._person('b', timestamp_s=1.6))
+        self.policy.fall_state(self._person('b', timestamp_s=2.0))
+
+        state = self.policy.fall_state(self._person('a', timestamp_s=2.5, low_posture=True, moving=False))
+        self.assertEqual(FallState.IMMOBILE.value, state)
+
+    def test_a_track_absent_this_frame_stops_its_recovery_clock(self) -> None:
+        self.policy.fall_state(self._person('a', timestamp_s=0, low_posture=True, moving=False))
+        self.policy.fall_state(self._person('a', timestamp_s=1.5, low_posture=True, moving=False))
+        self.policy.fall_state(self._person('a', timestamp_s=2, low_posture=False, moving=False))
+
+        self.policy.note_present_tracks('cam-1', set(), timestamp_s=3.0)
+
+        # The unobserved gap must not count toward recovery_confirm_seconds.
+        state = self.policy.fall_state(self._person('a', timestamp_s=6, low_posture=False, moving=False))
+        self.assertEqual(FallState.FALLEN.value, state)
+
+    def test_a_track_gone_past_the_timeout_is_forgotten(self) -> None:
+        self.policy.fall_state(self._person('a', timestamp_s=0, low_posture=True, moving=False))
+        self.policy.fall_state(self._person('a', timestamp_s=1.5, low_posture=True, moving=False))
+        self.assertEqual(1, self.policy.tracked_count)
+
+        self.policy.note_present_tracks('cam-1', set(), timestamp_s=10.0)
+
+        self.assertEqual(0, self.policy.tracked_count)
+
+    def test_a_track_seen_this_frame_is_left_alone(self) -> None:
+        self.policy.fall_state(self._person('a', timestamp_s=0, low_posture=True, moving=False))
+        self.policy.fall_state(self._person('a', timestamp_s=1.5, low_posture=True, moving=False))
+
+        self.policy.note_present_tracks('cam-1', {'a'}, timestamp_s=1.6)
+
+        self.assertEqual(1, self.policy.tracked_count)
+        state = self.policy.fall_state(self._person('a', timestamp_s=2, low_posture=True, moving=False))
+        self.assertEqual(FallState.IMMOBILE.value, state)
+
+
+class PersonPolicySingleAdvanceTest(unittest.TestCase):
+    """한 프레임은 시간축을 한 칸만 밀어야 한다.
+
+    상태와 이벤트를 따로 물어보면 `observe_fall` 과 `fall_state` 가 각각
+    전이시켜서, 같은 관측 하나로 FALLEN 을 지나 IMMOBILE 까지 가버린다.
+    """
+
+    def test_one_observation_advances_the_state_machine_once(self) -> None:
+        policy = PersonPolicy(
+            required_consecutive_frames=3,
+            monitor=MonitorConfig(fall_confirm_seconds=1.0, immobile_seconds=5.0),
+        )
+        observation = PersonObservation('cam-1', 'a', 0.0, BoundingBox(0, 0, 10, 10),
+                                        0.9, True, False)
+        policy.observe(observation)
+
+        result = policy.observe(
+            PersonObservation('cam-1', 'a', 1.5, BoundingBox(0, 0, 10, 10), 0.9, True, False)
+        )
+
+        self.assertEqual(FallState.FALLEN.value, result['state'])
+        self.assertFalse(result['event'])
