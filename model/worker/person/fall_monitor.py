@@ -33,6 +33,15 @@ class FallMonitor:
         self.last_centroid: tuple[float, float] | None = None
         self.event_sent = False
         self.recovery_since: float | None = None
+        # When stillness began. immobile_seconds is measured from here rather
+        # than from `since` so that it keeps meaning "how long they have been
+        # still", which `since` stopped meaning as soon as micro-motion entered
+        # the picture: breathing alone flips FALLEN <-> IMMOBILE, and every flip
+        # reset `since`, so a person motionless for 14 seconds never accumulated
+        # 5 continuous ones and was never escalated (2026-08-24 recording
+        # 170622). Those flips leave this untouched; only a real recovery — a
+        # full return to NORMAL — clears it.
+        self.immobile_since: float | None = None
 
     def update(self, timestamp: float, aspect_ratio: float, centroid: tuple[float, float], frame_diagonal: float) -> dict:
         """측정과 상태 전이를 한 번에. 측정이 이미 있으면 `advance` 를 직접 쓴다."""
@@ -46,6 +55,19 @@ class FallMonitor:
         result["motion"] = motion
         return result
 
+    def note_no_detection(self) -> None:
+        """Call for a frame in which nobody was detected.
+
+        The verdict itself is kept — someone out of frame may still be on the
+        floor — but the recovery candidate is dropped. Otherwise wall-clock time
+        during which nothing was observed is credited as continuous "not fallen"
+        evidence: a person who fell, left the frame for four seconds and came
+        back was switched to NORMAL on their first returning frame, because
+        recovery_since still held the timestamp from just before they vanished
+        (2026-08-24 recording).
+        """
+        self.recovery_since = None
+
     def advance(self, timestamp: float, fallen: bool, low_motion: bool) -> dict:
         """시간축 상태 전이만 한다. 자세·움직임 **판정은 이미 끝나 있다.**
 
@@ -58,6 +80,7 @@ class FallMonitor:
                 # Nothing safety-critical accumulated yet: drop immediately.
                 self.state, self.since, self.event_sent = FallState.NORMAL, timestamp, False
                 self.recovery_since = None
+                self.immobile_since = None
             else:
                 # FALLEN / IMMOBILE / EMERGENCY_CANDIDATE: require sustained recovery.
                 if self.recovery_since is None:
@@ -65,6 +88,7 @@ class FallMonitor:
                 elif timestamp - self.recovery_since >= self.config.recovery_confirm_seconds:
                     self.state, self.since, self.event_sent = FallState.NORMAL, timestamp, False
                     self.recovery_since = None
+                    self.immobile_since = None
         else:
             self.recovery_since = None
             if self.state == FallState.NORMAL:
@@ -73,9 +97,14 @@ class FallMonitor:
                 self.state, self.since = FallState.FALLEN, timestamp
             elif self.state == FallState.FALLEN and low_motion:
                 self.state, self.since = FallState.IMMOBILE, timestamp
+                if self.immobile_since is None:
+                    self.immobile_since = timestamp
             elif self.state == FallState.IMMOBILE and not low_motion:
                 self.state, self.since = FallState.FALLEN, timestamp
-            elif self.state == FallState.IMMOBILE and timestamp - self.since >= self.config.immobile_seconds:
+            elif (
+                self.state == FallState.IMMOBILE and self.immobile_since is not None
+                and timestamp - self.immobile_since >= self.config.immobile_seconds
+            ):
                 self.state = FallState.EMERGENCY_CANDIDATE
         event = self.state == FallState.EMERGENCY_CANDIDATE and not self.event_sent
         if event:

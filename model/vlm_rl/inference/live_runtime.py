@@ -40,12 +40,17 @@ class PersonSafetyReporter:
     def observe(self, detection: Any | None, frame_shape: tuple[int, ...], now: float) -> None:
         if detection is None:
             self.posture.reset()
+            # Someone out of frame may still be on the floor, so the verdict
+            # stands; only the recovery candidate is dropped, or the unobserved
+            # gap would count as evidence that they got up.
+            self.monitor.note_no_detection()
             return
         measurement = self.posture.measure(
             detection.mask,
             math.hypot(frame_shape[1], frame_shape[0]),
         )
         if measurement is None:
+            self.monitor.note_no_detection()
             return
         state = self.monitor.advance(
             now,

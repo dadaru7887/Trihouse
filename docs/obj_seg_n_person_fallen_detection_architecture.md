@@ -151,8 +151,8 @@ VLM+RL은 `recovery_proposals` 등 전용 테이블이 있는데, 낙상 쪽은 
 | 접촉 IoU (사람-사람 / 사람-장애물) | 있음 | **없음** |
 | 판정기 | logreg (`joblib`) | 임계값 비교 |
 | 다중 인원 | `track(persist=True)` + track_id별 모니터 | 최고 confidence 1명 |
-| `note_no_detection()` | 있음 | **없음** |
-| `fallen_since` | 있음 | **없음** |
+| `note_no_detection()` | 있음 | **이식 완료** (2026-08-29) |
+| 오실레이션 안전장치 | `fallen_since` | **`immobile_since`** (의미 보존, §6-2) |
 
 ### 6-1. 분류기가 쓰는 5개 피처
 
@@ -166,12 +166,15 @@ VLM+RL은 `recovery_proposals` 등 전용 테이블이 있는데, 낙상 쪽은 
 
 접촉 피처를 넣은 이유가 실측으로 남아 있다 — **실행 검증**: 171307 "기대는 낙상"에서 기대기 전 IoU=0.000 → 기댄 뒤 0.05~0.13대로 꾸준히 상승했고 GT 타임라인과 일치. 같은 구간에서 aspect_ratio는 거의 무신호였다. 사람-사람과 사람-장애물을 나눈 것은 신뢰도가 다를 것이라는 판단(사람-사람이 더 확실)에서 분류기가 각각 다른 가중치를 배우게 하려는 것이다.
 
-### 6-2. 배달본이 고친 두 버그 — 실행 검증
+### 6-2. 배달본이 고친 두 버그 — 이식 완료 (2026-08-29)
 
-둘 다 운영 코드에 **아직 없다.**
+1. **`note_no_detection()`** — 탐지가 끊긴 프레임에서 `recovery_since`를 리셋한다. 없으면 사람이 화면 밖에 있던 wall-clock 시간이 "정상이었다"는 증거로 잘못 인정된다. 2026-08-24 실측: 낙상 후 사람이 나갔다 4초 뒤 돌아왔는데 그 4초가 통째로 `recovery_confirm_seconds`를 만족시켜 한 프레임 만에 `NORMAL`로 튀었다. **원본과 동일하게 이식**했고, 호출부 두 곳([worker.py:note_person_lost](../model/worker/person/worker.py), [live_runtime.py:PersonSafetyReporter.observe](../model/vlm_rl/inference/live_runtime.py))에 배선했다.
 
-1. **`note_no_detection()`** — 탐지가 끊긴 프레임에서 `recovery_since`를 리셋한다. 없으면 사람이 화면 밖에 있던 wall-clock 시간이 "정상이었다"는 증거로 잘못 인정된다. 2026-08-24 실측: 낙상 후 사람이 나갔다 4초 뒤 돌아왔는데 그 4초가 통째로 `recovery_confirm_seconds`를 만족시켜 한 프레임 만에 `NORMAL`로 튀었다.
-2. **`fallen_since`** — `FALLEN ↔ IMMOBILE` 내부 전이로는 리셋되지 않는 별도 타임스탬프. 없으면 숨쉬기 같은 미세 움직임으로 두 상태를 오가며 매번 `since`가 리셋돼, 14초 넘게 쓰러져 있었는데도 5초 연속을 한 번도 못 채워 `EMERGENCY_CANDIDATE`가 **영영 안 뜬다**. (170622 실측)
+2. **오실레이션 버그** — 숨쉬기 같은 미세 움직임으로 `FALLEN ↔ IMMOBILE`을 오가면 매번 `since`가 리셋돼, 14초 넘게 쓰러져 있었는데도 5초 연속을 한 번도 못 채워 `EMERGENCY_CANDIDATE`가 **영영 안 뜬다**(170622 실측). 원본은 `fallen_since`(첫 `FALLEN` 진입 시각)로 풀었다.
+
+   **여기서는 `immobile_since`(첫 `IMMOBILE` 진입 시각)로 풀었다 — 의도적으로 원본과 다르다.** 원본 방식은 `immobile_seconds`의 의미를 "정지가 지속된 시간"에서 "넘어진 뒤 경과한 시간"으로 바꾼다. [test_person_policy.py](../model/worker/tests/test_person_policy.py)가 전자를 명시적으로 문서화하고 있었고("자세 확정 1초 → 정지 지속 5초 → 확정 후보"), 원본 방식을 그대로 넣자 그 테스트가 깨졌다. 낙상 후 버둥거리는 사람은 아직 "일어나지 못하고 있는" 것이 아니므로 의미를 보존하는 쪽을 택했다.
+
+   `immobile_since`는 `FALLEN ↔ IMMOBILE` 플립으로는 리셋되지 않고 **진짜 회복(`NORMAL` 복귀)에서만** 리셋된다. 오실레이션 버그는 원본과 동일하게 해결되며, 기존 테스트도 그대로 통과한다. 이 선택은 [test_fall_monitor.py](../model/worker/tests/test_fall_monitor.py)의 `test_the_escalation_clock_measures_stillness_not_time_since_falling`으로 고정해 뒀다.
 
 ### 6-3. 규칙 OR를 뺀 이유 — 실행 검증
 
@@ -246,7 +249,7 @@ code/eval_end_to_end.py     → from dataloader.roboflow_labels import ...
 
 ### 9-2. 작업 순서 (제안)
 
-1. **버그 픽스 먼저** — `note_no_detection()`과 `fallen_since`를 `model/worker/person/fall_monitor.py`에 이식. 분류기와 무관하게 지금 코드의 실제 버그이고, 가장 작고 가장 확실한 이득이다.
+1. ~~**버그 픽스 먼저**~~ — **완료 (2026-08-29)**. §6-2 참고.
 2. **다중 인원 배선** — 이미 있는 `PersonPolicy`를 운영 경로에 연결. 새 코드를 쓰는 게 아니라 **이미 있는데 안 쓰이는 것을 쓰는** 일이다(§5-1).
 3. **피처 확장** — `posture.py`에 PCA 각도 / centroid_y / 접촉 IoU 추가. 측정과 판정을 나눠 둔 설계 덕분에 `fall_monitor.py`는 안 건드려도 된다.
 4. **분류기 도입** — `joblib` 번들 로딩 + threshold. VLM+RL의 distilled selector와 같은 문제를 푼다(승인된 체크포인트 검증, 불확실할 때 규칙으로 fallback)므로 [distilled_selector.py](../model/vlm_rl/inference/distilled_selector.py)의 게이팅 패턴을 참고할 수 있다.

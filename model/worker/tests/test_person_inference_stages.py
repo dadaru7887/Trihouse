@@ -205,3 +205,26 @@ def test_a_local_camera_index_must_be_told_its_identity() -> None:
     with pytest.raises(SystemExit):
         resolve_camera_id("0", None)
     assert resolve_camera_id("0", "CAM-PK-01") == "CAM-PK-01"
+
+
+def test_losing_the_person_also_stops_the_recovery_clock() -> None:
+    """Both stages must forget the person together.
+
+    `posture.reset()` alone drops the movement baseline but leaves the monitor's
+    recovery candidate running, so wall-clock time with nobody on camera counts
+    as continuous "not fallen" evidence.
+    """
+    from model.worker.person.worker import note_person_lost
+
+    posture = PostureEstimator(PostureConfig())
+    monitor = FallMonitor(MonitorConfig(fall_confirm_seconds=1, recovery_confirm_seconds=1))
+    monitor.advance(0, fallen=True, low_motion=True)
+    monitor.advance(1.5, fallen=True, low_motion=True)
+    monitor.advance(2, fallen=False, low_motion=True)
+    assert monitor.recovery_since == 2
+
+    assert note_person_lost(posture, monitor) == "NO_DETECTION"
+
+    assert monitor.recovery_since is None
+    assert monitor.state is FallState.FALLEN
+    assert posture._last_centroid is None

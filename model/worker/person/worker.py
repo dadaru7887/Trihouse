@@ -132,6 +132,19 @@ def _post(url: str, payload: dict) -> None:
         print(json.dumps({"type": "REPORT_FAILED", "detail": str(error)}), flush=True)
 
 
+def note_person_lost(posture: PostureEstimator, monitor: FallMonitor) -> str:
+    """A frame with nobody detected. Both stages forget the person together.
+
+    The posture baseline goes so the gap is not counted as movement, and the
+    monitor's recovery candidate goes so the gap is not counted as evidence that
+    a fallen person got up. The fall verdict itself stands — someone out of
+    frame may still be on the floor.
+    """
+    posture.reset()
+    monitor.note_no_detection()
+    return "NO_DETECTION"
+
+
 def main(argv: list[str] | None = None) -> int:
     import cv2
 
@@ -158,15 +171,12 @@ def main(argv: list[str] | None = None) -> int:
             timestamp = time.monotonic() - started
             person = detector.detect_person(frame)
             if person is None:
-                # 사람이 없으면 자세 기준을 버린다. 다음에 다시 잡혔을 때 그
-                # 사이의 간격을 이동으로 세면 정지를 움직임으로 잘못 읽는다.
-                posture.reset()
-                state = "NO_DETECTION"
+                state = note_person_lost(posture, monitor)
             else:
                 diagonal = math.hypot(person.mask.shape[1], person.mask.shape[0])
                 measurement = posture.measure(person.mask, diagonal)
                 if measurement is None:
-                    state = "NO_DETECTION"
+                    state = note_person_lost(posture, monitor)
                 else:
                     result = monitor.advance(
                         timestamp,
