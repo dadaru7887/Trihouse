@@ -44,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     labels = stages.add_parser("labels", help="dataset label 품질 분석")
     labels.add_argument("--config", type=Path, default=_default_config())
+    labels.add_argument("--data", type=Path, help="config 의 dataset.data_yaml 을 덮어쓴다")
     labels.add_argument("--output", type=Path, default=Path("runs/label_analysis"))
 
     preflight = stages.add_parser("preflight", help="학습 전 dataset 검사만")
@@ -56,6 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     train = stages.add_parser("train", help="multi-seed 학습/validation/test")
     train.add_argument("--config", type=Path, default=_default_config())
     train.add_argument("--experiment-dir", type=Path)
+    train.add_argument("--data", type=Path, help="config 의 dataset.data_yaml 을 덮어쓴다")
 
     evaluate = stages.add_parser("evaluate", help="학습된 weight 평가")
     evaluate.add_argument("--run-dir", type=Path, required=True)
@@ -81,7 +83,7 @@ class _UnusedBackend:
 def _labels(args: argparse.Namespace) -> int:
     from model.perception.segmentation.training.dataloader.label_analysis import analyze_labels
 
-    config = load_experiment_config(args.config)
+    config = load_experiment_config(args.config, data_override=args.data)
     analyze_labels(config.training.data, args.output)
     print(args.output.resolve())
     return 0
@@ -130,7 +132,9 @@ def _run(args: argparse.Namespace) -> int:
 def _train(args: argparse.Namespace) -> int:
     from model.perception.segmentation.training.trainer.experiment import MultiSeedExperiment
 
-    selected = MultiSeedExperiment.from_config(args.config, args.experiment_dir).run()
+    selected = MultiSeedExperiment.from_config(
+        args.config, args.experiment_dir, data_override=args.data
+    ).run()
     print(f"[TRAIN 완료] {selected}")
     return 0
 

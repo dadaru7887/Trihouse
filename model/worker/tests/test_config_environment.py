@@ -103,3 +103,57 @@ def test_environment_snapshot_records_selected_gpu_index() -> None:
     assert seen == [1]
     assert snapshot["gpu"]["index"] == 1
     assert snapshot["gpu"]["name"] == "GPU 1"
+
+
+# ---------------------------------------- 데이터셋 경로는 하이퍼파라미터다
+
+
+def _config_yaml(tmp_path, data_yaml: str) -> "Path":
+    from pathlib import Path
+
+    text = f"""
+schema_version: 1
+experiment: {{name: t, seeds: [42], continue_on_failure: true}}
+dataset: {{data_yaml: {data_yaml}, allow_posture_gap: true}}
+model: {{weights: 26s, image_size: 640}}
+training: {{epochs: 1, patience: 1, batch: -1, workers: 0, device: cpu}}
+evaluation: {{min_mask_recall: 0.1, min_mask_map50: 0.1}}
+output: {{run_root: runs/t}}
+selection: {{metric: person_mask_map50_95, tie_breaker: person_mask_recall}}
+"""
+    path = Path(tmp_path) / "config.yaml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_the_config_dataset_path_can_be_overridden(tmp_path) -> None:
+    """데이터셋 경로는 코드도 config 도 아닌 **인자**로 정해질 수 있어야 한다."""
+    from model.perception.segmentation.training.config_loader import load_experiment_config
+
+    path = _config_yaml(tmp_path, "placeholder/data.yaml")
+    overridden = load_experiment_config(path, data_override=tmp_path / "other" / "data.yaml")
+
+    assert overridden.training.data == (tmp_path / "other" / "data.yaml").resolve()
+
+
+def test_without_an_override_the_config_value_is_used(tmp_path) -> None:
+    from model.perception.segmentation.training.config_loader import load_experiment_config
+
+    path = _config_yaml(tmp_path, "placeholder/data.yaml")
+    config = load_experiment_config(path)
+
+    assert config.training.data.name == "data.yaml"
+    assert "placeholder" in str(config.training.data)
+
+
+def test_the_shipped_config_ships_a_placeholder_not_a_real_path() -> None:
+    """저장소에 딸려 오는 config 가 실재하지 않는 경로를 실재하는 척 가리키면 안 된다."""
+    import yaml
+    from pathlib import Path
+
+    raw = yaml.safe_load(
+        Path("model/perception/segmentation/training/configs/config.yaml").read_text(encoding="utf-8")
+    )
+    value = raw["dataset"]["data_yaml"]
+
+    assert "PLACEHOLDER" in value or "<" in value

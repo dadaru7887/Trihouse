@@ -20,13 +20,20 @@ from model.perception.segmentation.training.orchestrator import run_pipeline
 from model.perception.segmentation.training.trainer.yoloe_trainer import YOLOEBackend
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="하나의 seed로 YOLOE 학습/검증/test 실행")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--experiment-dir", type=Path, required=True)
-    args = parser.parse_args()
-    experiment = load_experiment_config(args.config)
+    # 부모 실험이 --data 로 config 를 덮어썼다면 그 값이 여기까지 와야 한다.
+    # 안 오면 자식은 config 파일의 경로로 조용히 학습한다.
+    parser.add_argument("--data", type=Path)
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    experiment = load_experiment_config(args.config, data_override=args.data)
     config = config_for_seed(experiment, args.seed)
     config = dataclasses.replace(config, run_root=args.experiment_dir.resolve())
     run_pipeline(config, YOLOEBackend())

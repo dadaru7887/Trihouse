@@ -58,3 +58,46 @@ def test_model_selection_uses_validation_only_and_deterministic_tie_break(tmp_pa
     (tmp_path / "seed_17/evaluation/validation_metrics.json").write_text(json.dumps({"mask_map50_95": 0.8, "mask_recall": 0.8}))
     selected = select_deployment_model(tmp_path, [42, 17], "mask_map50_95", "mask_recall")
     assert selected["selected_seed"] == 17
+
+
+def test_the_dataset_override_reaches_every_seed_subprocess() -> None:
+    """override 가 자식에게 안 가면 config 의 경로로 조용히 학습된다.
+
+    실패해도 예외가 아니라 "다른 데이터셋으로 학습된 모델" 로 나타나므로 원인에서
+    가장 먼 종류의 버그다.
+    """
+    from pathlib import Path
+
+    from model.perception.segmentation.training.multi_seed import build_seed_command
+
+    command, _ = build_seed_command(
+        Path("/usr/bin/python3"), Path("/cfg/config.yaml"), 42, Path("/runs/exp"),
+        {}, data_override=Path("/data/mine/data.yaml"),
+    )
+
+    assert "--data" in command
+    assert command[command.index("--data") + 1] == "/data/mine/data.yaml"
+
+
+def test_without_an_override_no_data_flag_is_passed() -> None:
+    from pathlib import Path
+
+    from model.perception.segmentation.training.multi_seed import build_seed_command
+
+    command, _ = build_seed_command(
+        Path("/usr/bin/python3"), Path("/cfg/config.yaml"), 42, Path("/runs/exp"), {},
+    )
+
+    assert "--data" not in command
+
+
+def test_the_seed_runner_accepts_the_dataset_override() -> None:
+    """자식 쪽에도 그 인자가 실제로 있어야 한다 — 없으면 argparse 가 죽는다."""
+    from model.perception.segmentation.training.seed_runner import build_parser
+
+    args = build_parser().parse_args([
+        "--config", "/cfg/config.yaml", "--seed", "42",
+        "--experiment-dir", "/runs/exp", "--data", "/data/mine/data.yaml",
+    ])
+
+    assert str(args.data) == "/data/mine/data.yaml"

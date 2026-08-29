@@ -62,7 +62,16 @@ def _resolve(root: Path, value: str | None) -> Path | None:
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 
 
-def load_experiment_config(path: Path | str, project_root: Path | str | None = None) -> ExperimentConfig:
+def load_experiment_config(
+    path: Path | str,
+    project_root: Path | str | None = None,
+    data_override: Path | str | None = None,
+) -> ExperimentConfig:
+    """`data_override` 가 있으면 config 의 dataset.data_yaml 을 이긴다.
+
+    데이터셋 경로는 실험마다 바뀌는 값이므로 config 파일을 고쳐 가며 쓰는 것이
+    아니라 인자로 들어올 수 있어야 한다. 우선순위는 인자 > config > (기본값 없음).
+    """
     path = Path(path).expanduser().resolve()
     if not path.is_file():
         raise ConfigError(f"config 파일이 없습니다: {path}")
@@ -86,9 +95,10 @@ def load_experiment_config(path: Path | str, project_root: Path | str | None = N
     dataset, model, training, evaluation, output, selection = (
         sections[key] for key in ("dataset", "model", "training", "evaluation", "output", "selection")
     )
-    data = _resolve(root, dataset.get("data_yaml"))
+    data = _resolve(root, str(data_override) if data_override is not None
+                    else dataset.get("data_yaml"))
     if data is None:
-        raise ConfigError("dataset.data_yaml이 필요합니다")
+        raise ConfigError("dataset.data_yaml이 필요합니다 (또는 --data 로 넘기십시오)")
     run_base = _resolve(root, output.get("run_root", "runs/lego_worker"))
     config = TrainingConfig(
         model=str(model.get("weights", "26s")), data=data, run_root=run_base / name,

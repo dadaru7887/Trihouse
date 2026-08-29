@@ -17,12 +17,16 @@ from model.perception.segmentation.training.multi_seed import aggregate_seed_run
 class MultiSeedExperiment:
     config: ExperimentConfig
     experiment_dir: Path
+    # 부모가 --data 로 덮어썼으면 seed 자식들에게도 같은 값을 넘겨야 한다.
+    data_override: Path | None = None
 
     @classmethod
-    def from_config(cls, config_path: Path, experiment_dir: Path | None = None):
-        config = load_experiment_config(config_path)
+    def from_config(cls, config_path: Path, experiment_dir: Path | None = None,
+                    data_override: Path | None = None):
+        config = load_experiment_config(config_path, data_override=data_override)
         run_dir = experiment_dir or config.training.run_root / datetime.now().strftime("%Y%m%d_%H%M%S")
-        return cls(config=config, experiment_dir=Path(run_dir).resolve())
+        return cls(config=config, experiment_dir=Path(run_dir).resolve(),
+                   data_override=Path(data_override).resolve() if data_override else None)
 
     def _write_metadata(self) -> None:
         metadata = {
@@ -49,7 +53,10 @@ class MultiSeedExperiment:
     def _run_seeds(self) -> list[int]:
         failures = []
         for seed in self.config.seeds:
-            command, environment = build_seed_command(Path(sys.executable), self.config.config_path, seed, self.experiment_dir, os.environ)
+            command, environment = build_seed_command(
+                Path(sys.executable), self.config.config_path, seed, self.experiment_dir,
+                os.environ, data_override=self.data_override,
+            )
             result = subprocess.run(command, env=environment, check=False)
             if result.returncode:
                 failures.append(seed)

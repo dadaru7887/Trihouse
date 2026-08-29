@@ -4,7 +4,9 @@ experiment:
   seeds: [42]
   continue_on_failure: false
 dataset:
-  data_yaml: dataset/raw_examples/data.yaml
+  # PLACEHOLDER — 실재하는 경로가 아니다. 반드시 --data 로 넘기거나
+  # 이 값을 자기 데이터셋 경로로 바꾼다. 상대 경로는 저장소 루트 기준.
+  data_yaml: PLACEHOLDER/replace_with_your_dataset/data.yaml
   posture_manifest: null
   allow_posture_gap: true
   min_fallen_per_eval_split: 10

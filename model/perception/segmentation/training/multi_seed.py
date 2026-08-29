@@ -19,6 +19,7 @@ def build_seed_command(
     experiment_dir: Path,
     base_environment: Mapping[str, str],
     runner_module: str = SEED_RUNNER_MODULE,
+    data_override: Path | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """seed 하나를 돌릴 자식 프로세스 명령을 만든다.
 
@@ -29,6 +30,8 @@ def build_seed_command(
         str(python), "-m", runner_module, "--config", str(config), "--seed", str(seed),
         "--experiment-dir", str(experiment_dir),
     ]
+    if data_override is not None:
+        command += ["--data", str(data_override)]
     environment = dict(base_environment)
     environment["PYTHONHASHSEED"] = str(seed)
     environment["NO_ALBUMENTATIONS_UPDATE"] = "1"
