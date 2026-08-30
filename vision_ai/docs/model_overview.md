@@ -1,21 +1,25 @@
-# Trihouse models
+# vision_ai 운영 개요
+
+> 설계 **근거**(왜 이렇게 만들었는지)는 [설계 근거 문서](../../docs/vision_ai_design_rationale.md)에 있다.
+> 이 문서는 운영 배치와 결정 규칙만 다룬다.
 
 RTX 4060 영상 수신·저장과 RTX 5080 추론을 역할별로 분리한다. 영상은 RTSP로
 처리하고 검출 결과만 JSON/NDJSON으로 Control Tower와 Pinky bridge에 전달한다.
 
-| 폴더 | 책임 |
+| 위치 | 책임 |
 |---|---|
-| `stream_hub/` | MediaMTX RTSP 수신·metrics |
-| `recording_server/` | 서버측 녹화·보존·evidence URI |
-| `inference_common/` | 최신 frame bus, 공통 schema, health |
-| `yolo_inference_server/` | 모델 로딩·GPU 추론 (`detector.py`) |
-| `person_worker/` | 사람 자세 측정(`posture.py`)·낙상 상태(`fall_monitor.py`)·정책(`policy.py`)·추론 루프(`worker.py`) |
-| `object_worker/` | 객체 검출·segmentation·추적 |
-| `marker_worker/` | QR·ArUco 판독·pose 추정 |
-| `model_registry/` | 모델 승인·배포·rollback |
-| `training/` | 학습 파이프라인 전체. 진입점은 `train.py` 하나 |
-| `evaluation/` | box instance·mask pixel 지표 |
+| `robot/media/stream_hub/` | MediaMTX RTSP 수신·metrics |
+| `robot/media/recording/` | 서버측 녹화·보존·evidence URI |
+| `models/perception/detector.py` | 모델 로딩·GPU 추론 |
+| `robot/perception/` | 자세 측정(`posture.py`)·낙상 상태(`fall_monitor.py`)·사람별 정책(`policy.py`)·프레임 평가(`frame.py`)·추론 루프(`worker.py`) |
+| `robot/object/` | 바구니 보정 |
+| `robot/marker/` | QR·ArUco 판독·pose 추정 |
+| `models/perception/trainer/` | 인지 모델 학습 파이프라인 |
+| `models/recovery/trainer/` | 복구 모델 오프라인 학습 |
+| `utils/metrics.py` | box instance·mask pixel 지표 |
 | `tests/` | recorded stream·장애 profile 통합 시험 |
+
+진입점은 둘이다: 학습·검증은 `vision_ai.main`, 로봇 실시간은 `vision_ai.robot.main`.
 
 ## PC1 → PC2 표준 영상 입력
 
@@ -36,7 +40,7 @@ rtsp://<PC1_LAN_IP>:8554/<role>/<camera_id>
 명령 확인 예시:
 
 ```bash
-cd /home/syw/Trihouse
+cd "$REPO_ROOT"   # 저장소 루트
 python3 - <<'PY'
 from vision_ai.robot.media.stream_hub.ingress import (
     StreamIdentity, UsbIngressConfig, UsbVideoFormat, VideoEncoder,
@@ -79,7 +83,7 @@ PY
   생성기를 사용한다.
 
 ```bash
-cd /home/syw/Trihouse
+cd "$REPO_ROOT"   # 저장소 루트
 python3 -m unittest -v \
   vision_ai.tests.worker.test_person_policy.PersonPolicyTest.test_roi_requires_consecutive_person_frames \
   vision_ai.tests.worker.test_person_policy.PersonPolicyTest.test_person_outside_roi_does_not_count_as_worker_presence \
@@ -131,7 +135,7 @@ frame ─▶ yolo_inference_server/detector.py    1단계. 검출        ← 학
 ## 학습·추론 명령
 
 ```bash
-cd /home/syw/Trihouse
+cd "$REPO_ROOT"   # 저장소 루트
 # 학습 (GPU 필요)
 venv/yolo_segmentation/bin/python -m vision_ai.models.perception.trainer.pipeline train \
   --config vision_ai/models/perception/trainer/configs/config.yaml

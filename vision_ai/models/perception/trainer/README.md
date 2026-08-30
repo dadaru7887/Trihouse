@@ -1,8 +1,18 @@
-# LEGO Worker YOLOE 학습 파이프라인
+# 인지 모델 학습 파이프라인 (YOLOE segmentation)
 
-LEGO를 `person`으로 segmentation하는 YOLOE 모델을 학습·평가하는 POC 파이프라인이다. 기존 `/home/syw/Trihouse/vision_ai/models/perception/trainer/augmentation_recipes.py`의 S1~S5 환경 augmentation을 그대로 사용한다.
+> 설계 **근거**(왜 에피소드 단위로 나눴는지, 왜 S1~S5 증강인지)는
+> [설계 근거 문서](../../../../docs/vision_ai_design_rationale.md) §3 에 있다.
+> 이 문서는 실행 절차만 다룬다.
 
-현재 데이터셋은 `/home/syw/Trihouse/dataset/raw_examples/data.yaml`이며 `obstacle=0`, `person=1`이다. 감사 결과 train에는 수평 mask 후보가 있지만 valid/test에는 명백한 fallen 후보가 없다. 따라서 지금 실행은 `--allow-posture-gap`을 붙인 **LEGO 검출·segmentation 학습**이고, 낙상 성능 검증 완료를 의미하지 않는다.
+사람/장애물 2-class segmentation 모델(`obstacle=0`, `person=1`)을 학습·평가한다.
+S1~S5 다온도 환경 증강은 `augmentation_recipes.py` 를 그대로 쓴다.
+
+**데이터셋 경로는 인자다.** 저장소에 딸린 `configs/config.yaml` 의 `data_yaml` 은
+`PLACEHOLDER/...` 이므로 반드시 `--data` 로 넘기거나 config 를 자기 경로로 바꾼다.
+
+낙상 성능 검증은 이 파이프라인의 범위가 아니다. 평가 split 에 fallen 인스턴스가
+부족하면 `--allow-posture-gap` 이 필요하고, 그때의 결과는 **검출·segmentation 학습**
+이지 낙상 성능 검증이 아니다.
 
 ## 코드 흐름
 
@@ -47,7 +57,7 @@ Segmentation의 핵심 지표는 person mask mAP50-95, mAP50, recall, precision�
 Docker는 아직 만들지 않는다. 아래 스크립트가 저장소의 `venv/yolo_segmentation`에 Python 3.12 venv와 PyTorch cu128, Ultralytics를 설치한다.
 
 ```bash
-cd /home/syw/Trihouse
+cd "$REPO_ROOT"   # 저장소 루트
 ./vision_ai/setup_venv.sh
 ```
 
@@ -58,7 +68,7 @@ cd /home/syw/Trihouse
 Ultralytics나 GPU 없이 실행할 수 있다.
 
 ```bash
-cd /home/syw/Trihouse
+cd "$REPO_ROOT"   # 저장소 루트
 venv/yolo_segmentation/bin/python -m vision_ai.models.perception.trainer.pipeline preflight \
   --data dataset/raw_examples/data.yaml \
   --output runs/lego_worker/manual-preflight \
@@ -87,7 +97,7 @@ test/images/example.jpg,fallen,normal_light
 모든 shell wrapper는 `venv/yolo_segmentation`을 사용한다.
 
 ```bash
-cd /home/syw/Trihouse
+cd "$REPO_ROOT"   # 저장소 루트
 
 # 1) Dataset 검사와 resolved config 생성
 preflight 단계 \
@@ -123,7 +133,7 @@ evaluate 단계 \
 - `"0"`, `"1"`, `"cuda:1"`: 해당 GPU 필수, index가 없으면 즉시 실패
 
 ```bash
-cd /home/syw/Trihouse
+cd "$REPO_ROOT"   # 저장소 루트
 venv/yolo_segmentation/bin/python -m vision_ai.models.perception.trainer.pipeline train \
   --config vision_ai/models/perception/trainer/configs/config.yaml
 ```
@@ -150,7 +160,7 @@ venv/yolo_segmentation/bin/python -m vision_ai.models.perception.trainer.pipelin
 ### 호스트에서 Shell 실행
 
 ```bash
-cd /home/syw/Trihouse
+cd "$REPO_ROOT"   # 저장소 루트
 venv/yolo_segmentation/bin/python -m vision_ai.models.perception.trainer.pipeline run \
   --data dataset/raw_examples/data.yaml \
   --run-root runs/lego_worker \
@@ -168,7 +178,7 @@ venv/yolo_segmentation/bin/python -m vision_ai.models.perception.trainer.pipelin
 카메라 `0`, MP4 경로, RTSP URL을 `--source`로 받을 수 있다. `--weights`에는 `best.pt` 또는 multi-seed 결과의 `selected_model.json`을 준다.
 
 ```bash
-cd /home/syw/Trihouse
+cd "$REPO_ROOT"   # 저장소 루트
 venv/yolo_segmentation/bin/python \
   -m vision_ai.robot.perception.worker \
   --weights runs/lego_worker/lego_yoloe_multiseed/<실험시각>/selected_model.json \
@@ -205,7 +215,7 @@ Validation gate 기본값은 person mask Recall 0.90, mask mAP50 0.80이다. mul
 ## 8. 자동 테스트
 
 ```bash
-cd /home/syw/Trihouse
+cd "$REPO_ROOT"   # 저장소 루트
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q \
   vision_ai/tests/worker
 ```
