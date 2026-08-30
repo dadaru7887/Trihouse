@@ -139,6 +139,7 @@ class SafetySupervisor(Node):
         self.nearby_range: float | None = None
         self.person_detected = False
         self.person_distance = None
+        self.person_pose_class = ""
         self.person_until = 0.0
         self.keep_out_zones: dict[str, KeepOutZone] = {}
         self.position: tuple[float, float] | None = None
@@ -225,6 +226,9 @@ class SafetySupervisor(Node):
         self.person_detected = message.confidence > 0.0
         position = message.pose.pose.position
         self.person_distance = hypot(position.x, position.y)
+        # 자세 상태를 그대로 들고 있는다. 쓰러진 사람은 서 있는 사람과 다른
+        # 위험이고, 그 구분은 여기 말고는 만들 데가 없다.
+        self.person_pose_class = message.pose_class or ""
         self.person_until = monotonic() + max(message.ttl_ms, 1) / 1000.0
 
     def _on_keep_out(self, message: KeepOutZone) -> None:
@@ -285,6 +289,9 @@ class SafetySupervisor(Node):
                               swept_blocked=swept_blocked,
                               person_detected=person_detected,
                               person_distance_m=self.person_distance if person_detected else None,
+                              # TTL 이 지난 관측의 자세를 계속 들고 있으면, 사람이
+                              # 사라진 뒤에도 "쓰러짐" 이 붙은 채 판단에 들어간다.
+                              person_pose_class=self.person_pose_class if person_detected else "",
                               keep_out=self._in_keep_out_zone(), emergency_latched=self.emergency_latched,
                               control_link_fresh=(self.manual_mode_enabled or self.control_link_online))
         decision = apply_safety_gate(desired, inputs, self.config)

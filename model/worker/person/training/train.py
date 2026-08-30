@@ -36,46 +36,10 @@ from pathlib import Path
 from typing import Any
 
 from model.worker.person.features import FEATURE_NAMES
+from model.worker.person.training.dataloader import SPLITS, DatasetError, load_dataset
 
-SPLITS = ("train", "valid", "test")
 # 배달본이 쓴 후보 격자와 같다.
 THRESHOLD_CANDIDATES = [round(0.05 + 0.05 * step, 2) for step in range(19)]
-
-
-class DatasetError(ValueError):
-    """학습을 시작할 수 없는 데이터셋. 조용히 이상한 모델을 만드는 대신 터진다."""
-
-
-def load_dataset(path: Path) -> dict[str, tuple[list[list[float]], list[int]]]:
-    rows: dict[str, tuple[list[list[float]], list[int]]] = {s: ([], []) for s in SPLITS}
-    text = Path(path).read_text(encoding="utf-8")
-    for number, line in enumerate(text.splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError as error:
-            raise DatasetError(f"{path}:{number} JSON 이 아닙니다 — {error}") from error
-        split = record.get("split")
-        if split not in rows:
-            raise DatasetError(f"{path}:{number} split 은 train/valid/test 중 하나여야 합니다: {split!r}")
-        features = record.get("features")
-        if not isinstance(features, list) or len(features) != len(FEATURE_NAMES):
-            raise DatasetError(
-                f"{path}:{number} features 는 계약된 다섯 값(five)이어야 합니다: {FEATURE_NAMES}"
-            )
-        rows[split][0].append([float(value) for value in features])
-        rows[split][1].append(1 if record.get("fallen") else 0)
-
-    for split in SPLITS:
-        features, labels = rows[split]
-        if not features:
-            raise DatasetError(f"{split} split 이 비어 있습니다 (valid/test 도 필요합니다)")
-        if sum(labels) == 0:
-            raise DatasetError(f"{split} split 에 fallen 예시가 없습니다 — 지표를 낼 수 없습니다")
-        if sum(labels) == len(labels):
-            raise DatasetError(f"{split} split 에 정상 예시가 없습니다 — 지표를 낼 수 없습니다")
-    return rows
 
 
 def _scores(labels: list[int], predictions: list[int]) -> dict[str, float]:

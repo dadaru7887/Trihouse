@@ -74,6 +74,13 @@ class SafetyInputs:
     # 낮춘 상태가 된다. 사람은 카메라(`PersonDetection`)가 알려 준다.
     person_detected: bool = False
     person_distance_m: float | None = None
+    # 카메라가 붙여 보낸 자세 상태(`PersonDetection.pose_class`). 빈 문자열은
+    # "모른다" 이고 서 있는 사람과 같이 다룬다.
+    #
+    # 전에는 node 가 이 값을 받아 놓고 버렸다. 그래서 관제에 낙상 비상 알람이
+    # 뜨는 그 순간에도 로봇에게는 서 있는 사람과 완전히 같았다 — 1 m 안에서
+    # 0.08 m/s 로 감속한 채 그 사람 쪽으로 계속 갔다.
+    person_pose_class: str = ""
     keep_out: bool = False
     emergency_latched: bool = False
     control_link_fresh: bool = True
@@ -91,6 +98,16 @@ class SafetyConfig:
     slow_distance_m: float = 0.25
     slow_linear_speed_mps: float = 0.08
     person_protective_distance_m: float = 1.0
+
+
+# 바닥에 있는 것이 **확정된** 상태들. 쓰러진 사람은 비켜 줄 수 없고, 라이다
+# 높이에서 잘 안 보이며, 로봇이 향하는 바로 그 바닥에 있다.
+#
+# `FALL_SUSPECTED` 는 일부러 뺐다. 그것은 `fall_confirm_seconds` 로 디바운스되기
+# **전**의 한 프레임짜리 의심이고, 창고에서 사람은 수시로 쭈그려 앉는다. 그때마다
+# 급정지하면 쓸 수 없는 기능이 되고, 쓸 수 없는 안전 기능은 결국 꺼진다.
+# 그 상태는 기존 감속(0.08 m/s)으로 충분히 보수적이다.
+PERSON_ON_FLOOR_CLASSES = frozenset({"FALLEN", "IMMOBILE", "EMERGENCY_CANDIDATE"})
 
 
 @dataclass(frozen=True)
@@ -146,6 +163,12 @@ def apply_safety_gate(command: MotionCommand, inputs: SafetyInputs, config: Safe
     #
     #     or (inputs.front_distance_m is not None
     #         and inputs.front_distance_m <= config.slow_distance_m)
+    # 보호 거리 안에 **쓰러진** 사람이 있으면 감속이 아니라 정지다. 거리를
+    # 모를 때(None)까지 포함하는 것은 아래 감속 규칙과 같은 방향이다 — 모르는
+    # 것을 안전하다고 읽지 않는다. 목적지는 취소하지 않는다: 일어나면 이어서
+    # 가야 하고, 임무를 접는 것은 사람의 결정이다.
+    if person_in_zone and inputs.person_pose_class in PERSON_ON_FLOOR_CLASSES:
+        return SafetyDecision(SafetyLevel.STOP, MotionCommand(0.0, 0.0), True, "person_on_floor")
     if person_in_zone:
         # `min` 이 아니라 크기 clamp 다. `min(-0.20, 0.08)` 은 -0.20 을 그대로
         # 통과시키므로 **후진에서는 감속이 아예 걸리지 않았다.** 부호는 진행
