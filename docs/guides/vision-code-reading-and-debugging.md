@@ -9,14 +9,14 @@
 
 | | 진입점 | 무엇을 하는가 |
 | --- | --- | --- |
-| 학습 | `model.perception.segmentation.training.train` | preflight → 학습 → val → gate → test |
-| 학습 | `model.worker.person.training.train` | 낙상 분류기 학습 |
-| 추론 | `model.worker.person.worker` | 영상 한 줄기를 받아 사람·낙상 판정 |
-| 추론 | `model.vlm_rl.inference.runtime` | 위 + VLM/RL 복구까지 (5080 운영) |
+| 학습 | `vision_ai.models.perception.trainer.pipeline` | preflight → 학습 → val → gate → test |
+| 학습 | `vision_ai.models.perception.trainer.fall_trainer` | 낙상 분류기 학습 |
+| 추론 | `vision_ai.robot.perception.worker` | 영상 한 줄기를 받아 사람·낙상 판정 |
+| 추론 | `vision_ai.robot.recovery.runtime` | 위 + VLM/RL 복구까지 (5080 운영) |
 
 나눈 이유는 **로봇에 올라가는 프로세스가 학습 코드를 import하지 않게** 하기 위해서다.
-`model/vlm_rl/training/__init__.py`에 "never imported by physical runtime"이라고 적혀 있고,
-[test_inference_boundary.py](../../model/vlm_rl/tests/test_inference_boundary.py)가 그 경계를 테스트로 지킨다.
+`vision_ai/models/recovery/trainer/__init__.py`에 "never imported by physical runtime"이라고 적혀 있고,
+[test_inference_boundary.py](../../vision_ai/tests/recovery/test_inference_boundary.py)가 그 경계를 테스트로 지킨다.
 `--mode eval`을 만들면 이 경계가 사라진다.
 
 **"eval 모드 = inference"라는 등식도 여기서는 갈라진다.** 둘은 다른 일이다.
@@ -40,7 +40,7 @@ export RUNS=$PWD/runs/reading                   # 아무 데나
 
 ### 1-1. 진입점부터 — 전체 지도를 먼저 본다
 
-**읽기**: [training/train.py](../../model/perception/segmentation/training/train.py)
+**읽기**: [training/train.py](../../vision_ai/models/perception/trainer/pipeline.py)
 
 서브커맨드 여섯 개가 곧 파이프라인 단계다. `build_parser()` 하나만 읽으면 전체 그림이 나온다.
 
@@ -50,13 +50,13 @@ labels → preflight → run → train → evaluate → analyze
 
 **돌려보기** (학습 안 함, 도움말만):
 ```bash
-python -m model.perception.segmentation.training.train --help
-python -m model.perception.segmentation.training.train run --help
+python -m vision_ai.models.perception.trainer.pipeline --help
+python -m vision_ai.models.perception.trainer.pipeline run --help
 ```
 
 ### 1-2. 설정이 어떻게 값이 되는가
 
-**읽기**: [cli.py](../../model/perception/segmentation/training/cli.py) → [run_config.py](../../model/perception/segmentation/training/run_config.py) → [config_loader.py](../../model/perception/segmentation/training/config_loader.py)
+**읽기**: [cli.py](../../vision_ai/models/perception/trainer/cli.py) → [run_config.py](../../vision_ai/utils/run_config.py) → [config_loader.py](../../vision_ai/utils/config_loader.py)
 
 - `TrainingConfig`가 하이퍼파라미터 전부다. `__post_init__`에서 검증한다.
 - 우선순위는 **CLI 인자 > config yaml**. `--data`가 `dataset.data_yaml`을 이긴다.
@@ -67,7 +67,7 @@ python -m model.perception.segmentation.training.train run --help
 
 ### 1-3. dataloader — 학습 전에 데이터를 의심한다
 
-**읽기**: [dataloader/audit.py](../../model/perception/segmentation/training/dataloader/audit.py)
+**읽기**: [dataloader/audit.py](../../vision_ai/data_loader/perception/audit.py)
 
 `audit_dataset()`이 하는 검사가 이 파이프라인에서 가장 값어치 있는 부분이다.
 
@@ -79,14 +79,14 @@ python -m model.perception.segmentation.training.train run --help
 
 **돌려보기** — 학습 없이 데이터만 검사한다. **가장 먼저 이걸 돌려라.**
 ```bash
-python -m model.perception.segmentation.training.train preflight \
+python -m vision_ai.models.perception.trainer.pipeline preflight \
     --data "$DATA" --output "$RUNS/preflight_only"
 ```
 성공하면 `[PREFLIGHT 완료] <fingerprint>`, 실패하면 exit 2와 이유가 나온다.
 
 ### 1-4. 한 번 학습 — 단일 run의 전 과정
 
-**읽기**: [orchestrator.py](../../model/perception/segmentation/training/orchestrator.py)의 `run_pipeline()`
+**읽기**: [orchestrator.py](../../vision_ai/models/perception/trainer/orchestrator.py)의 `run_pipeline()`
 
 단계가 코드에 문자열로 박혀 있고 `status.json`에 매 단계 기록된다:
 
@@ -101,7 +101,7 @@ PREFLIGHT → TRAIN → VALIDATION → VALIDATION_GATE → TEST → COMPLETE
 
 **돌려보기**:
 ```bash
-python -m model.perception.segmentation.training.train run \
+python -m vision_ai.models.perception.trainer.pipeline run \
     --data "$DATA" --run-root "$RUNS" --name first_try \
     --epochs 1 --batch 2 --workers 0 --device cpu
 ```
@@ -109,7 +109,7 @@ python -m model.perception.segmentation.training.train run \
 
 ### 1-5. multi-seed — 대표 모델 고르기
 
-**읽기**: [trainer/experiment.py](../../model/perception/segmentation/training/trainer/experiment.py) → [multi_seed.py](../../model/perception/segmentation/training/multi_seed.py)
+**읽기**: [trainer/experiment.py](../../vision_ai/models/perception/trainer/experiment.py) → [multi_seed.py](../../vision_ai/models/perception/trainer/multi_seed.py)
 
 - seed마다 **자식 프로세스**로 `seed_runner`를 띄운다(`PYTHONHASHSEED`까지 고정).
 - `select_deployment_model()`은 **`validation_metrics.json`만 읽는다.** test는 선택에 관여하지 않는다.
@@ -117,14 +117,14 @@ python -m model.perception.segmentation.training.train run \
 
 **돌려보기**:
 ```bash
-python -m model.perception.segmentation.training.train train \
-    --config model/perception/segmentation/training/configs/config.yaml \
+python -m vision_ai.models.perception.trainer.pipeline train \
+    --config vision_ai/models/perception/trainer/configs/config.yaml \
     --data "$DATA" --experiment-dir "$RUNS/multiseed"
 ```
 
 ### 1-6. 낙상 분류기 학습
 
-**읽기**: [person/training/train.py](../../model/worker/person/training/train.py)
+**읽기**: [person/training/train.py](../../vision_ai/models/perception/trainer/fall_trainer.py)
 
 세그멘테이션과 같은 규율을 훨씬 작은 코드로 반복한다: train으로 맞추고, valid로 임계값 고르고, test는 마지막 한 번.
 
@@ -134,10 +134,10 @@ python -m model.perception.segmentation.training.train train \
  "fallen": true, "split": "train"}
 ```
 
-피처를 뽑는 쪽은 [features.py](../../model/worker/person/features.py)다. **좌표계를 반드시 확인하라** — 정규화(0..1) 좌표다.
+피처를 뽑는 쪽은 [features.py](../../vision_ai/models/perception/features.py)다. **좌표계를 반드시 확인하라** — 정규화(0..1) 좌표다.
 
 ```bash
-python -m model.worker.person.training.train \
+python -m vision_ai.models.perception.trainer.fall_trainer \
     --dataset /path/to/features.jsonl --out "$RUNS/fallen" --seed 42 --min-recall 0.85
 ```
 
@@ -149,21 +149,21 @@ python -m model.worker.person.training.train \
 
 | 순서 | 파일 | 확인할 것 |
 | --- | --- | --- |
-| 1 | [runtime/detector.py](../../model/perception/segmentation/runtime/detector.py) | `Detector.detect` — `tracking`이면 `track(persist=True)`. `detections_from_result`가 mask/track_id를 뽑는다 |
-| 2 | [person/frame.py](../../model/worker/person/frame.py) | `PersonFrameEvaluator.evaluate` — **여기가 허브다.** 사람 선별 → 자세 → 시간축 → 프레임 결론 |
-| 3 | [person/posture.py](../../model/worker/person/posture.py) | 자세·움직임을 **잰다**. 판정 안 함. `TrackedPostureEstimator`가 track별로 나눔 |
-| 4 | [person/features.py](../../model/worker/person/features.py) | 분류기용 다섯 피처. 정규화 좌표 |
-| 5 | [person/classifier.py](../../model/worker/person/classifier.py) | 번들 적재 + 승인/SHA-256 검증 |
-| 6 | [person/fall_monitor.py](../../model/worker/person/fall_monitor.py) | 시간축 상태 전이. `advance()` 하나만 읽으면 된다 |
-| 7 | [person/policy.py](../../model/worker/person/policy.py) | track별 monitor 관리, 소멸 처리 |
-| 8 | [person/reporting.py](../../model/worker/person/reporting.py) | 무엇을 언제 올릴지 |
-| 9 | [person/worker.py](../../model/worker/person/worker.py) | 실제 루프. 위를 잇기만 한다 |
+| 1 | [runtime/detector.py](../../vision_ai/models/perception/detector.py) | `Detector.detect` — `tracking`이면 `track(persist=True)`. `detections_from_result`가 mask/track_id를 뽑는다 |
+| 2 | [person/frame.py](../../vision_ai/robot/perception/frame.py) | `PersonFrameEvaluator.evaluate` — **여기가 허브다.** 사람 선별 → 자세 → 시간축 → 프레임 결론 |
+| 3 | [person/posture.py](../../vision_ai/robot/perception/posture.py) | 자세·움직임을 **잰다**. 판정 안 함. `TrackedPostureEstimator`가 track별로 나눔 |
+| 4 | [person/features.py](../../vision_ai/models/perception/features.py) | 분류기용 다섯 피처. 정규화 좌표 |
+| 5 | [person/classifier.py](../../vision_ai/models/perception/fall_classifier.py) | 번들 적재 + 승인/SHA-256 검증 |
+| 6 | [person/fall_monitor.py](../../vision_ai/robot/perception/fall_monitor.py) | 시간축 상태 전이. `advance()` 하나만 읽으면 된다 |
+| 7 | [person/policy.py](../../vision_ai/robot/perception/policy.py) | track별 monitor 관리, 소멸 처리 |
+| 8 | [person/reporting.py](../../vision_ai/robot/perception/reporting.py) | 무엇을 언제 올릴지 |
+| 9 | [person/worker.py](../../vision_ai/robot/perception/worker.py) | 실제 루프. 위를 잇기만 한다 |
 
 **2번을 먼저 읽고 나머지를 거기서 뻗어 나가는 게 빠르다.** `evaluate()` 하나가 3~7을 다 부른다.
 
 **돌려보기** — 영상 파일로 (GPU·로봇 없이):
 ```bash
-python -m model.worker.person.worker \
+python -m vision_ai.robot.perception.worker \
     --weights /path/to/best.pt --source /path/to/video.mp4 --headless
 ```
 `--report-url`을 안 주면 Gateway로 아무것도 안 보내고 stdout JSON만 나온다.
@@ -190,7 +190,7 @@ python -m model.worker.person.worker \
 
 ```python
 # 프레임 한 장에서 무엇이 잡혔는가
-from model.perception.segmentation.runtime.detector import Detector, DetectorConfig
+from vision_ai.models.perception.detector import Detector, DetectorConfig
 d = Detector("/path/to/best.pt", DetectorConfig(tracking=True))
 for det in d.detect(frame):
     print(det.class_id, round(det.confidence, 3), det.track_id, det.mask.sum())
@@ -200,7 +200,7 @@ for det in d.detect(frame):
 
 ```python
 # 그 mask 가 "쓰러진 자세"로 읽히는가
-from model.worker.person.posture import PostureEstimator, PostureConfig
+from vision_ai.robot.perception.posture import PostureEstimator, PostureConfig
 import math
 p = PostureEstimator(PostureConfig())
 m = p.measure(det.mask, math.hypot(*frame.shape[:2][::-1]))
@@ -212,7 +212,7 @@ print(m.aspect_ratio, m.low_posture, m.motion, m.moving)
 
 ```python
 # 분류기가 무엇을 보고 있는가
-from model.worker.person.features import fallen_features, FEATURE_NAMES
+from vision_ai.models.perception.features import fallen_features, FEATURE_NAMES
 f = fallen_features(det, all_detections, frame.shape, person_class_id=1)
 print(dict(zip(FEATURE_NAMES, [round(v, 4) for v in f])))
 ```
@@ -224,7 +224,7 @@ print(dict(zip(FEATURE_NAMES, [round(v, 4) for v in f])))
 `FallMonitor`는 **의존이 하나도 없다.** 영상 없이 그냥 돌려볼 수 있다 — 시간축 문제는 전부 여기서 재현된다.
 
 ```python
-from model.worker.person.fall_monitor import FallMonitor, MonitorConfig
+from vision_ai.robot.perception.fall_monitor import FallMonitor, MonitorConfig
 m = FallMonitor(MonitorConfig())
 prev = None
 for i in range(120):
@@ -262,16 +262,16 @@ for i in range(120):
 
 ```bash
 # 추론 3단계가 각자 자기 몫만 하는지
-pytest model/worker/tests/test_person_inference_stages.py -v
+pytest vision_ai/tests/worker/test_person_inference_stages.py -v
 
 # 시간축만
-pytest model/worker/tests/test_fall_monitor.py -v
+pytest vision_ai/tests/worker/test_fall_monitor.py -v
 
 # 다중 인원
-pytest model/worker/tests/test_person_frame_evaluator.py model/worker/tests/test_person_policy.py -v
+pytest vision_ai/tests/worker/test_person_frame_evaluator.py vision_ai/tests/worker/test_person_policy.py -v
 
 # 분류기 적재/학습
-pytest model/worker/tests/test_fallen_classifier.py model/worker/tests/test_fallen_classifier_training.py -v
+pytest vision_ai/tests/worker/test_fallen_classifier.py vision_ai/tests/worker/test_fallen_classifier_training.py -v
 ```
 
 동작을 바꿨는데 이 테스트들이 그대로 통과한다면, **테스트가 그 동작을 안 잡고 있는 것**이다.

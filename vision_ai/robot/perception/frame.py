@@ -1,0 +1,126 @@
+"""프레임 한 장의 사람 전원을 사람별 상태로 평가한다.
+
+전까지는 두 호출부가 각자 `select_best` 로 가장 확신 높은 사람 하나만 골라
+`FallMonitor` 하나에 넣었다. 그러면 한 화면에 두 사람이 있을 때 한 사람의
+회복이 다른 사람의 증거를 지운다 — 서 있는 사람이 매 프레임 골라지면 바닥에
+누운 사람의 상태가 계속 리셋된다.
+
+track 별 상태 자체는 `policy.PersonPolicy` 가 이미 갖고 있었다. 여기서 하는
+일은 검출 → 자세 측정 → 그 정책으로 잇고, 프레임 하나의 결론을 하나로
+줄이는 것뿐이다.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import math
+from typing import Any, Sequence
+
+from vision_ai.models.perception.detector import select_best
+from vision_ai.robot.perception.fall_monitor import FallState, MonitorConfig
+from vision_ai.robot.perception.policy import (
+    BoundingBox, FallSuspectedEvent, PersonObservation, PersonPolicy,
+)
+from vision_ai.models.perception.features import fallen_features
+from vision_ai.robot.perception.posture import PostureConfig, TrackedPostureEstimator
+
+
+NO_DETECTION = "NO_DETECTION"
+
+# 로봇이 반응해야 하는 것은 그 화면에서 가장 나쁜 상태다. 서 있는 행인이
+# 바닥에 누운 사람을 가려서는 안 된다.
+_SEVERITY = {
+    NO_DETECTION: -1,
+    FallState.NORMAL.value: 0,
+    FallState.FALL_SUSPECTED.value: 1,
+    FallState.FALLEN.value: 2,
+    FallState.IMMOBILE.value: 3,
+    FallState.EMERGENCY_CANDIDATE.value: 4,
+}
+
+
+@dataclass(frozen=True)
+class FrameVerdict:
+    """프레임 하나의 결론. `track_id` 는 그 상태를 만든 사람이다."""
+
+    state: str
+    confidence: float
+    track_id: str
+    events: tuple[FallSuspectedEvent, ...]
+
+
+class PersonFrameEvaluator:
+    def __init__(self, *, camera_id: str, posture: PostureConfig, monitor: MonitorConfig,
+                 track_timeout_seconds: float = 3.0,
+                 required_consecutive_frames: int = 3,
+                 classifier: Any | None = None) -> None:
+        self.camera_id = camera_id
+        # 있으면 자세 판정을 분류기가 맡는다. 없으면 종횡비 규칙 그대로다.
+        # 움직임은 어느 쪽이든 `posture` 가 잰다 — 분류기는 한 프레임만 본다.
+        self.classifier = classifier
+        self._posture = TrackedPostureEstimator(posture)
+        self._policy = PersonPolicy(
+            required_consecutive_frames=required_consecutive_frames,
+            monitor=monitor,
+            track_timeout_seconds=track_timeout_seconds,
+        )
+
+    def evaluate(self, detections: Sequence[Any], frame_shape: tuple[int, ...],
+                 timestamp_s: float, *, person_class_id: int = 1) -> FrameVerdict:
+        people = [item for item in detections if item.class_id == person_class_id]
+        if any(not item.track_id for item in people):
+            # tracking 이 꺼져 있으면 프레임을 넘는 신원이 없다. 전원을 빈
+            # track_id 하나에 몰아 넣으면 지금 고치려는 그 버그가 그대로
+            # 재현되므로, 그때는 예전처럼 확신 높은 한 사람만 본다.
+            best = select_best(people, person_class_id)
+            people = [best] if best is not None else []
+
+        diagonal = math.hypot(frame_shape[1], frame_shape[0])
+        seen: set[str] = set()
+        best_state, best_confidence, best_track = NO_DETECTION, 0.0, ""
+        events: list[FallSuspectedEvent] = []
+
+        for person in people:
+            measurement = self._posture.measure(person.track_id, person.mask, diagonal)
+            if measurement is None:
+                continue
+            seen.add(person.track_id)
+            fallen = measurement.low_posture
+            if self.classifier is not None:
+                # 접촉 피처는 다른 사람과 장애물까지 봐야 나온다. 사람만 걸러
+                # 넘기면 "선반에 기대어 쓰러진" 경우의 신호가 사라진다.
+                features = fallen_features(
+                    person, detections, frame_shape, person_class_id=person_class_id
+                )
+                if features is not None:
+                    fallen = bool(self.classifier.is_fallen(features))
+            observation = PersonObservation(
+                camera_id=self.camera_id,
+                track_id=person.track_id,
+                timestamp_s=timestamp_s,
+                box=_bounding_box(person.mask),
+                confidence=float(person.confidence),
+                low_posture=fallen,
+                moving=measurement.moving,
+            )
+            # 한 관측으로 상태와 이벤트를 함께 받는다. 따로 물으면 시간축이
+            # 한 프레임에 두 칸 나가서 FALLEN 을 건너뛰고 IMMOBILE 이 된다.
+            result = self._policy.observe(observation)
+            if result['event'] is not None:
+                events.append(result['event'])
+            state = result['state']
+            if _SEVERITY[state] > _SEVERITY[best_state]:
+                best_state = state
+                best_confidence = float(person.confidence)
+                best_track = person.track_id
+
+        self._posture.forget_missing(seen)
+        self._policy.note_present_tracks(self.camera_id, seen, timestamp_s)
+        return FrameVerdict(best_state, best_confidence, best_track, tuple(events))
+
+
+def _bounding_box(mask: Any) -> BoundingBox:
+    import numpy as np
+
+    ys, xs = np.nonzero(mask)
+    return BoundingBox(float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max()))

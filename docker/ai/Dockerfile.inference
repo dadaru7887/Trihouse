@@ -13,13 +13,25 @@ RUN python -m pip uninstall -y opencv-python \
     && python -m pip install --no-cache-dir --force-reinstall --no-deps \
        opencv-python-headless==4.11.0.86
 
-COPY model/__init__.py model/__init__.py
-COPY model/vlm_rl/__init__.py model/vlm_rl/__init__.py
-COPY model/vlm_rl/shared model/vlm_rl/shared
-COPY model/vlm_rl/inference model/vlm_rl/inference
-COPY model/vlm_rl/recovery_memory model/vlm_rl/recovery_memory
-COPY model/vlm_rl/safety model/vlm_rl/safety
-COPY model/worker model/worker
-COPY model/perception/segmentation/runtime model/perception/segmentation/runtime
+# EN: The robot image carries the runtime and the model definitions it loads
+#     weights into -- never a trainer. `vision_ai/tests/recovery/
+#     test_inference_boundary.py` enforces that separation in code; this COPY
+#     list is where it becomes a property of the shipped image.
+# KO: 로봇 이미지는 런타임과 그 런타임이 가중치를 싣는 모델 정의만 담는다 —
+#     trainer 는 담지 않는다. 코드 상 경계는 위 테스트가 지키고, 이미지에
+#     실제로 안 들어간다는 것은 이 COPY 목록이 정한다.
+COPY vision_ai/__init__.py vision_ai/__init__.py
+COPY vision_ai/utils vision_ai/utils
+COPY vision_ai/robot vision_ai/robot
+COPY vision_ai/models/__init__.py vision_ai/models/__init__.py
+COPY vision_ai/models/perception/__init__.py vision_ai/models/perception/__init__.py
+COPY vision_ai/models/perception/detector.py vision_ai/models/perception/detector.py
+COPY vision_ai/models/perception/features.py vision_ai/models/perception/features.py
+COPY vision_ai/models/perception/fall_classifier.py vision_ai/models/perception/fall_classifier.py
+COPY vision_ai/models/recovery/__init__.py vision_ai/models/recovery/__init__.py
+COPY vision_ai/models/recovery/policy_architecture.py vision_ai/models/recovery/policy_architecture.py
+COPY vision_ai/models/recovery/distilled_selector.py vision_ai/models/recovery/distilled_selector.py
+COPY vision_ai/models/recovery/vlm_interpreter.py vision_ai/models/recovery/vlm_interpreter.py
+COPY vision_ai/models/recovery/checkpoint.py vision_ai/models/recovery/checkpoint.py
 
-CMD ["python", "-m", "model.vlm_rl.inference.runtime"]
+CMD ["python", "-m", "vision_ai.robot.recovery.runtime"]

@@ -3,6 +3,6 @@ FROM ${BASE_IMAGE}
 
 WORKDIR /opt/trihouse
 ENV PYTHONPATH=/opt/trihouse
-COPY model model
+COPY vision_ai vision_ai
 
-ENTRYPOINT ["python", "-m", "model.vlm_rl.training.offline_train"]
+ENTRYPOINT ["python", "-m", "vision_ai.models.recovery.trainer.offline_train"]

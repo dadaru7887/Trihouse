@@ -403,7 +403,7 @@ process는 사람 관측을 보내지만 ROS velocity command를 직접 발행�
 # [개발 PC 모델 터미널 1] <approved-person-weights>는 승인된 best.pt 또는 manifest
 cd /home/newuser/Trihouse/.worktrees/physical-integration-v1
 export FMS_API='http://<fms-host>:8080'
-venv/yolo_segmentation/bin/python -m model.worker.person.worker \
+venv/yolo_segmentation/bin/python -m vision_ai.robot.perception.worker \
   --weights <approved-person-weights> \
   --source 'rtsp://<pc1-lan-ip>:8554/pinky/CAM-PK-01' \
   --report-url "$FMS_API/internal/v1/vision/person-detections" \
@@ -429,7 +429,7 @@ export RECOVERY_POLICY_SHA256='<approved-policy-sha256>'
 # 비워두면 goal-distance 후보 선택만 사용한다(distillation 도입 전과 동일).
 # export RECOVERY_SELECTOR_ENSEMBLE='<approved-selector-ensemble>'
 # export RECOVERY_SELECTOR_SHA256='<approved-selector-sha256>'
-python3 -m model.vlm_rl.inference.runtime --runtime-mode physical
+python3 -m vision_ai.robot.recovery.runtime --runtime-mode physical
 ```
 
 ```bash

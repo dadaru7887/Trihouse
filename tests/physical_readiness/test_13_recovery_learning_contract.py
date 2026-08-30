@@ -1,7 +1,7 @@
 import json
 
 from fms_gateway.app.recovery_export import iter_training_jsonl
-from model.vlm_rl.training.dataset import load_training_jsonl
+from vision_ai.data_loader.recovery.dataset import load_training_jsonl
 
 
 def test_database_export_round_trips_all_six_learning_fields(tmp_path) -> None:

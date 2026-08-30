@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from model.worker.media.recording.catalog import RecordingCatalog
+from vision_ai.robot.media.recording.catalog import RecordingCatalog
 
 
 @dataclass(frozen=True)

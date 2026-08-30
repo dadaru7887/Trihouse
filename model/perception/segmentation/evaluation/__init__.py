@@ -1,1 +1,0 @@
-"""Instance and segmentation evaluation."""

@@ -22,9 +22,10 @@ COPY control_tower/task_manager/outbound_planner.py /app/control_tower/task_mana
 COPY control_tower/task_manager/outbound_sequence.py /app/control_tower/task_manager/outbound_sequence.py
 COPY control_tower/gateway /app/control_tower/gateway
 # Recovery API가 action/skill allowlist의 정본을 이 경로에서 import한다.
-COPY model/__init__.py /app/model/__init__.py
-COPY model/vlm_rl/__init__.py /app/model/vlm_rl/__init__.py
-COPY model/vlm_rl/shared /app/model/vlm_rl/shared
+COPY vision_ai/__init__.py /app/vision_ai/__init__.py
+COPY vision_ai/utils/__init__.py /app/vision_ai/utils/__init__.py
+COPY vision_ai/utils/contracts.py /app/vision_ai/utils/contracts.py
+COPY vision_ai/utils/motion_plan.py /app/vision_ai/utils/motion_plan.py
 COPY config/cameras.yaml /app/config/cameras.yaml
 
 # 런타임 프로파일이 해시하는 고정 소스 두 개. UI 는 이 해시 없이는 지도

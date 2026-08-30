@@ -66,3 +66,4 @@ log/
 # rmf_traffic_schedule_node 가 참가자 목록을 실행 디렉터리에 남긴다. 시뮬을 띄운
 # 자리마다 생기는 런타임 상태이고 저장소 자산이 아니다.
 .rmf_schedule_node.yaml
+.gstack/

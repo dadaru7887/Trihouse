@@ -7,7 +7,7 @@ services:
       context: .
       dockerfile: docker/ai/Dockerfile.inference
     image: ${TRIHOUSE_AI_IMAGE:-trihouse_ai_5080:local}
-    command: ["python", "-m", "model.vlm_rl.inference.runtime"]
+    command: ["python", "-m", "vision_ai.robot.recovery.runtime"]
     restart: unless-stopped
     init: true
     shm_size: ${TRIHOUSE_AI_SHM_SIZE:-16gb}

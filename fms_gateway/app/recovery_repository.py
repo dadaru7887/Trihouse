@@ -10,12 +10,12 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from .database import Database
-from model.vlm_rl.shared.contracts import (
+from vision_ai.utils.contracts import (
     RecoveryStateV1,
     SKILL_NAMES,
     SKILL_TO_ACTION_FAMILY,
 )
-from model.vlm_rl.shared.motion_plan import Pose2D, canonicalize_recovery_action
+from vision_ai.utils.motion_plan import Pose2D, canonicalize_recovery_action
 
 
 class RecoveryStepNotFound(Exception):

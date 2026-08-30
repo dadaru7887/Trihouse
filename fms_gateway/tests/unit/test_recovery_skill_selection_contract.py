@@ -96,9 +96,9 @@ def test_gateway_rejects_an_unknown_selection_source() -> None:
 
 def _worker_payload(decision_kwargs, *, group_policy=True):
     """Drive the real inference worker and return the proposal it would POST."""
-    from model.vlm_rl.inference.distilled_selector import SelectorDecision
-    from model.vlm_rl.inference.navigation_context import NavigationContext
-    from model.vlm_rl.inference.worker import DetectionEvidence, RecoveryInferenceWorker
+    from vision_ai.models.recovery.distilled_selector import SelectorDecision
+    from vision_ai.robot.recovery.navigation_context import NavigationContext
+    from vision_ai.robot.recovery.worker import DetectionEvidence, RecoveryInferenceWorker
 
     class Vlm:
         model_name, model_revision = "Qwen/Qwen2.5-VL-7B-Instruct", "approved"

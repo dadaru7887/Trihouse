@@ -20,16 +20,16 @@
 
 | 역할 | 실제 파일·모듈 | 진입 함수/클래스 | 상태 |
 | --- | --- | --- | --- |
-| 세그멘테이션 추론 | [model/perception/segmentation/runtime/detector.py](../model/perception/segmentation/runtime/detector.py) | `Detector.detect` / `detect_person` | 코드상 확인 |
-| 세그멘테이션 학습 | [model/perception/segmentation/training/](../model/perception/segmentation/training/) | `orchestrator.py`, `seed_runner.py` | 코드상 확인 |
-| 자세 **측정** | [model/worker/person/posture.py](../model/worker/person/posture.py) | `PostureEstimator.measure` | 코드상 확인 |
-| 시간축 **판정** | [model/worker/person/fall_monitor.py](../model/worker/person/fall_monitor.py) | `FallMonitor.advance` | 코드상 확인 |
-| 다중 인원 정책 | [model/worker/person/policy.py](../model/worker/person/policy.py) | `PersonPolicy` | 코드상 확인 |
-| 프레임 평가(사람별) | [model/worker/person/frame.py](../model/worker/person/frame.py) | `PersonFrameEvaluator.evaluate` | 코드상 확인 |
-| 보고 스로틀 | [model/worker/person/reporting.py](../model/worker/person/reporting.py) | `ReportThrottle.should_report` | 코드상 확인 |
-| 독립 실행 worker | [model/worker/person/worker.py](../model/worker/person/worker.py) | `main` | 코드상 확인 |
-| VLM+RL 런타임 내 보고 | [model/vlm_rl/inference/live_runtime.py](../model/vlm_rl/inference/live_runtime.py) | `PersonSafetyReporter` | 코드상 확인 |
-| 원본 배달본(보관) | [vision_system/person_worker/upstream_dev_vision/](../vision_system/person_worker/upstream_dev_vision/) | — | 보관만, import 안 됨 |
+| 세그멘테이션 추론 | [vision_ai/models/perception/detector.py](../vision_ai/models/perception/detector.py) | `Detector.detect` / `detect_person` | 코드상 확인 |
+| 세그멘테이션 학습 | [vision_ai/models/perception/trainer/](../vision_ai/models/perception/trainer/) | `orchestrator.py`, `seed_runner.py` | 코드상 확인 |
+| 자세 **측정** | [vision_ai/robot/perception/posture.py](../vision_ai/robot/perception/posture.py) | `PostureEstimator.measure` | 코드상 확인 |
+| 시간축 **판정** | [vision_ai/robot/perception/fall_monitor.py](../vision_ai/robot/perception/fall_monitor.py) | `FallMonitor.advance` | 코드상 확인 |
+| 다중 인원 정책 | [vision_ai/robot/perception/policy.py](../vision_ai/robot/perception/policy.py) | `PersonPolicy` | 코드상 확인 |
+| 프레임 평가(사람별) | [vision_ai/robot/perception/frame.py](../vision_ai/robot/perception/frame.py) | `PersonFrameEvaluator.evaluate` | 코드상 확인 |
+| 보고 스로틀 | [vision_ai/robot/perception/reporting.py](../vision_ai/robot/perception/reporting.py) | `ReportThrottle.should_report` | 코드상 확인 |
+| 독립 실행 worker | [vision_ai/robot/perception/worker.py](../vision_ai/robot/perception/worker.py) | `main` | 코드상 확인 |
+| VLM+RL 런타임 내 보고 | [vision_ai/robot/recovery/live_runtime.py](../vision_ai/robot/recovery/live_runtime.py) | `PersonSafetyReporter` | 코드상 확인 |
+| 원본 배달본(보관) | [vision_ai/upstream/dev_vision/](../vision_ai/upstream/dev_vision/) | — | 보관만, import 안 됨 |
 
 원본은 `dev_vision:fallen_detection_delivery`, 기준 커밋 `3f0ce0a`(2026-08-24). 23MB 가중치 `segmentation_finetuned_seed2026_best.pt`는 저장소 관례(가중치는 `/models` 마운트로 전달, LFS 미사용)에 따라 보관본에서 제외했다 — sha256 `07d5ecc31910185166506be180dd322c43f5d1eb4ad66a9cb9d44756a17a1224`.
 
@@ -62,19 +62,19 @@
 
 ### 3-1. 클래스 정의
 
-`nc=2`, `names: ['obstacle', 'person']` → `person_class_id: 1`. 클래스 순서가 바뀌면 설정만 바꾸면 되도록 코드에 숫자를 박지 않았다 ([detector.py:DetectorConfig](../model/perception/segmentation/runtime/detector.py)). 이 정의는 원본 배달본의 파인튜닝 모델과도 동일해서 **drop-in 교체가 가능**하다(원본 README 주장, 미검증).
+`nc=2`, `names: ['obstacle', 'person']` → `person_class_id: 1`. 클래스 순서가 바뀌면 설정만 바꾸면 되도록 코드에 숫자를 박지 않았다 ([detector.py:DetectorConfig](../vision_ai/models/perception/detector.py)). 이 정의는 원본 배달본의 파인튜닝 모델과도 동일해서 **drop-in 교체가 가능**하다(원본 README 주장, 미검증).
 
 ### 3-2. 추론 설정
 
-[model/worker/configs/realtime.yaml](../model/worker/configs/realtime.yaml) 기준: `confidence: 0.25`, `image_size: 640`, `device: auto`.
+[vision_ai/robot/configs/realtime.yaml](../vision_ai/robot/configs/realtime.yaml) 기준: `confidence: 0.25`, `image_size: 640`, `device: auto`.
 
 무거운 import(`ultralytics`, `torch`)는 `Detector.load()` 안에서만 한다 — GPU 없는 곳에서도 모듈을 읽고 시험할 수 있게 하려는 의도적 설계다.
 
 ### 3-3. 학습
 
-multi-seed 실험: seeds `[17, 42, 101, 2026, 3407]`, YOLOE `26s`, epochs 200, patience 20. 대표 모델 선정 기준은 `person_mask_map50_95`(동점 시 `person_mask_recall`), validation gate는 `min_mask_recall: 0.70` / `min_mask_map50: 0.60` ([configs/config.yaml](../model/perception/segmentation/training/configs/config.yaml)).
+multi-seed 실험: seeds `[17, 42, 101, 2026, 3407]`, YOLOE `26s`, epochs 200, patience 20. 대표 모델 선정 기준은 `person_mask_map50_95`(동점 시 `person_mask_recall`), validation gate는 `min_mask_recall: 0.70` / `min_mask_map50: 0.60` ([configs/config.yaml](../vision_ai/models/perception/trainer/configs/config.yaml)).
 
-대표 모델은 `selected_model.json`으로 남고 배포 쪽이 그 파일을 가리킬 수 있다 — seed를 바꿔 학습해도 배포 명령이 안 바뀌게 하려는 설계 ([detector.py:resolve_weights](../model/perception/segmentation/runtime/detector.py)).
+대표 모델은 `selected_model.json`으로 남고 배포 쪽이 그 파일을 가리킬 수 있다 — seed를 바꿔 학습해도 배포 명령이 안 바뀌게 하려는 설계 ([detector.py:resolve_weights](../vision_ai/models/perception/detector.py)).
 
 ---
 
@@ -112,7 +112,7 @@ NORMAL ──fallen──> FALL_SUSPECTED ──1.0s 유지──> FALLEN ──
 
 ### 4-4. 보고 스로틀
 
-상태가 그대로면 TTL 절반 주기로만 올린다. 코드 주석의 근거: 15 Hz를 그대로 흘리면 **TCP 8788이 관측으로 차서 주행 명령이 뒤로 밀린다** ([worker.py:main](../model/worker/person/worker.py)). 단, `EMERGENCY_CANDIDATE` 이벤트는 스로틀을 우회해 항상 올린다.
+상태가 그대로면 TTL 절반 주기로만 올린다. 코드 주석의 근거: 15 Hz를 그대로 흘리면 **TCP 8788이 관측으로 차서 주행 명령이 뒤로 밀린다** ([worker.py:main](../vision_ai/robot/perception/worker.py)). 단, `EMERGENCY_CANDIDATE` 이벤트는 스로틀을 우회해 항상 올린다.
 
 ---
 
@@ -122,7 +122,7 @@ NORMAL ──fallen──> FALL_SUSPECTED ──1.0s 유지──> FALLEN ──
 
 ### 5-1. 다중 인원 — 해결 (2026-08-29)
 
-**이전 상태**: [policy.py:PersonPolicy](../model/worker/person/policy.py)는 `(camera_id, track_id)`별 독립 `FallMonitor`를 두는 다중 인원 설계를 이미 갖고 있었는데, import하는 곳이 자기 단위 테스트뿐이었다. 운영 경로 둘 다 `FallMonitor` 하나를 공유하고 `select_best`로 1명만 봐서, **두 사람이 있으면 한 사람의 회복이 다른 사람의 증거를 지웠다.**
+**이전 상태**: [policy.py:PersonPolicy](../vision_ai/robot/perception/policy.py)는 `(camera_id, track_id)`별 독립 `FallMonitor`를 두는 다중 인원 설계를 이미 갖고 있었는데, import하는 곳이 자기 단위 테스트뿐이었다. 운영 경로 둘 다 `FallMonitor` 하나를 공유하고 `select_best`로 1명만 봐서, **두 사람이 있으면 한 사람의 회복이 다른 사람의 증거를 지웠다.**
 
 이식하면서 드러난 것은 단일 인물 가정이 세 겹이었다는 점이다.
 
@@ -130,7 +130,7 @@ NORMAL ──fallen──> FALL_SUSPECTED ──1.0s 유지──> FALLEN ──
 2. `PostureEstimator`가 `_last_centroid`를 **하나만** 들고 있었다 → `TrackedPostureEstimator`. 걸어가는 사람의 위치가 가만히 누운 사람의 이동량으로 읽히던 문제다.
 3. `PersonPolicy`에 track 소멸 처리가 없었다 → `note_present_tracks()`. 잠깐 안 보이면 회복 시계만 멈추고(§6-2의 `note_no_detection`), `track_timeout_seconds`(3.0s)를 넘기면 그 사람 몫 상태를 버린다.
 
-이 셋을 잇는 것이 [frame.py:PersonFrameEvaluator](../model/worker/person/frame.py)이고, 호출부 둘이 이제 이것만 쓴다. 프레임 하나의 결론은 **그 화면에서 가장 나쁜 상태**다 — 서 있는 행인이 바닥에 누운 사람을 가려서는 안 된다.
+이 셋을 잇는 것이 [frame.py:PersonFrameEvaluator](../vision_ai/robot/perception/frame.py)이고, 호출부 둘이 이제 이것만 쓴다. 프레임 하나의 결론은 **그 화면에서 가장 나쁜 상태**다 — 서 있는 행인이 바닥에 누운 사람을 가려서는 안 된다.
 
 tracking이 꺼져 있으면 `track_id`가 비고, 전원을 빈 id 하나에 몰면 고치려던 버그가 그대로 재현된다. 그래서 그때는 예전처럼 `select_best`로 한 명만 본다 — 다중 인원 상태는 tracking이 켜져 있어야만 성립한다.
 
@@ -150,7 +150,7 @@ VLM+RL은 `recovery_proposals` 등 전용 테이블이 있는데, 낙상 쪽은 
 
 ## 6. 원본 배달본이 가진 것 vs 운영 코드
 
-배달본은 [vision_system/person_worker/upstream_dev_vision/](../vision_system/person_worker/upstream_dev_vision/)에 원본 그대로 보관돼 있고, **운영 코드는 이 중 아무것도 쓰지 않는다.**
+배달본은 [vision_ai/upstream/dev_vision/](../vision_ai/upstream/dev_vision/)에 원본 그대로 보관돼 있고, **운영 코드는 이 중 아무것도 쓰지 않는다.**
 
 | 구성 요소 | 배달본 | 운영 코드 |
 | --- | --- | --- |
@@ -165,7 +165,7 @@ VLM+RL은 `recovery_proposals` 등 전용 테이블이 있는데, 낙상 쪽은 
 
 ### 6-1. 분류기가 쓰는 5개 피처
 
-[classifier_trainer.py:polygon_to_geometric_features](../vision_system/person_worker/upstream_dev_vision/code/classifier_trainer.py)
+[classifier_trainer.py:polygon_to_geometric_features](../vision_ai/upstream/dev_vision/code/classifier_trainer.py)
 
 1. `aspect_ratio` — bbox 가로/세로 (운영 코드와 같은 신호)
 2. `pca_angle` — polygon 공분산 행렬의 `eigh` → 최대 고유값 고유벡터의 각도(`% 180`). **mask의 주축 방향** = 사람이 누운 방향.
@@ -177,17 +177,17 @@ VLM+RL은 `recovery_proposals` 등 전용 테이블이 있는데, 낙상 쪽은 
 
 ### 6-2. 배달본이 고친 두 버그 — 이식 완료 (2026-08-29)
 
-1. **`note_no_detection()`** — 탐지가 끊긴 프레임에서 `recovery_since`를 리셋한다. 없으면 사람이 화면 밖에 있던 wall-clock 시간이 "정상이었다"는 증거로 잘못 인정된다. 2026-08-24 실측: 낙상 후 사람이 나갔다 4초 뒤 돌아왔는데 그 4초가 통째로 `recovery_confirm_seconds`를 만족시켜 한 프레임 만에 `NORMAL`로 튀었다. **원본과 동일하게 이식**했고, 호출부 두 곳([worker.py:note_person_lost](../model/worker/person/worker.py), [live_runtime.py:PersonSafetyReporter.observe](../model/vlm_rl/inference/live_runtime.py))에 배선했다.
+1. **`note_no_detection()`** — 탐지가 끊긴 프레임에서 `recovery_since`를 리셋한다. 없으면 사람이 화면 밖에 있던 wall-clock 시간이 "정상이었다"는 증거로 잘못 인정된다. 2026-08-24 실측: 낙상 후 사람이 나갔다 4초 뒤 돌아왔는데 그 4초가 통째로 `recovery_confirm_seconds`를 만족시켜 한 프레임 만에 `NORMAL`로 튀었다. **원본과 동일하게 이식**했고, 호출부 두 곳([worker.py:note_person_lost](../vision_ai/robot/perception/worker.py), [live_runtime.py:PersonSafetyReporter.observe](../vision_ai/robot/recovery/live_runtime.py))에 배선했다.
 
 2. **오실레이션 버그** — 숨쉬기 같은 미세 움직임으로 `FALLEN ↔ IMMOBILE`을 오가면 매번 `since`가 리셋돼, 14초 넘게 쓰러져 있었는데도 5초 연속을 한 번도 못 채워 `EMERGENCY_CANDIDATE`가 **영영 안 뜬다**(170622 실측). 원본은 `fallen_since`(첫 `FALLEN` 진입 시각)로 풀었다.
 
-   **여기서는 `immobile_since`(첫 `IMMOBILE` 진입 시각)로 풀었다 — 의도적으로 원본과 다르다.** 원본 방식은 `immobile_seconds`의 의미를 "정지가 지속된 시간"에서 "넘어진 뒤 경과한 시간"으로 바꾼다. [test_person_policy.py](../model/worker/tests/test_person_policy.py)가 전자를 명시적으로 문서화하고 있었고("자세 확정 1초 → 정지 지속 5초 → 확정 후보"), 원본 방식을 그대로 넣자 그 테스트가 깨졌다. 낙상 후 버둥거리는 사람은 아직 "일어나지 못하고 있는" 것이 아니므로 의미를 보존하는 쪽을 택했다.
+   **여기서는 `immobile_since`(첫 `IMMOBILE` 진입 시각)로 풀었다 — 의도적으로 원본과 다르다.** 원본 방식은 `immobile_seconds`의 의미를 "정지가 지속된 시간"에서 "넘어진 뒤 경과한 시간"으로 바꾼다. [test_person_policy.py](../vision_ai/tests/worker/test_person_policy.py)가 전자를 명시적으로 문서화하고 있었고("자세 확정 1초 → 정지 지속 5초 → 확정 후보"), 원본 방식을 그대로 넣자 그 테스트가 깨졌다. 낙상 후 버둥거리는 사람은 아직 "일어나지 못하고 있는" 것이 아니므로 의미를 보존하는 쪽을 택했다.
 
-   `immobile_since`는 `FALLEN ↔ IMMOBILE` 플립으로는 리셋되지 않고 **진짜 회복(`NORMAL` 복귀)에서만** 리셋된다. 오실레이션 버그는 원본과 동일하게 해결되며, 기존 테스트도 그대로 통과한다. 이 선택은 [test_fall_monitor.py](../model/worker/tests/test_fall_monitor.py)의 `test_the_escalation_clock_measures_stillness_not_time_since_falling`으로 고정해 뒀다.
+   `immobile_since`는 `FALLEN ↔ IMMOBILE` 플립으로는 리셋되지 않고 **진짜 회복(`NORMAL` 복귀)에서만** 리셋된다. 오실레이션 버그는 원본과 동일하게 해결되며, 기존 테스트도 그대로 통과한다. 이 선택은 [test_fall_monitor.py](../vision_ai/tests/worker/test_fall_monitor.py)의 `test_the_escalation_clock_measures_stillness_not_time_since_falling`으로 고정해 뒀다.
 
 ### 6-4. 피처와 분류기 이식 (2026-08-29)
 
-[features.py](../model/worker/person/features.py)가 다섯 피처를, [classifier.py](../model/worker/person/classifier.py)가 번들 적재를 맡는다. 이식하면서 걸린 것 두 가지.
+[features.py](../vision_ai/models/perception/features.py)가 다섯 피처를, [classifier.py](../vision_ai/models/perception/fall_classifier.py)가 번들 적재를 맡는다. 이식하면서 걸린 것 두 가지.
 
 **좌표계가 계약의 일부다.** 배달본은 학습·추론 모두 ultralytics의 `masks.xyn`/`boxes.xyxyn`, 즉 프레임 크기로 나눈 0..1 좌표에서 쟀다. 우리 `posture.py`는 픽셀 좌표에서 잰다. 프레임이 정사각형이 아니면 두 값이 다르다 — 640×480에서 200×100 mask의 종횡비는 픽셀로 2.0, 정규화로 1.5다. `aspect_ratio`는 번들 계수가 **+5.273으로 압도적**이라 픽셀 비율을 그대로 넣으면 가장 강한 신호가 조용히 틀어진다. 그래서 분류기용 피처는 정규화 좌표로 재고, 규칙 경로는 픽셀 기준을 그대로 뒀다 — `posture.py`의 0.9는 픽셀 비율 위에서 실측된 값이라 기준을 바꾸면 그 측정이 무효가 된다.
 
@@ -209,7 +209,7 @@ VLM+RL은 `recovery_proposals` 등 전용 테이블이 있는데, 낙상 쪽은 
 
 ## 7. 검증 현황: 주장 가능한 범위
 
-[configs/final_metrics.json](../vision_system/person_worker/upstream_dev_vision/configs/final_metrics.json) 기준. 아래는 **원본이 보고한 수치**이며 이 저장소에서 재현하지 않았다.
+[configs/final_metrics.json](../vision_ai/upstream/dev_vision/configs/final_metrics.json) 기준. 아래는 **원본이 보고한 수치**이며 이 저장소에서 재현하지 않았다.
 
 ### 분류기 (test split 161 instances, fallen 37)
 
@@ -337,8 +337,8 @@ INPUT: BGR 프레임 (RTSP / mp4 / 카메라)
 | 항목 | 값 | 근거 |
 | --- | --- | --- |
 | 클래스 | `0 = obstacle`, `1 = person` | `data.yaml: names: ['obstacle','person']` |
-| `person_class_id` | `1` (설정값, 상수 아님) | [detector.py:DetectorConfig](../model/perception/segmentation/runtime/detector.py) |
-| confidence 하한 | `0.25` | [realtime.yaml](../model/worker/configs/realtime.yaml) |
+| `person_class_id` | `1` (설정값, 상수 아님) | [detector.py:DetectorConfig](../vision_ai/models/perception/detector.py) |
+| confidence 하한 | `0.25` | [realtime.yaml](../vision_ai/robot/configs/realtime.yaml) |
 | 입력 크기 | `640` | 같음 |
 | mask 이진화 | 확률 `> 0.5` | `detections_from_result(mask_threshold=0.5)` |
 | tracking | `track(persist=True)` | `persist` 없으면 매 프레임 번호를 다시 매겨 신원이 안 됨 |

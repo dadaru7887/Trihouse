@@ -6,9 +6,9 @@ from fms_gateway.app.recovery_dispatch import dispatch_pending_once
 from fms_gateway.app.recovery_export import iter_training_jsonl
 from fms_gateway.app.recovery_models import RecoveryProposalCreate, RecoveryStepCompletion
 from fms_gateway.app.recovery_repository import InMemoryRecoveryRepository
-from model.vlm_rl.inference.completion_runtime import build_completion
-from model.vlm_rl.inference.navigation_context import NavigationContext
-from model.vlm_rl.inference.worker import DetectionEvidence, RecoveryInferenceWorker
+from vision_ai.robot.recovery.completion_runtime import build_completion
+from vision_ai.robot.recovery.navigation_context import NavigationContext
+from vision_ai.robot.recovery.worker import DetectionEvidence, RecoveryInferenceWorker
 
 
 class Vlm:

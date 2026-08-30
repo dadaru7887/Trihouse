@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from model.vlm_rl.shared.contracts import SKILL_NAMES
+from vision_ai.utils.contracts import SKILL_NAMES
 
 
 class RecoveryLearningTransition(BaseModel):
@@ -95,7 +95,7 @@ class RecoveryStateV1Payload(BaseModel):
 
     @model_validator(mode="after")
     def validate_frozen_state(self):
-        from model.vlm_rl.shared.contracts import RecoveryStateV1
+        from vision_ai.utils.contracts import RecoveryStateV1
 
         RecoveryStateV1(**self.model_dump())
         return self

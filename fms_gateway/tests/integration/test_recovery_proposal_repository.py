@@ -8,7 +8,7 @@ from conftest import mysql_connection
 from fms_gateway.app.recovery_models import RecoveryProposalCreate
 from fms_gateway.app.recovery_repository import MySqlRecoveryRepository
 from fms_gateway.tests.unit.test_recovery_approval_api import proposal_payload
-from model.vlm_rl.inference.completion_runtime import build_completion
+from vision_ai.robot.recovery.completion_runtime import build_completion
 
 
 pytestmark = pytest.mark.integration

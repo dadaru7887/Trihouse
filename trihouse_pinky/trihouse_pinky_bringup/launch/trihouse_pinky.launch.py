@@ -161,7 +161,7 @@ def generate_launch_description():
             Node(package='trihouse_pinky_fleet', executable='fleet_gateway', parameters=[{'robot_id': robot_id, 'control_host': control_host, 'control_port': control_port}]),
             # 카메라는 ROS 토픽으로 나가지 않는다. 이 노드는 ffmpeg 로
             # MediaMTX(PC1) 에 RTSP 를 밀고, 서버가 그것을 읽어 QR·ArUco 를
-            # 인식한다(`model/worker/marker/edge_perception.py`). namespace 안에 두어야 두
+            # 인식한다(`vision_ai/robot/marker/edge_perception.py`). namespace 안에 두어야 두
             # 로봇의 카메라 노드가 섞이지 않는다.
             IncludeLaunchDescription(
                 AnyLaunchDescriptionSource(vision),

@@ -1,7 +1,7 @@
 import json
 
 from fms_gateway.app.recovery_export import iter_training_jsonl
-from model.vlm_rl.shared.contracts import SKILL_NAMES
+from vision_ai.utils.contracts import SKILL_NAMES
 
 
 def test_export_contains_exact_trainer_fields_and_lineage() -> None:
