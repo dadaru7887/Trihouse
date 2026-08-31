@@ -67,3 +67,6 @@ log/
 # 자리마다 생기는 런타임 상태이고 저장소 자산이 아니다.
 .rmf_schedule_node.yaml
 .gstack/
+
+# Roboflow 다운로드본과 병합 결과. 재생성 가능하므로 추적하지 않는다.
+data/pinky_camera/
