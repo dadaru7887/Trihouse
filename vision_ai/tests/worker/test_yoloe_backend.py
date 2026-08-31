@@ -125,12 +125,11 @@ def test_the_augmentation_source_actually_exists() -> None:
     죽는다. 그런데 그 경로는 GPU 학습을 실제로 띄워야만 밟히므로, 파일이 옮겨져도
     단위 테스트가 아무것도 잡지 못한 채 통과한다 — 여기서 그 구멍을 막는다.
     """
-    from vision_ai.models.perception.trainer.yoloe_trainer import _resolve_augmentation_source
+    from vision_ai.models.perception.trainer.yoloe_trainer import _load_augmentation_module
 
-    resolved = _resolve_augmentation_source(None)
+    module = _load_augmentation_module(None)
 
-    assert resolved.is_file(), f"증강 recipe 모듈이 없습니다: {resolved}"
-    assert "vision_ai" in resolved.parts, f"저장소 밖을 가리킵니다: {resolved}"
+    assert module.__name__.startswith("vision_ai.utils.augmentation")
 
 
 def test_the_resolved_source_provides_what_the_trainer_pulls_from_it() -> None:
@@ -144,13 +143,9 @@ def test_the_resolved_source_provides_what_the_trainer_pulls_from_it() -> None:
     import importlib.util
     import sys
 
-    from vision_ai.models.perception.trainer.yoloe_trainer import _resolve_augmentation_source
+    from vision_ai.models.perception.trainer.yoloe_trainer import _load_augmentation_module
 
-    path = _resolve_augmentation_source(None)
-    spec = importlib.util.spec_from_file_location("aug_contract", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["aug_contract"] = module
-    spec.loader.exec_module(module)
+    module = _load_augmentation_module(None)
 
     for needed in ("configure_augmentation_seed", "mixed_augmentation", "A", "MIXED_POOL"):
         assert hasattr(module, needed), f"{needed} 를 꺼낼 수 없습니다"

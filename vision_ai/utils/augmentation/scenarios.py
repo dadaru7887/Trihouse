@@ -1,20 +1,19 @@
 """S1-S5 warehouse degradation scenarios, composed from primitives.
 
-Loaded by importlib during training, not run directly:
-    yoloe_trainer._load_existing_training_module() -> this file
-    -> uses only `A`, `configure_augmentation_seed`, `mixed_augmentation`
+Training-time only. The robot never augments what the camera gives it.
 
-Flow: mixed_augmentation() picks one function from MIXED_POOL per image and
-applies it under an isolated augmentation RNG.
+Called from:
+    yoloe_trainer._default_components() -> configure_augmentation_seed, A,
+                                           mixed_augmentation
 
-Scenarios (S5 composes S1-S4, it adds no new primitive):
-    S1 driving   gamma / motion blur / colour jitter   -- 3 functions
-    S2 condensation                                    -- 1 function
-    S3 glare                                           -- 1 function
-    S4 frost     frost / night frost                   -- 2 functions
-    S5 compound  lowlight+condensation, lowlight+glare,
-                 condensation+glare, lowlight+frost,
-                 frost+glare -- motion blur always last -- 5 functions
+Flow: mixed_augmentation() draws one function from MIXED_POOL per image and
+runs it under an isolated augmentation RNG.
+
+    S1 driving      gamma / motion blur / colour jitter      3 functions
+    S2 condensation                                          1 function
+    S3 glare                                                 1 function
+    S4 frost        frost / night frost                      2 functions
+    S5 compound     two S1-S4 effects, motion blur last      5 functions
 """
 
 import random

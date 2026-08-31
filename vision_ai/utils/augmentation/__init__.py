@@ -1,8 +1,8 @@
-"""환경 열화 증강 — 난수 관리와 원시 연산.
+"""Augmentation for training: RNG isolation, single effects, S1-S5 scenarios.
 
-시나리오 조합(S1~S5)과 학습 연결은
-`vision_ai/models/perception/trainer/augmentation_recipes.py` 가 맡는다.
-여기에는 어느 시나리오에도 매이지 않은 재사용 가능한 조각만 둔다.
+    rng.py         seeds the augmentation stream, leaves the training RNG alone
+    primitives.py  single effects (low light, blur, condensation, glare, frost)
+    scenarios.py   S1-S5 compositions and MIXED_POOL
 """
 
 from .rng import (  # noqa: F401

@@ -6,14 +6,9 @@ import torch
 
 
 def load_training_module():
-    from vision_ai.models.perception.trainer.yoloe_trainer import _resolve_augmentation_source
+    from vision_ai.models.perception.trainer.yoloe_trainer import _load_augmentation_module
 
-    path = _resolve_augmentation_source(None)
-    spec = importlib.util.spec_from_file_location("augmentation_seed_test", path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+    return _load_augmentation_module(None)
 
 
 def test_augmentation_rng_restarts_from_fixed_seed() -> None:

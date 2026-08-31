@@ -5,7 +5,7 @@
 > 이 문서는 실행 절차만 다룬다.
 
 사람/장애물 2-class segmentation 모델(`obstacle=0`, `person=1`)을 학습·평가한다.
-S1~S5 다온도 환경 증강은 `augmentation_recipes.py` 를 그대로 쓴다.
+S1~S5 다온도 환경 증강은 `scenarios.py` 를 그대로 쓴다.
 
 **데이터셋 경로는 인자다.** 저장소에 딸린 `configs/config.yaml` 의 `data_yaml` 은
 `PLACEHOLDER/...` 이므로 반드시 `--data` 로 넘기거나 config 를 자기 경로로 바꾼다.

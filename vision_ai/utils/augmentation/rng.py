@@ -2,7 +2,7 @@
 
 Called from the training path only:
     yoloe_trainer.train() -> configure_augmentation_seed(aug_seed)
-    augmentation_recipes.mixed_augmentation() -> isolated_augmentation_random_state()
+    scenarios.mixed_augmentation() -> isolated_augmentation_random_state()
 
 Flow: configure_augmentation_seed() fixes a parent stream; each augmentation
 draws a child seed from it, runs, and restores the training RNG state.

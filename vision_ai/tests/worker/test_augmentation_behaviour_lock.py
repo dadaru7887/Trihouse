@@ -14,7 +14,7 @@ pytest.importorskip("albumentations")
 pytest.importorskip("cv2")
 np = pytest.importorskip("numpy")
 
-RECIPES = Path("vision_ai/models/perception/trainer/augmentation_recipes.py")
+RECIPES = Path("vision_ai/utils/augmentation/scenarios.py")
 
 
 def _load():

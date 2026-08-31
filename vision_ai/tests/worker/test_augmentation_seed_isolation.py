@@ -5,7 +5,7 @@ import ast
 import pytest
 from pathlib import Path
 
-RECIPES = Path("vision_ai/models/perception/trainer/augmentation_recipes.py")
+RECIPES = Path("vision_ai/utils/augmentation/scenarios.py")
 RNG = Path("vision_ai/utils/augmentation/rng.py")
 PRIMITIVES = Path("vision_ai/utils/augmentation/primitives.py")
 
