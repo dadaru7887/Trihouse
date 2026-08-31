@@ -1,7 +1,39 @@
-"""환경 열화의 원시 연산.
+"""환경 열화의 원시 연산 — 저조도·블러·노이즈·결로·글레어·성에.
 
-저조도·블러·노이즈·결로·글레어·성에를 만드는 함수들. 시나리오(S1~S5)에 매이지
-않은 재사용 가능한 조각이라, 조합은 상위 모듈이 정한다.
+## 이 파일이 하는 일
+
+다온도 창고(상온 15~25 °C / 냉장 0~5 °C / 냉동 -25~-18 °C)를 오가는 로봇 카메라에
+실제로 생기는 광학 열화를 이미지 위에 합성한다. 회전·크롭 같은 기하 증강이 아니라
+**광학(photometric) 증강**이라, 마스크·라벨은 그대로 두고 그림만 바꾼다.
+
+여기에는 시나리오에 매이지 않은 **재사용 가능한 조각**만 둔다. 어떤 조각을 어떤
+세기로 어떻게 조합해 S1~S5 를 만드는지는 상위 모듈이 정한다:
+`vision_ai/models/perception/trainer/augmentation_recipes.py`.
+
+## 어떻게 불리는가
+
+직접 실행하는 파일이 아니다. 학습 중에만, 아래 경로로 간접 호출된다.
+
+    vision_ai.main train --model perception --stage segmentation --data <data.yaml>
+      -> trainer/yoloe_trainer.py  (importlib 로 recipes 적재)
+        -> trainer/augmentation_recipes.py  mixed_augmentation()
+          -> 이 파일의 함수들
+
+## 함수 묶음
+
+| 묶음 | 함수 | 만드는 열화 |
+| --- | --- | --- |
+| 밝기 | `gamma_brightness` `adjust_gamma` `synthesize_low_light` | 저조도, 감마 |
+| 노이즈 | `poisson_gaussian_noise` `add_gaussian_noise` | 센서 노이즈 |
+| 블러 | `gaussian_blur` `disc_blur` `motion_blur` `edge_blur` `random_blur` `add_motion_blur` | 흔들림, 초점 |
+| 결로 | `add_condensation` | 온도차로 렌즈에 맺힌 물방울 |
+| 글레어 | `add_glare` | 조명·반사면 |
+| 성에 | `generate_frost_overlay_*` `synthesize_night_frost_*` | 냉동 구역 렌즈 서리 |
+
+## 난수
+
+세기와 위치는 `rng.augmentation_rng()` 가 준 독립 RNG 에서 뽑는다. 학습 난수열을
+소비하지 않기 위해서다 — 근거는 `rng.py` 상단에 있다.
 
 원본: `Data_Aug_Test_Combined_merged.ipynb` / `train_yoloe.ipynb`.
 """
@@ -24,6 +56,7 @@ from .rng import augmentation_rng as _augmentation_rng
 # ── 2. 핵심 증강 함수 ─────────────────────────────────────
 
 def gamma_brightness(image, factor=None, gamma=None):
+    """Darken by gamma curve and brightness factor (factor: random 0.1-0.5 if None)."""
     img = image.astype(np.float32) / 255.0
     if gamma is not None:
         img = np.power(img, gamma)
@@ -34,6 +67,7 @@ def gamma_brightness(image, factor=None, gamma=None):
 
 
 def poisson_gaussian_noise(image, a=0.02, b=0.01, seed=None):
+    """Sensor-like noise: Poisson shot (scale `a`) plus Gaussian read (sigma `b`)."""
     rng = _augmentation_rng(seed)
     x = image.astype(np.float32) / 255.0
     lam = np.clip(x / a, 0, None)
@@ -132,6 +166,7 @@ def random_blur(image, strength_range=(0.8, 1.6), types=None):
 
 # scaled_blur이라는 이름으로도 예전 코드와 호환되게 유지 (gaussian_blur의 별칭)
 def scaled_blur(image, strength=1.0):
+    """Alias for `gaussian_blur`, kept for a uniform strength argument."""
     return gaussian_blur(image, strength=strength)
 
 
@@ -371,6 +406,7 @@ _frost_texture_cache = {}
 
 
 def _load_frost_texture(url):
+    """Fetch and cache a frost texture as greyscale. The only network call here."""
     if url not in _frost_texture_cache:
         resp = requests.get(url, timeout=20)
         resp.raise_for_status()
@@ -563,6 +599,7 @@ def add_condensation(image, coverage_ratio, intensity, center=None, seed=None, w
 
 
 def add_glare(image, intensity, size_ratio, center=None, seed=None):
+    """Add a circular highlight; radius = `size_ratio` x shorter side, falloff ^1.5."""
     rng = _augmentation_rng(seed)
     h, w = image.shape[:2]
     if center is None:
@@ -579,17 +616,20 @@ def add_glare(image, intensity, size_ratio, center=None, seed=None):
 
 
 def add_gaussian_noise(image, sigma):
+    """Add Gaussian noise of standard deviation `sigma`."""
     noise = np.random.normal(0, sigma, image.shape).astype(np.float32)
     return np.clip(image.astype(np.float32) + noise, 0, 255).astype(np.uint8)
 
 
 def adjust_gamma(image, gamma):
+    """Gamma correction via a 256-entry LUT. `gamma` < 1 darkens."""
     inv = 1.0 / gamma
     table = ((np.arange(256) / 255.0) ** inv * 255).astype(np.uint8)
     return cv2.LUT(image, table)
 
 
 def add_motion_blur(image, ksize, angle):
+    """Directional blur: a 1-row kernel of size `ksize` rotated by `angle`."""
     kernel = np.zeros((ksize, ksize), dtype=np.float32)
     kernel[ksize // 2, :] = 1.0
     M = cv2.getRotationMatrix2D((ksize / 2, ksize / 2), angle, 1)
