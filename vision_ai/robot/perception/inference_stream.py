@@ -183,11 +183,11 @@ class InferenceSession:
             frame = self.stream.read()
             state = self.monitor.on_frame(frame) if frame is not None else self.monitor.on_no_frame()
             if state != self._prev_state:
-                print(f"[상태] {self._prev_state} -> {state}")
+                print(f"[state] {self._prev_state} -> {state}")
                 self._prev_state = state
 
             if state == StreamState.DISCONNECTED:
-                self._discard_and_stop("스트림 단절")
+                self._discard_and_stop("stream lost")
                 self.stream.reconnect()
                 continue
 
@@ -229,7 +229,7 @@ class InferenceSession:
 
     def _discard_and_stop(self, reason: str) -> None:
         if self.action_queue:
-            print(f"[안전정지] {reason} -- action queue {len(self.action_queue)}건 폐기")
+            print(f"[safe stop] {reason} -- discarded {len(self.action_queue)} queued action(s)")
         self.action_queue.clear()
         self.authorized = False
 
@@ -237,28 +237,28 @@ class InferenceSession:
         if self.authorize_fn is None:
             return True
         ok = self.authorize_fn()
-        print("[재인증]", "성공" if ok else "실패 -- HEALTHY 유지되는 동안 재시도")
+        print("[reauth]", "ok" if ok else "failed -- retrying while the stream stays HEALTHY")
         return ok
 
     def _default_on_result(self, result, frame) -> None:
         n_det = 0 if result.masks is None else len(result.masks)
-        print(f"[추론] 객체 {n_det}개 감지")
+        print(f"[inference] {n_det} object(s) detected")
         if self.show:
             annotated = result.plot()  # BGR, 마스크/박스/라벨 다 그려서 반환
-            cv2.imshow("Trihouse segmentation inference (q 또는 ESC로 종료)", annotated)
+            cv2.imshow("Trihouse segmentation inference (q or ESC to quit)", annotated)
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):  # 27 = ESC
                 self._quit = True
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="스트림 단절 대응 로직 포함 로컬 추론 테스트")
+    p = argparse.ArgumentParser(description="Local inference test including the stream-loss handling")
     p.add_argument("--model", type=str, default=DEFAULT_MODEL)
     p.add_argument("--source", type=str, default="0",
-                   help="웹캠 인덱스(예: 0), 영상 파일 경로, 또는 RTSP/SRT URL")
+                   help="Webcam index (e.g. 0), video file path, or RTSP/SRT URL")
     p.add_argument("--target-fps", type=float, default=15.0)
     p.add_argument("--max-frames", type=int, default=None)
-    p.add_argument("--no-show", action="store_true", help="화면 창 없이 콘솔 로그만 (헤드리스 환경용)")
+    p.add_argument("--no-show", action="store_true", help="Console logs only, no window (for headless hosts)")
     return p.parse_args()
 
 

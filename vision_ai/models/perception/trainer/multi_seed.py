@@ -96,7 +96,7 @@ def select_deployment_model(
             continue
         candidates.append((float(validation[primary_metric]), float(validation[tie_breaker_metric]), seed, run_dir, validation))
     if not candidates:
-        raise ValueError("validation 지표가 있는 성공 seed가 없습니다")
+        raise ValueError("no successful seed has validation metrics")
     primary, tie_breaker, seed, run_dir, validation = min(
         candidates, key=lambda row: (-row[0], -row[1], row[2])
     )
@@ -117,7 +117,7 @@ def select_deployment_model(
             "validation_metrics": validation,
         },
         "test_metrics_used_for_selection": False,
-        "rationale": "validation 성능만 비교하고 test 결과는 대표 모델 선택에 사용하지 않음",
+        "rationale": "compares validation only; test results never pick the representative model",
     }
 
 

@@ -21,7 +21,7 @@ from vision_ai.models.perception.trainer.yoloe_trainer import YOLOEBackend
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="하나의 seed로 YOLOE 학습/검증/test 실행")
+    parser = argparse.ArgumentParser(description="Run YOLOE train/validation/test for one seed")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--experiment-dir", type=Path, required=True)

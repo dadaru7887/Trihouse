@@ -62,7 +62,7 @@ def test_audit_writes_deterministic_report_and_candidates(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     "bad_label, expected",
     [
-        ("2 0.1 0.1 0.2 0.1 0.2 0.2\n", "class ID"),
+        ("2 0.1 0.1 0.2 0.1 0.2 0.2\n", "class id"),
         ("1 0.1 0.1 1.2 0.1 0.2 0.2\n", "0..1"),
         ("1 0.1 0.1 0.2 0.2\n", "polygon"),
     ],
@@ -81,7 +81,7 @@ def test_audit_rejects_missing_label_pair(tmp_path: Path) -> None:
     data = make_dataset(tmp_path / "dataset")
     (tmp_path / "dataset/test/labels/test.txt").unlink()
 
-    with pytest.raises(DatasetAuditError, match="label.*없습니다"):
+    with pytest.raises(DatasetAuditError, match="label"):
         audit_dataset(data, tmp_path / "audit", allow_posture_gap=True)
 
 
@@ -91,14 +91,14 @@ def test_audit_rejects_orphan_label_without_image(tmp_path: Path) -> None:
         "1 0.1 0.1 0.2 0.1 0.2 0.2\n", encoding="utf-8"
     )
 
-    with pytest.raises(DatasetAuditError, match="image가 없는 label"):
+    with pytest.raises(DatasetAuditError, match="label file with no image"):
         audit_dataset(data, tmp_path / "audit", allow_posture_gap=True)
 
 
 def test_audit_rejects_cross_split_duplicate_image_content(tmp_path: Path) -> None:
     data = make_dataset(tmp_path / "dataset", duplicate=True)
 
-    with pytest.raises(DatasetAuditError, match="split.*중복"):
+    with pytest.raises(DatasetAuditError, match="duplicate"):
         audit_dataset(data, tmp_path / "audit", allow_posture_gap=True)
 
 

@@ -29,7 +29,7 @@ def analyze_experiment(experiment_dir: Path, output_dir: Path | None = None) -> 
     output_dir = Path(output_dir).resolve() if output_dir else experiment_dir / "analysis"
     output_dir.mkdir(parents=True, exist_ok=True)
     table = build_seed_performance_table(experiment_dir)
-    if table.empty: raise ValueError(f"seed 결과가 없습니다: {experiment_dir}")
+    if table.empty: raise ValueError(f"no seed results found: {experiment_dir}")
     _add_f1(table, "validation"); _add_f1(table, "test")
     table.to_csv(output_dir / "seed_performance.csv", index=False)
     diagnoses = {}
@@ -42,8 +42,8 @@ def analyze_experiment(experiment_dir: Path, output_dir: Path | None = None) -> 
     (output_dir / "performance_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     lines = [
         "# Multi-seed segmentation performance", "",
-        "주요 판단 지표: person mask mAP50-95, person mask recall, person mask F1. "
-        "Pixel accuracy는 배경 비중에 민감하므로 보조 지표로만 사용합니다.", "",
+        "Headline metrics: person mask mAP50-95, person mask recall, person mask F1. "
+        "Pixel accuracy tracks how much of the frame is background, so it is a supporting number only.", "",
         *_markdown_table(table), "", "## Training diagnostics", "",
     ]
     lines.extend(f"- {seed}: {', '.join(value['warnings']) or 'no automatic warning'}" for seed, value in diagnoses.items())

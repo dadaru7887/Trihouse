@@ -46,11 +46,11 @@ class TrainingConfig:
         if self.augmentation_source is not None:
             object.__setattr__(self, "augmentation_source", Path(self.augmentation_source).expanduser().resolve())
         if self.epochs <= 0 or self.imgsz <= 0 or self.patience < 0 or self.workers < 0:
-            raise ValueError("epochs/imgsz는 양수이고 patience/workers는 0 이상이어야 합니다")
+            raise ValueError("epochs and imgsz must be positive; patience and workers must be 0 or more")
         for field_name in ("min_mask_recall", "min_mask_map50"):
             value = getattr(self, field_name)
             if value < 0 or value > 1:
-                raise ValueError(f"{field_name}는 0..1 범위여야 합니다")
+                raise ValueError(f"{field_name} must be within 0..1")
 
     def to_dict(self) -> dict[str, Any]:
         values = asdict(self)

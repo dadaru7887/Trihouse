@@ -39,21 +39,21 @@ from pathlib import Path
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vision_ai.robot.main",
-        description="로봇 실시간 추론: 카메라 → 인지(+복구) → 주행 안전 gate",
+        description="Robot live inference: camera -> perception (+recovery) -> driving safety gate",
     )
     parser.add_argument("--source", default="0",
-                        help="RTSP URL, 영상 파일 경로, 또는 카메라 index")
+                        help="RTSP URL, video file path, or camera index")
     parser.add_argument("--weights", type=Path,
-                        help="세그멘테이션 weight(.pt) 또는 selected_model.json")
+                        help="Segmentation weights (.pt) or selected_model.json")
     parser.add_argument("--config", type=Path, help="realtime.yaml")
     parser.add_argument("--report-url", help="Gateway person-detections endpoint")
-    parser.add_argument("--camera-id", help="RTSP URL 에 담겨 있지 않을 때만 필요")
+    parser.add_argument("--camera-id", help="Only needed when the RTSP URL does not carry it")
     parser.add_argument("--ttl-ms", type=int, default=600)
-    parser.add_argument("--headless", action="store_true", help="화면 표시 없이")
+    parser.add_argument("--headless", action="store_true", help="Run without a display window")
     parser.add_argument("--with-recovery", action="store_true",
-                        help="VLM+RL 복구 제안까지 포함한 5080 운영 런타임")
+                        help="Full runtime including VLM+RL recovery proposals")
     parser.add_argument("--dry-run", action="store_true",
-                        help="배선만 확인하고 카메라를 열지 않는다")
+                        help="Check the wiring without opening the camera")
     return parser
 
 
@@ -62,14 +62,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.with_recovery:
         if args.dry_run:
-            print("robot: 복구 포함 런타임 (나머지 설정은 환경변수)")
+            print("robot: runtime with recovery (everything else comes from the environment)")
             return 0
         from vision_ai.robot.recovery.runtime import main as recovery_main
 
         return recovery_main([]) or 0
 
     if not args.weights:
-        print("--weights 가 필요합니다", file=sys.stderr)
+        print("--weights is required", file=sys.stderr)
         return 2
     if args.dry_run:
         # 배선만 확인한다. 여기서 무거운 모듈을 적재하지 않는 것이 요점이다 —

@@ -58,25 +58,25 @@ def _sha256(path: Path) -> str:
 def _load_data_yaml(data_yaml: Path) -> tuple[Path, dict[str, Any], list[str], int]:
     data_yaml = data_yaml.expanduser().resolve()
     if not data_yaml.is_file():
-        raise DatasetAuditError(f"data.yaml 파일이 없습니다: {data_yaml}")
+        raise DatasetAuditError(f"data.yaml not found: {data_yaml}")
     raw = yaml.safe_load(data_yaml.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
-        raise DatasetAuditError("data.yaml 최상위 값은 mapping이어야 합니다")
+        raise DatasetAuditError("the top level of data.yaml must be a mapping")
     for key in ("train", "val", "test"):
         if not raw.get(key):
-            raise DatasetAuditError(f"data.yaml에 {key} split이 없습니다")
+            raise DatasetAuditError(f"data.yaml has no {key} split")
     names_value = raw.get("names")
     if isinstance(names_value, dict):
         names = [str(names_value[key]) for key in sorted(names_value, key=lambda x: int(x))]
     elif isinstance(names_value, list):
         names = [str(value) for value in names_value]
     else:
-        raise DatasetAuditError("data.yaml names는 list 또는 class ID mapping이어야 합니다")
+        raise DatasetAuditError("data.yaml names must be a list or a class-id mapping")
     if "person" not in names:
-        raise DatasetAuditError("data.yaml에 person class가 없습니다")
+        raise DatasetAuditError("data.yaml has no person class")
     nc = int(raw.get("nc", len(names)))
     if nc != len(names):
-        raise DatasetAuditError(f"nc={nc}와 names 개수={len(names)}가 다릅니다")
+        raise DatasetAuditError(f"nc={nc} and the names count={len(names)} disagree")
     root_value = raw.get("path")
     root = (data_yaml.parent / str(root_value)).resolve() if root_value else data_yaml.parent
     return root, raw, names, names.index("person")
@@ -101,17 +101,17 @@ def _parse_label(path: Path, class_count: int) -> list[dict[str, Any]]:
             class_id = int(parts[0])
             coords = [float(value) for value in parts[1:]]
         except (ValueError, IndexError) as error:
-            raise DatasetAuditError(f"{path}:{line_number} label 숫자 형식 오류") from error
+            raise DatasetAuditError(f"{path}:{line_number} label has a malformed number") from error
         if class_id < 0 or class_id >= class_count:
-            raise DatasetAuditError(f"{path}:{line_number} class ID {class_id}가 names 범위를 벗어납니다")
+            raise DatasetAuditError(f"{path}:{line_number} class id {class_id} is outside the names range")
         if len(coords) < 6 or len(coords) % 2:
-            raise DatasetAuditError(f"{path}:{line_number} polygon은 최소 3개 좌표쌍이어야 합니다")
+            raise DatasetAuditError(f"{path}:{line_number} polygon needs at least 3 coordinate pairs")
         if any(value < 0.0 or value > 1.0 for value in coords):
-            raise DatasetAuditError(f"{path}:{line_number} polygon 좌표는 0..1 범위여야 합니다")
+            raise DatasetAuditError(f"{path}:{line_number} polygon coordinates must be within 0..1")
         xs, ys = coords[0::2], coords[1::2]
         width, height = max(xs) - min(xs), max(ys) - min(ys)
         if width <= 0 or height <= 0:
-            raise DatasetAuditError(f"{path}:{line_number} polygon 면적이 0입니다")
+            raise DatasetAuditError(f"{path}:{line_number} polygon has zero area")
         instances.append({
             "class_id": class_id,
             "bbox_aspect_ratio": width / height,
@@ -132,23 +132,23 @@ def _read_manifest(
         return counts, assignments
     manifest = manifest.expanduser().resolve()
     if not manifest.is_file():
-        raise DatasetAuditError(f"posture manifest 파일이 없습니다: {manifest}")
+        raise DatasetAuditError(f"posture manifest not found: {manifest}")
     with manifest.open(newline="", encoding="utf-8-sig") as stream:
         reader = csv.DictReader(stream)
         required = {"image", "posture", "environment"}
         if not required.issubset(reader.fieldnames or []):
-            raise DatasetAuditError(f"posture manifest 필수 열: {sorted(required)}")
+            raise DatasetAuditError(f"posture manifest is missing required columns: {sorted(required)}")
         for row_number, row in enumerate(reader, 2):
             image = (dataset_root / row["image"]).resolve()
             posture, environment = row["posture"].strip(), row["environment"].strip()
             if image not in image_to_split:
-                raise DatasetAuditError(f"manifest {row_number}: dataset split 밖의 image: {row['image']}")
+                raise DatasetAuditError(f"manifest {row_number}: image outside the dataset splits: {row['image']}")
             if image in assignments:
-                raise DatasetAuditError(f"manifest {row_number}: 중복 image: {row['image']}")
+                raise DatasetAuditError(f"manifest {row_number}: duplicate image: {row['image']}")
             if posture not in POSTURES:
-                raise DatasetAuditError(f"manifest {row_number}: 허용되지 않은 posture: {posture}")
+                raise DatasetAuditError(f"manifest {row_number}: posture not allowed: {posture}")
             if environment not in ENVIRONMENTS:
-                raise DatasetAuditError(f"manifest {row_number}: 허용되지 않은 environment: {environment}")
+                raise DatasetAuditError(f"manifest {row_number}: environment not allowed: {environment}")
             assignments[image] = (posture, environment)
             counts[image_to_split[image]][posture] += 1
     return counts, assignments
@@ -178,7 +178,7 @@ def audit_dataset(
     for canonical, yaml_key in (("train", "train"), ("valid", "val"), ("test", "test")):
         image_dir = _split_image_dir(root, raw, data_yaml.resolve().parent, yaml_key)
         if not image_dir.is_dir():
-            raise DatasetAuditError(f"{canonical} image 디렉터리가 없습니다: {image_dir}")
+            raise DatasetAuditError(f"{canonical} image directory not found: {image_dir}")
         label_dir = image_dir.parent / "labels"
         images = sorted(path for path in image_dir.iterdir() if path.suffix.lower() in IMAGE_SUFFIXES)
         image_stems = {path.stem for path in images}
@@ -186,19 +186,19 @@ def audit_dataset(
             path for path in label_dir.glob("*.txt") if path.stem not in image_stems
         ) if label_dir.is_dir() else []
         if orphan_labels:
-            raise DatasetAuditError(f"image가 없는 label 파일이 있습니다: {orphan_labels[0]}")
+            raise DatasetAuditError(f"label file with no image: {orphan_labels[0]}")
         empty_count = instance_count = person_count = 0
         for image in images:
             if cv2.imread(str(image)) is None:
-                raise DatasetAuditError(f"읽을 수 없는 image: {image}")
+                raise DatasetAuditError(f"unreadable image: {image}")
             label = label_dir / f"{image.stem}.txt"
             if not label.is_file():
-                raise DatasetAuditError(f"image에 대응하는 label 파일이 없습니다: {image}")
+                raise DatasetAuditError(f"image with no matching label file: {image}")
             content_hash = _sha256(image)
             if content_hash in hashes and hashes[content_hash][0] != canonical:
                 other_split, other_path = hashes[content_hash]
                 raise DatasetAuditError(
-                    f"split 사이 image content 중복: {other_split}/{other_path.name}, {canonical}/{image.name}"
+                    f"duplicate image content across splits: {other_split}/{other_path.name}, {canonical}/{image.name}"
                 )
             hashes[content_hash] = (canonical, image)
             image_to_split[image.resolve()] = canonical
@@ -243,8 +243,8 @@ def audit_dataset(
     posture_status = "EVALUABLE" if evaluable else "NOT_EVALUABLE"
     if not evaluable and not allow_posture_gap:
         raise DatasetAuditError(
-            "valid/test의 confirmed fallen 표본이 부족합니다. detection-only 학습은 "
-            "--allow-posture-gap을 명시하세요"
+            "too few confirmed fallen samples in valid/test; pass "
+            "--allow-posture-gap for detection-only training"
         )
 
     report = DatasetReport(
@@ -299,4 +299,4 @@ def _write_contact_sheet(path: Path, root: Path, rows: list[dict[str, Any]]) -> 
         cv2.putText(canvas, Path(row["image"]).name[:27], (x0 + 4, y0 + tile_h - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (20, 20, 20), 1)
     path.parent.mkdir(parents=True, exist_ok=True)
     if not cv2.imwrite(str(path), canvas):
-        raise DatasetAuditError(f"contact sheet 저장 실패: {path}")
+        raise DatasetAuditError(f"could not write the contact sheet: {path}")

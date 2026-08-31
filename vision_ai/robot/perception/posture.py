@@ -37,7 +37,7 @@ class PostureConfig:
 
     def __post_init__(self) -> None:
         if self.fall_aspect_ratio <= 0 or self.motion_threshold < 0:
-            raise ValueError("fall_aspect_ratio 는 양수, motion_threshold 는 0 이상이어야 합니다")
+            raise ValueError("fall_aspect_ratio must be positive and motion_threshold 0 or more")
 
 
 @dataclass(frozen=True)

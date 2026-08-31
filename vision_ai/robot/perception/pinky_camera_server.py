@@ -76,10 +76,10 @@ class MJPEGHandler(BaseHTTPRequestHandler):
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Pinky 카메라 MJPEG 스트리밍 서버")
+    p = argparse.ArgumentParser(description="Pinky camera MJPEG streaming server")
     p.add_argument("--port", type=int, default=8080)
     p.add_argument("--swap-rgb", action="store_true",
-                   help="화면 색이 이상하게(빨강/파랑 반전) 나오면 이 옵션 켜보기")
+                   help="Try this when the colours look swapped (red and blue inverted)")
     return p.parse_args()
 
 
@@ -92,8 +92,8 @@ def main() -> None:
     MJPEGHandler.swap_rgb = args.swap_rgb
 
     server = ThreadingHTTPServer(("0.0.0.0", args.port), MJPEGHandler)
-    print(f"스트리밍 시작 -- PC에서 http://<이 Pinky IP>:{args.port}/stream.mjpg 로 접속")
-    print("종료: Ctrl+C")
+    print(f"streaming: open http://<this pinky ip>:{args.port}/stream.mjpg from a PC")
+    print("stop with Ctrl+C")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

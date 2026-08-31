@@ -23,7 +23,7 @@ class ReportPolicy:
 
     def __post_init__(self) -> None:
         if self.ttl_ms <= 0:
-            raise ValueError("ttl_ms 는 양수여야 합니다")
+            raise ValueError("ttl_ms must be positive")
 
     @property
     def refresh_interval_s(self) -> float:

@@ -134,7 +134,7 @@ def test_a_wrong_length_feature_vector_is_refused(tmp_path) -> None:
     path = tmp_path / "bad.jsonl"
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
 
-    with pytest.raises(DatasetError, match="five|다섯"):
+    with pytest.raises(DatasetError, match="contracted values"):
         train_classifier(path, tmp_path / "run", seed=42)
 
 

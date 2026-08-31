@@ -102,7 +102,7 @@ def test_mps_is_resolved_when_available() -> None:
 
 def test_mps_is_refused_when_the_machine_has_none() -> None:
     """Asking for a GPU that is not there must fail, not quietly use the CPU."""
-    with pytest.raises(DeviceError, match="Apple GPU"):
+    with pytest.raises(DeviceError, match="needs an Apple GPU"):
         resolve_device("mps", FakeTorch(False, mps=False))
 
 
@@ -117,7 +117,7 @@ def test_gpu_policy_requires_and_resolves_requested_gpu(requested: str, resolved
 @pytest.mark.parametrize("requested", ["gpu", "cuda", "0", "cuda:0"])
 def test_a_cuda_request_never_falls_back(requested: str) -> None:
     """Not even to MPS: the run asked for CUDA and must say so if it cannot."""
-    with pytest.raises(DeviceError, match="CUDA GPU가 필요"):
+    with pytest.raises(DeviceError, match="needs a CUDA GPU"):
         resolve_device(requested, FakeTorch(False, mps=True))
 
 
@@ -127,5 +127,5 @@ def test_out_of_range_gpu_is_rejected() -> None:
 
 
 def test_invalid_device_is_rejected() -> None:
-    with pytest.raises(DeviceError, match="지원하지 않는 device"):
+    with pytest.raises(DeviceError, match="unsupported device"):
         resolve_device("tpu", FakeTorch(False))

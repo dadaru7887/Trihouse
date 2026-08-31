@@ -38,10 +38,10 @@ SECTION_KEYS = {
 def _mapping(raw: dict[str, Any], key: str) -> dict[str, Any]:
     value = raw.get(key)
     if not isinstance(value, dict):
-        raise ConfigError(f"{key}는 mapping이어야 합니다")
+        raise ConfigError(f"{key} must be a mapping")
     unknown = set(value) - SECTION_KEYS[key]
     if unknown:
-        raise ConfigError(f"알 수 없는 key: {key}.{sorted(unknown)[0]}")
+        raise ConfigError(f"unknown key: {key}.{sorted(unknown)[0]}")
     return value
 
 
@@ -74,23 +74,23 @@ def load_experiment_config(
     """
     path = Path(path).expanduser().resolve()
     if not path.is_file():
-        raise ConfigError(f"config 파일이 없습니다: {path}")
+        raise ConfigError(f"config file not found: {path}")
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
-        raise ConfigError("config 최상위 값은 mapping이어야 합니다")
+        raise ConfigError("the top level of a config must be a mapping")
     unknown = set(raw) - ROOT_KEYS
     if unknown:
-        raise ConfigError(f"알 수 없는 key: {sorted(unknown)[0]}")
+        raise ConfigError(f"unknown key: {sorted(unknown)[0]}")
     if raw.get("schema_version") != 1:
-        raise ConfigError("schema_version은 1이어야 합니다")
+        raise ConfigError("schema_version must be 1")
     sections = {name: _mapping(raw, name) for name in SECTION_KEYS}
     experiment = sections["experiment"]
     seeds = experiment.get("seeds")
     if not isinstance(seeds, list) or not seeds or any(type(seed) is not int for seed in seeds) or len(set(seeds)) != len(seeds):
-        raise ConfigError("experiment.seeds는 중복 없는 정수 목록이어야 합니다")
+        raise ConfigError("experiment.seeds must be a list of distinct integers")
     name = experiment.get("name")
     if not isinstance(name, str) or not name.strip():
-        raise ConfigError("experiment.name은 비어 있지 않은 문자열이어야 합니다")
+        raise ConfigError("experiment.name must be a non-empty string")
     root = Path(project_root).resolve() if project_root else REPOSITORY_ROOT
     dataset, model, training, evaluation, output, selection = (
         sections[key] for key in ("dataset", "model", "training", "evaluation", "output", "selection")
@@ -98,7 +98,7 @@ def load_experiment_config(
     data = _resolve(root, str(data_override) if data_override is not None
                     else dataset.get("data_yaml"))
     if data is None:
-        raise ConfigError("dataset.data_yaml이 필요합니다 (또는 --data 로 넘기십시오)")
+        raise ConfigError("dataset.data_yaml is required (or pass --data)")
     run_base = _resolve(root, output.get("run_root", "runs/lego_worker"))
     config = TrainingConfig(
         model=str(model.get("weights", "yoloe-26s-seg.pt")), data=data, run_root=run_base / name,

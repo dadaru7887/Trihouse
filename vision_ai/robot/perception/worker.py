@@ -69,27 +69,27 @@ def load_settings(path: Path) -> tuple[DetectorConfig, PostureConfig, MonitorCon
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="사람 검출 + 낙상 감지 추론")
-    parser.add_argument("--weights", type=Path, required=True, help="best.pt 또는 selected_model.json")
-    parser.add_argument("--source", default="0", help="카메라 번호, 영상 파일 또는 RTSP URL")
+    parser = argparse.ArgumentParser(description="Person detection and fall inference")
+    parser.add_argument("--weights", type=Path, required=True, help="best.pt or selected_model.json")
+    parser.add_argument("--source", default="0", help="Camera index, video file, or RTSP URL")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--headless", action="store_true", help="창을 띄우지 않는다")
+    parser.add_argument("--headless", action="store_true", help="Run without a display window")
     parser.add_argument(
         "--camera-id",
         help=(
-            "관측에 실을 카메라 ID. RTSP source 면 URL 의 마지막 segment 에서 "
-            "저절로 나오므로 줄 필요가 없다"
+            "Camera id to attach to observations. With an RTSP source it is taken from "
+            "the URL, so it does not need to be passed"
         ),
     )
     parser.add_argument(
         "--report-url",
-        help="관제(4060)의 사람 관측 수신 주소. 생략하면 표준출력에만 찍는다",
+        help="Where to send person observations. Omit to print to stdout only",
     )
     parser.add_argument(
         "--ttl-ms",
         type=int,
         default=ReportPolicy().ttl_ms,
-        help="관측 수명(ms). 이 절반 주기로 갱신을 보낸다",
+        help="Observation lifetime in ms; refreshes are sent at half this interval",
     )
     return parser.parse_args(argv)
 
@@ -110,7 +110,7 @@ def resolve_camera_id(source: str, explicit: str | None) -> str:
         if segment:
             return segment
     raise SystemExit(
-        "카메라 ID 를 정할 수 없습니다. RTSP source 를 쓰거나 --camera-id 를 주세요"
+        "cannot determine the camera id; use an RTSP source or pass --camera-id"
     )
 
 
@@ -153,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
 
     capture = cv2.VideoCapture(parse_source(args.source))
     if not capture.isOpened():
-        raise RuntimeError(f"영상 source 를 열 수 없습니다: {args.source}")
+        raise RuntimeError(f"cannot open the video source: {args.source}")
     started = time.monotonic()
     try:
         while True:

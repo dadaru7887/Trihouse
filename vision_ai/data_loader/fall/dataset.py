@@ -36,14 +36,14 @@ def load_dataset(path: Path) -> dict[str, tuple[list[list[float]], list[int]]]:
         try:
             record = json.loads(line)
         except json.JSONDecodeError as error:
-            raise DatasetError(f"{path}:{number} JSON 이 아닙니다 — {error}") from error
+            raise DatasetError(f"{path}:{number} is not JSON: {error}") from error
         split = record.get("split")
         if split not in rows:
-            raise DatasetError(f"{path}:{number} split 은 train/valid/test 중 하나여야 합니다: {split!r}")
+            raise DatasetError(f"{path}:{number} split must be train, valid or test: {split!r}")
         features = record.get("features")
         if not isinstance(features, list) or len(features) != len(FEATURE_NAMES):
             raise DatasetError(
-                f"{path}:{number} features 는 계약된 다섯 값(five)이어야 합니다: {FEATURE_NAMES}"
+                f"{path}:{number} features must be the {len(FEATURE_NAMES)} contracted values: {FEATURE_NAMES}"
             )
         rows[split][0].append([float(value) for value in features])
         rows[split][1].append(1 if record.get("fallen") else 0)
@@ -51,9 +51,9 @@ def load_dataset(path: Path) -> dict[str, tuple[list[list[float]], list[int]]]:
     for split in SPLITS:
         features, labels = rows[split]
         if not features:
-            raise DatasetError(f"{split} split 이 비어 있습니다 (valid/test 도 필요합니다)")
+            raise DatasetError(f"the {split} split is empty (valid and test are needed too)")
         if sum(labels) == 0:
-            raise DatasetError(f"{split} split 에 fallen 예시가 없습니다 — 지표를 낼 수 없습니다")
+            raise DatasetError(f"the {split} split has no fallen examples, so no metric can be computed")
         if sum(labels) == len(labels):
-            raise DatasetError(f"{split} split 에 정상 예시가 없습니다 — 지표를 낼 수 없습니다")
+            raise DatasetError(f"the {split} split has no upright examples, so no metric can be computed")
     return rows

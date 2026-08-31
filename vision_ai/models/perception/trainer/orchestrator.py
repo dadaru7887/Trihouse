@@ -58,7 +58,7 @@ def _format_metrics(metrics: dict) -> str:
 def run_pipeline(config: TrainingConfig, backend: TrainingBackend) -> Path:
     run_dir = config.run_root / _run_name(config)
     if run_dir.exists() and any(run_dir.iterdir()):
-        raise PipelineError(f"run 디렉터리가 이미 존재하고 비어 있지 않습니다: {run_dir}")
+        raise PipelineError(f"run directory already exists and is not empty: {run_dir}")
     run_dir.mkdir(parents=True, exist_ok=True)
     stage = "PREFLIGHT"
     started = datetime.now(timezone.utc).isoformat()
@@ -113,7 +113,7 @@ def run_pipeline(config: TrainingConfig, backend: TrainingBackend) -> Path:
         weights = backend.train(config, run_dir).resolve()
         logger.info("TRAIN done | weights=%s", weights)
         if not weights.is_file():
-            raise PipelineError(f"학습 backend가 best.pt를 만들지 않았습니다: {weights}")
+            raise PipelineError(f"the training backend produced no best.pt: {weights}")
 
         stage = "VALIDATION"
         validation = backend.evaluate(weights, "val", config, run_dir)
@@ -132,7 +132,7 @@ def run_pipeline(config: TrainingConfig, backend: TrainingBackend) -> Path:
                     gate_recall, config.min_mask_recall, gate_map50, config.min_mask_map50)
         if not validation_gate_passed and not config.test_on_validation_gate_failure:
             raise PipelineError(
-                "validation gate 실패: "
+                "validation gate failed: "
                 f"person_mask_recall={gate_recall}, person_mask_map50={gate_map50}"
             )
 

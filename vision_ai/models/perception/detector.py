@@ -34,11 +34,11 @@ class DetectorConfig:
 
     def __post_init__(self) -> None:
         if not 0.0 < self.confidence <= 1.0:
-            raise ValueError("confidence 는 0 초과 1 이하여야 합니다")
+            raise ValueError("confidence must be greater than 0 and at most 1")
         if self.image_size <= 0:
-            raise ValueError("image_size 는 양수여야 합니다")
+            raise ValueError("image_size must be positive")
         if self.person_class_id < 0:
-            raise ValueError("person_class_id 는 0 이상이어야 합니다")
+            raise ValueError("person_class_id must be 0 or more")
 
 
 @dataclass(frozen=True)
@@ -67,7 +67,7 @@ def resolve_weights(value: Path) -> Path:
         selected = json.loads(value.read_text(encoding="utf-8"))
         value = Path(selected["weights"]).expanduser().resolve()
     if not value.is_file():
-        raise FileNotFoundError(f"weight 가 없습니다: {value}")
+        raise FileNotFoundError(f"weights not found: {value}")
     return value
 
 

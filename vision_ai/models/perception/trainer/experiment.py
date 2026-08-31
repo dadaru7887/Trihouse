@@ -61,7 +61,7 @@ class MultiSeedExperiment:
             if result.returncode:
                 failures.append(seed)
                 if not self.config.continue_on_failure:
-                    raise RuntimeError(f"seed {seed} 학습 실패: exit={result.returncode}")
+                    raise RuntimeError(f"seed {seed} training failed: exit={result.returncode}")
         return failures
 
     def run(self) -> Path:
@@ -71,7 +71,7 @@ class MultiSeedExperiment:
         failures = self._run_seeds()
         aggregate = aggregate_seed_runs(self.experiment_dir, list(self.config.seeds))
         if not aggregate["successful_seeds"]:
-            raise RuntimeError(f"성공한 seed가 없습니다. 실패: {failures}")
+            raise RuntimeError(f"no seed succeeded. failures: {failures}")
         selected = select_deployment_model(
             self.experiment_dir, aggregate["successful_seeds"],
             self.config.selection_metric, self.config.selection_tie_breaker,

@@ -22,8 +22,8 @@ def add_training_arguments(parser: argparse.ArgumentParser, *, include_run: bool
     parser.add_argument("--data", type=Path, required=True, help="YOLO segmentation data.yaml")
     parser.add_argument(
         "--model", default=DEFAULT_MODEL,
-        help="가중치 파일명 또는 경로. 축약어를 확장하지 않으므로 실제로 쓰이는\n"
-             "이름을 그대로 적는다 (예: yoloe-26s-seg.pt)",
+        help="Weight filename or path. Shorthand is not expanded, so write the "
+             "name that is actually used (e.g. yoloe-26s-seg.pt)",
     )
     parser.add_argument(
         "--augmentation", action=argparse.BooleanOptionalAction, default=True,

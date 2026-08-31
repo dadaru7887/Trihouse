@@ -40,7 +40,7 @@ def test_config_loads_strict_schema_and_resolves_project_paths(tmp_path: Path) -
 
 def test_config_rejects_unknown_keys(tmp_path: Path) -> None:
     path = write_config(tmp_path / "config.yaml", {"mystery": {"enabled": True}})
-    with pytest.raises(ConfigError, match="알 수 없는 key.*mystery"):
+    with pytest.raises(ConfigError, match="unknown key.*mystery"):
         load_experiment_config(path, project_root=tmp_path)
 
 

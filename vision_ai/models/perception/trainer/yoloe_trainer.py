@@ -29,15 +29,14 @@ def confusion_metrics(matrix: Any, person_id: int) -> dict[str, float | int]:
 
 
 def resolve_model(name: str) -> str:
-    """가중치 이름을 그대로 돌려준다. 축약어는 확장하지 않고 거절한다.
+    """Return the weight name unchanged; refuse a shorthand rather than expand it.
 
-    전에는 `26s` 를 `yoloe-26s-seg.pt` 로 조용히 바꿔 줬다. 편하지만 run 기록에
-    남은 이름과 실제로 적은 이름이 달라져서, 나중에 "무슨 모델로 학습했나" 를
-    되짚을 때 코드를 열어 봐야만 알 수 있었다. 이름은 적은 그대로 쓴다.
+    A run's record must name the weights that were actually loaded, so `26s`
+    is an error rather than a silent rewrite to `yoloe-26s-seg.pt`.
     """
     if _MODEL_SHORTHAND.fullmatch(name):
         raise ValueError(
-            f"축약어 대신 전체 가중치 이름을 적으십시오: {name!r} "
+            f"write the full weight name instead of a shorthand: {name!r} "
             f"-> 'yoloe-{name}-seg.pt'"
         )
     return name
@@ -45,9 +44,9 @@ def resolve_model(name: str) -> str:
 
 def normalize_metrics(result: Any) -> dict[str, float]:
     if getattr(result, "seg", None) is None:
-        raise ValueError("YOLOE evaluation 결과에 segmentation metrics가 없습니다")
+        raise ValueError("the YOLOE evaluation result has no segmentation metrics")
     if getattr(result, "box", None) is None:
-        raise ValueError("YOLOE evaluation 결과에 box metrics가 없습니다")
+        raise ValueError("the YOLOE evaluation result has no box metrics")
     metrics = {
         "box_precision": float(result.box.mp),
         "box_recall": float(result.box.mr),
@@ -165,7 +164,7 @@ class YOLOEBackend:
         save_dir = Path(result.save_dir)
         best = save_dir / "weights/best.pt"
         if not best.is_file():
-            raise RuntimeError(f"YOLOE 학습 결과 best.pt가 없습니다: {best}")
+            raise RuntimeError(f"YOLOE training produced no best.pt: {best}")
         return best
 
     def evaluate(
@@ -174,9 +173,9 @@ class YOLOEBackend:
         self._ensure_components(config.augmentation_source)
         assert self.model_factory is not None
         if split not in {"val", "test"}:
-            raise ValueError(f"평가 split은 val 또는 test여야 합니다: {split}")
+            raise ValueError(f"the evaluation split must be val or test: {split}")
         if not weights.is_file():
-            raise FileNotFoundError(f"평가 weight가 없습니다: {weights}")
+            raise FileNotFoundError(f"evaluation weights not found: {weights}")
         model = self.model_factory(str(weights))
         result = model.val(
             data=str(config.data), split=split, imgsz=config.imgsz, batch=config.batch,

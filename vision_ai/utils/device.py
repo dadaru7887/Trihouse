@@ -66,7 +66,7 @@ def resolve_device(requested: str, torch_module=None) -> DeviceSelection:
                                reason="explicit_cpu")
     if value == "mps":
         if not _mps_available(torch_module):
-            raise DeviceError(f"device={requested} 실행에는 Apple GPU(MPS)가 필요합니다")
+            raise DeviceError(f"device={requested} needs an Apple GPU (MPS)")
         return DeviceSelection(requested=value, resolved="mps", requires_cuda=False,
                                reason="explicit_mps")
     if value in {"gpu", "cuda"}:
@@ -76,10 +76,10 @@ def resolve_device(requested: str, torch_module=None) -> DeviceSelection:
     elif value.startswith("cuda:") and value[5:].isdigit():
         index = int(value[5:])
     else:
-        raise DeviceError(f"지원하지 않는 device 값입니다: {requested}")
+        raise DeviceError(f"unsupported device: {requested}")
     if not available:
-        raise DeviceError(f"device={requested} 실행에는 CUDA GPU가 필요합니다")
+        raise DeviceError(f"device={requested} needs a CUDA GPU")
     if index >= count:
-        raise DeviceError(f"GPU index {index}를 사용할 수 없습니다. 감지된 GPU 수: {count}")
+        raise DeviceError(f"GPU index {index} is not available; {count} GPU(s) detected")
     return DeviceSelection(requested=value, resolved=str(index), requires_cuda=True,
                            reason="explicit_cuda")

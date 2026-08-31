@@ -78,13 +78,13 @@ def capture_environment(
 
 def validate_training_environment(snapshot: dict[str, Any], require_cuda: bool = True) -> None:
     if require_cuda and not snapshot["pytorch"]["cuda_available"]:
-        raise EnvironmentError("CUDA GPU를 사용할 수 없습니다")
+        raise EnvironmentError("no CUDA GPU is available")
     if "RTX 5080" in snapshot["gpu"]["name"]:
         if "sm_120" not in snapshot["pytorch"]["supported_arches"]:
-            raise EnvironmentError("RTX 5080 학습에는 sm_120 지원 PyTorch가 필요합니다")
+            raise EnvironmentError("training on an RTX 5080 needs a PyTorch build with sm_120 support")
         runtime = snapshot["pytorch"]["cuda_runtime"]
         if runtime == "unavailable" or tuple(map(int, runtime.split(".")[:2])) < (12, 8):
-            raise EnvironmentError("RTX 5080 학습에는 PyTorch CUDA runtime 12.8 이상이 필요합니다")
+            raise EnvironmentError("training on an RTX 5080 needs PyTorch CUDA runtime 12.8 or newer")
 
 
 def write_environment(path, snapshot: dict[str, Any]) -> None:

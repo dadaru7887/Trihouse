@@ -19,7 +19,7 @@ import numpy
 
 def _args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--rtsp-url', required=True, help='환경변수에서 전달; 로그에 남기지 말 것')
+    parser.add_argument('--rtsp-url', required=True, help='Pass through the environment; never write it to a log')
     parser.add_argument('--camera-id', default='CAM-PK-02')
     parser.add_argument('--fms-url', default='http://127.0.0.1:8080')
     parser.add_argument('--calibration-file', required=True)
