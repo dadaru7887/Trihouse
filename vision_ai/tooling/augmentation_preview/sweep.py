@@ -1,8 +1,8 @@
 """Render one effect at rising strength, to choose a setting before it ships.
 
-Run once per decision, not per training run: the values picked here end up in
-`utils/augmentation/scenarios.py` as fixed recipe parameters, and preview.py
-checks those from then on.
+One of the two tools here. Run it once per decision, not per training run: the
+value picked ends up in `utils/augmentation/scenarios.py` as a fixed recipe
+parameter, and preview.py checks it from then on.
 
     python -m vision_ai.tooling.augmentation_preview.sweep \
         --dataset data/pinky_camera/merged --out runs/augmentation_preview --effect blur

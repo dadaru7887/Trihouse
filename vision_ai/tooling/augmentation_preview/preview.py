@@ -1,4 +1,7 @@
-"""Review the augmentation before training on it: render it, and measure it.
+"""Check the augmentation settings already in use: render them, and measure them.
+
+One of the two tools here. This one runs whenever the recipes change; sweep.py
+walks an effect through strengths to pick a value in the first place.
 
 Calls `vision_ai/utils/augmentation`, the same code training uses, so what you
 review here is what the model actually sees.
@@ -18,8 +21,6 @@ Two failures the severity numbers catch, both of which happened here: a recipe
 that changes nothing scores like a free win, and a recipe that erases the
 subject teaches nothing and cannot be annotated either. What they cannot catch
 is whether the result looks like a warehouse -- that is what the sheets are for.
-
-To choose a setting rather than check the ones in use, see sweep.py.
 
 Output is a review artefact, not a dataset. Nothing reads it back.
 """
