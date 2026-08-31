@@ -31,18 +31,21 @@ def test_renders_one_sheet_per_frame(tmp_path):
     assert all(path.is_file() for path in written)
 
 
-def test_sheet_has_one_panel_per_group_plus_original(tmp_path):
+def test_sheet_wraps_into_a_grid_of_fixed_width(tmp_path):
     written = preview.render(_frames(tmp_path / "src", 1), tmp_path / "out")
     sheet = cv2.imread(str(written[0]))
-    # Panels are tiled horizontally at a fixed width: original + every group.
-    assert sheet.shape[1] == preview.COLUMN_WIDTH * (1 + len(scenarios.GROUPS))
+    panels = 1 + len(scenarios.GROUPS)
+    columns = min(preview.COLUMNS, panels)
+    assert sheet.shape[1] == preview.COLUMN_WIDTH * columns
 
 
 def test_group_mode_shows_every_recipe_in_that_group(tmp_path):
     written = preview.render(_frames(tmp_path / "src", 1), tmp_path / "out", group="S2")
     sheet = cv2.imread(str(written[0]))
-    expected = 1 + len(scenarios.recipes_in("S2"))
-    assert sheet.shape[1] == preview.COLUMN_WIDTH * expected
+    panels = 1 + len(scenarios.recipes_in("S2"))
+    # Six panels wrap to two rows of five.
+    assert sheet.shape[1] == preview.COLUMN_WIDTH * min(preview.COLUMNS, panels)
+    assert panels == 6
 
 
 def test_uses_the_shared_recipe_code(tmp_path, monkeypatch):

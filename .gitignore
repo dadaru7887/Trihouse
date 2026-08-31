@@ -70,3 +70,4 @@ log/
 
 # Roboflow 다운로드본과 병합 결과. 재생성 가능하므로 추적하지 않는다.
 data/pinky_camera/
+runs/

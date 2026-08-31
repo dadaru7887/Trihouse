@@ -120,3 +120,29 @@ def test_unseen_compounds_only_name_unseen_recipes():
     for recipe in scenarios.recipes_in("unseen_compound"):
         for mechanism in recipe.mechanism.split("+"):
             assert mechanism in unseen, recipe.id
+
+
+@pytest.mark.parametrize("train_id, eval_id", [
+    ("S4_frost_rime", "U_frost_crystal_mild"),
+    ("S4_frost_thick", "U_frost_crystal_thick"),
+])
+def test_the_unseen_frost_matches_the_trained_frost_in_severity(train_id, eval_id):
+    """Both frost implementations must degrade a comparable share of the frame.
+
+    Their coverage_ratio scales differ, so equal numbers give wildly unequal
+    pictures; if the eval frost is milder the model scores well for the wrong
+    reason. Tolerance is wide because the two algorithms differ in shape.
+    """
+    rng = np.random.default_rng(5)
+    trained, unseen = [], []
+    for _ in range(4):
+        image = rng.integers(0, 255, (240, 320, 3), dtype=np.uint8)
+        for recipe_id, bucket in ((train_id, trained), (eval_id, unseen)):
+            scenarios.configure_augmentation_seed(11)
+            out = scenarios.apply_recipe(image.copy(), recipe_id)
+            delta = np.abs(out.astype(np.int16) - image.astype(np.int16)).max(axis=2)
+            bucket.append((delta > 12).mean())
+
+    assert abs(np.mean(trained) - np.mean(unseen)) < 0.20, (
+        f"{train_id} changes {np.mean(trained):.0%} of pixels but "
+        f"{eval_id} changes {np.mean(unseen):.0%}")

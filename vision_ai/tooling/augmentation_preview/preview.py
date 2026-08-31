@@ -22,8 +22,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-# Grid geometry: one column for the original, the rest for variants.
+# Grid geometry: panel width in pixels, and how many before wrapping to a new row.
 COLUMN_WIDTH = 320
+COLUMNS = 5
 
 
 def _read_images(images_dir: Path, limit: int) -> list[tuple[str, "object"]]:
@@ -56,8 +57,12 @@ def _label(image, text: str):
     return out
 
 
-def _tile(panels: list[tuple[str, "object"]]):
-    """Scale every panel to a common width and lay them out in one row."""
+def _tile(panels: list[tuple[str, "object"]], columns: int = COLUMNS):
+    """Scale every panel to a common size and lay them out in a grid.
+
+    A single row would be thousands of pixels wide once a group has more than
+    a handful of recipes, so panels wrap after `columns`.
+    """
     import cv2
     import numpy as np
 
@@ -65,10 +70,16 @@ def _tile(panels: list[tuple[str, "object"]]):
     for caption, image in panels:
         height = int(image.shape[0] * COLUMN_WIDTH / image.shape[1])
         scaled.append(_label(cv2.resize(image, (COLUMN_WIDTH, height)), caption))
-    tallest = max(panel.shape[0] for panel in scaled)
-    # Pad shorter panels so hstack gets a uniform height.
-    padded = [np.pad(p, ((0, tallest - p.shape[0]), (0, 0), (0, 0))) for p in scaled]
-    return np.hstack(padded)
+    cell_h = max(panel.shape[0] for panel in scaled)
+    # Pad every panel to one cell size so the rows stack cleanly.
+    cells = [np.pad(p, ((0, cell_h - p.shape[0]), (0, 0), (0, 0))) for p in scaled]
+    blank = np.zeros((cell_h, COLUMN_WIDTH, 3), dtype=cells[0].dtype)
+    rows = []
+    for start in range(0, len(cells), columns):
+        row = cells[start:start + columns]
+        row += [blank] * (columns - len(row))       # pad the last row
+        rows.append(np.hstack(row))
+    return np.vstack(rows)
 
 
 def render(images_dir: Path, out_dir: Path, group: str | None = None,

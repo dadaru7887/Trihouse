@@ -252,10 +252,18 @@ EVAL_UNSEEN = (
            lambda image: gamma_brightness(image, factor=0.6, gamma=1.1)),
     Recipe("U_lowlight_linear_strong", "unseen", "gamma",
            lambda image: gamma_brightness(image, factor=0.4, gamma=1.3)),
+    # Calibrated against the training frost, not copied from it: v3 thresholds
+    # its noise field at 1 - coverage and then damps it toward the corners, so
+    # the same numbers that give chunky heavy frost leave v3 blank. These
+    # settings match S4_frost_rime and S4_frost_thick on how much of the frame
+    # they change (~48% and ~80% of pixels, measured over the valid split), so
+    # a score difference is about the algorithm, not about severity.
     Recipe("U_frost_crystal_mild", "unseen", "frost",
-           lambda image: generate_frost_overlay_v3(image, 0.15, 0.30, seed=None)),
+           lambda image: generate_frost_overlay_v3(image, 0.90, 0.85, seed=None,
+                                                   edge_bias=0.8, n_anchors=4)),
     Recipe("U_frost_crystal_thick", "unseen", "frost",
-           lambda image: generate_frost_overlay_v3(image, 0.45, 0.55, seed=None)),
+           lambda image: generate_frost_overlay_v3(image, 0.95, 1.0, seed=None,
+                                                   edge_bias=0.4, n_anchors=4)),
     Recipe("U_defocus_disc", "unseen", "defocus_blur",
            lambda image: disc_blur(image, strength=1.2)),
     Recipe("U_defocus_edge", "unseen", "defocus_blur",
