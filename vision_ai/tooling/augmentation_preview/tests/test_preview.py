@@ -65,3 +65,37 @@ def test_empty_source_directory_is_an_error(tmp_path):
     (tmp_path / "src").mkdir()
     with pytest.raises(ValueError):
         preview.render(tmp_path / "src", tmp_path / "out")
+
+
+def test_dataset_mode_prefers_a_frame_with_a_fallen_person(tmp_path):
+    """Reviewing an empty-floor frame hides what an effect does to the subject."""
+    root = tmp_path / "merged"
+    (root / "valid/images").mkdir(parents=True)
+    for name in ("a.jpg", "b.jpg"):
+        cv2.imwrite(str(root / "valid/images" / name),
+                    np.zeros((32, 40, 3), dtype=np.uint8))
+    (root / "posture_manifest.csv").write_text(
+        "image,posture\n"
+        "train/images/x.jpg,fallen\n"
+        "valid/images/a.jpg,standing\n"
+        "valid/images/b.jpg,fallen\n", encoding="utf-8")
+
+    picked = preview.frames_from_dataset(root, limit=1, posture="fallen")
+    assert [p.name for p in picked] == ["b.jpg"]
+
+
+def test_dataset_mode_falls_back_when_no_frame_has_that_posture(tmp_path):
+    root = tmp_path / "merged"
+    (root / "valid/images").mkdir(parents=True)
+    (root / "posture_manifest.csv").write_text(
+        "image,posture\nvalid/images/a.jpg,standing\n", encoding="utf-8")
+    picked = preview.frames_from_dataset(root, limit=1, posture="fallen")
+    assert [p.name for p in picked] == ["a.jpg"]
+
+
+def test_all_groups_writes_one_sheet_per_group_plus_an_overview(tmp_path):
+    """One command must reproduce the whole review set."""
+    written = preview.render_all_groups(_frames(tmp_path / "src", 1), tmp_path / "out")
+    names = sorted(p.name for p in written)
+    assert names == sorted(["00_overview.png"] + [f"{g}.png" for g in scenarios.GROUPS])
+    assert all(p.is_file() for p in written)
