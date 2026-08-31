@@ -18,8 +18,6 @@ Reasons to run it again: the camera resolution changes (these were chosen on
 640px frames), the robot's speed changes, or a strength is being retuned.
 """
 
-from __future__ import annotations
-
 import argparse
 from pathlib import Path
 

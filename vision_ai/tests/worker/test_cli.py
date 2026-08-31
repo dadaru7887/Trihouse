@@ -87,3 +87,30 @@ def test_all_in_one_checks_dataset_gate_before_importing_ultralytics(tmp_path: P
     assert result.returncode == 2
     assert "allow-posture-gap" in result.stderr
     assert "ultralytics" not in result.stderr
+
+
+def test_main_forwards_the_posture_manifest_to_the_pipeline(monkeypatch, tmp_path):
+    """Without it the run dies at preflight on 'confirmed fallen 표본이 부족합니다'.
+
+    The manifest is what tells preflight which frames hold a fallen person, so
+    a segmentation run started from vision_ai.main could never satisfy the
+    fallen-per-eval-split floor.
+    """
+    import vision_ai.main as entry
+
+    seen = {}
+    monkeypatch.setattr(
+        "vision_ai.models.perception.trainer.pipeline.main",
+        lambda argv: seen.setdefault("argv", argv) or 0)
+
+    data = tmp_path / "data.yaml"
+    data.write_text("names: [obstacle, person]\nnc: 2\n", encoding="utf-8")
+    manifest = tmp_path / "posture_manifest.csv"
+    manifest.write_text("image,posture\n", encoding="utf-8")
+
+    entry.main(["train", "--model", "perception", "--stage", "segmentation",
+                "--data", str(data), "--posture-manifest", str(manifest)])
+
+    argv = seen["argv"]
+    assert "--posture-manifest" in argv
+    assert str(manifest) in argv

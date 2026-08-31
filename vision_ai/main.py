@@ -33,8 +33,6 @@ import 는 전부 각 갈래 함수 안에 있다. 로봇 프로세스가 학습
 로 잰다.
 """
 
-from __future__ import annotations
-
 import argparse
 import sys
 from pathlib import Path
@@ -53,6 +51,11 @@ def build_parser() -> argparse.ArgumentParser:
                        help="[perception] 어느 단계를 학습할지")
     train.add_argument("--data", type=Path, help="[segmentation] YOLO data.yaml")
     train.add_argument("--config", type=Path, help="[segmentation] 실험 config")
+    train.add_argument("--posture-manifest", type=Path,
+                       help="[segmentation] 프레임별 fallen/standing CSV. preflight 가 "
+                            "평가 split 의 fallen 표본 수를 이것으로 센다")
+    train.add_argument("--allow-posture-gap", action="store_true",
+                       help="[segmentation] fallen 표본 부족을 허용하고 detection 만 학습")
     train.add_argument("--multi-seed", action="store_true",
                        help="[segmentation] seed 여러 개 → 대표 모델 선정")
     train.add_argument("--dataset", type=Path,
@@ -98,6 +101,10 @@ def _train_perception(args: argparse.Namespace) -> int:
         print("segmentation 학습에는 --data 가 필요합니다", file=sys.stderr)
         return 2
     argv = ["run", "--data", str(args.data), "--seed", str(args.seed)]
+    if args.posture_manifest:
+        argv += ["--posture-manifest", str(args.posture_manifest)]
+    if args.allow_posture_gap:
+        argv += ["--allow-posture-gap"]
     if args.epochs is not None:
         argv += ["--epochs", str(args.epochs)]
     if args.device:

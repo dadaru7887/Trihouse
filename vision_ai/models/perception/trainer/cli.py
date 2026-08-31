@@ -29,7 +29,8 @@ def add_training_arguments(parser: argparse.ArgumentParser, *, include_run: bool
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--batch", type=int, default=-1)
-    parser.add_argument("--device", default="auto", help="auto, cpu, gpu/cuda 또는 GPU index")
+    parser.add_argument("--device", default="auto",
+                        help="auto (cuda > mps > cpu), cpu, mps, gpu/cuda or a GPU index")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--posture-manifest", type=Path)
