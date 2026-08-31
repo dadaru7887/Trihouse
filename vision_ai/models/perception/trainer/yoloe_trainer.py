@@ -29,8 +29,18 @@ def confusion_metrics(matrix: Any, person_id: int) -> dict[str, float | int]:
 
 
 def resolve_model(name: str) -> str:
-    match = _MODEL_SHORTHAND.fullmatch(name)
-    return f"yoloe-{match.group(1)}{match.group(2)}-seg.pt" if match else name
+    """가중치 이름을 그대로 돌려준다. 축약어는 확장하지 않고 거절한다.
+
+    전에는 `26s` 를 `yoloe-26s-seg.pt` 로 조용히 바꿔 줬다. 편하지만 run 기록에
+    남은 이름과 실제로 적은 이름이 달라져서, 나중에 "무슨 모델로 학습했나" 를
+    되짚을 때 코드를 열어 봐야만 알 수 있었다. 이름은 적은 그대로 쓴다.
+    """
+    if _MODEL_SHORTHAND.fullmatch(name):
+        raise ValueError(
+            f"축약어 대신 전체 가중치 이름을 적으십시오: {name!r} "
+            f"-> 'yoloe-{name}-seg.pt'"
+        )
+    return name
 
 
 def normalize_metrics(result: Any) -> dict[str, float]:
@@ -68,21 +78,22 @@ def normalize_metrics(result: Any) -> dict[str, float]:
 # `augmentation_source` 를 주지 않았을 때 찾아갈 자리. 저장소 안의 상대 위치로만
 # 두고 절대 경로는 코드에 넣지 않는다 — 다른 체크아웃이나 다른 recipe 로 옮겨도
 # `--augmentation-source` 하나로 갈아 끼울 수 있어야 한다.
-DEFAULT_AUGMENTATION_SOURCE = Path("model/perception/segmentation/train.py")
+DEFAULT_AUGMENTATION_SOURCE = Path("vision_ai/models/perception/trainer/augmentation_recipes.py")
 
 
 def _resolve_augmentation_source(source: Path | None) -> Path:
     if source is not None:
         return Path(source).expanduser().resolve()
-    # vision_ai/models/perception/trainer/yoloe_trainer.py -> 저장소 루트
-    return (Path(__file__).resolve().parents[5] / DEFAULT_AUGMENTATION_SOURCE).resolve()
+    # vision_ai/models/perception/trainer/yoloe_trainer.py -> 저장소 루트는 네 단계 위다.
+    # trainer(0) / perception(1) / models(2) / vision_ai(3) / <저장소 루트>(4)
+    return (Path(__file__).resolve().parents[4] / DEFAULT_AUGMENTATION_SOURCE).resolve()
 
 
 def _load_existing_training_module(source: Path | None = None):
     path = _resolve_augmentation_source(source)
     spec = importlib.util.spec_from_file_location("trihouse_segmentation_train", path)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"기존 train.py를 불러올 수 없습니다: {path}")
+        raise RuntimeError(f"증강 recipe 모듈을 불러올 수 없습니다: {path}")
     module = importlib.util.module_from_spec(spec)
     # Albumentations callback이 checkpoint 설정에 직렬화될 때 이 module path로
     # 다시 import할 수 있어야 한다.

@@ -101,7 +101,7 @@ def load_experiment_config(
         raise ConfigError("dataset.data_yaml이 필요합니다 (또는 --data 로 넘기십시오)")
     run_base = _resolve(root, output.get("run_root", "runs/lego_worker"))
     config = TrainingConfig(
-        model=str(model.get("weights", "26s")), data=data, run_root=run_base / name,
+        model=str(model.get("weights", "yoloe-26s-seg.pt")), data=data, run_root=run_base / name,
         augmentation=bool(training.get("augmentation", True)), epochs=int(training.get("epochs", 200)),
         augmentation_seed=int(training.get("augmentation_seed", 42)),
         imgsz=int(model.get("image_size", 640)), patience=int(training.get("patience", 20)),

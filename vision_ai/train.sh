@@ -2,8 +2,8 @@
 # YOLOE 세그멘테이션 GPU 학습 실행 스크립트 (RTX5080 / 도커 환경 기준)
 #
 # 사용 예:
-#   ./train.sh --data /path/to/data.yaml --model 26s --augmentation yes
-#   ./train.sh --data /path/to/data.yaml --model 26s --augmentation no --epochs 100
+#   ./train.sh --data /path/to/data.yaml --model yoloe-26s-seg.pt
+#   ./train.sh --data /path/to/data.yaml --no-augmentation --epochs 100
 #   ./train.sh --data /path/to/data.yaml --workers 2 --run-root /workspace/runs
 #
 # multi-seed 실험(대표 모델 선정까지)은 이 스크립트가 아니라:
@@ -55,7 +55,8 @@ set -u
 # train.py 는 계속 남아 있지만 이제 S1~S5 증강 recipe 를 제공하는 라이브러리로
 # 쓰인다(yoloe_trainer.py 가 augmentation_source 로 적재).
 #
-# 인자는 그대로 통한다(--data/--model/--augmentation/--epochs/...). 다만 출력
+# 인자는 그대로 통한다(--data/--model/--epochs/...). 증강은 --augmentation /
+# --no-augmentation 플래그 형태이고, 출력
 # 위치는 --project 가 아니라 --run-root 다.
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"

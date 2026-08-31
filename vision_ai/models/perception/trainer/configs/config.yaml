@@ -12,7 +12,8 @@ dataset:
   allow_posture_gap: true
   min_fallen_per_eval_split: 10
 model:
-  weights: 26s
+  # 축약어를 쓰지 않는다. ultralytics 가 찾는 파일명 그대로 적는다.
+  weights: yoloe-26s-seg.pt
   image_size: 640
 training:
   epochs: 200

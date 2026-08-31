@@ -1,13 +1,23 @@
 import argparse
 from pathlib import Path
 
+# 축약어를 쓰지 않는다. 여기 적힌 이름이 곧 ultralytics 가 찾는 파일명이다.
+DEFAULT_MODEL = "yoloe-26s-seg.pt"
+
 from vision_ai.utils.run_config import TrainingConfig
 
 
 def add_training_arguments(parser: argparse.ArgumentParser, *, include_run: bool = True) -> None:
     parser.add_argument("--data", type=Path, required=True, help="YOLO segmentation data.yaml")
-    parser.add_argument("--model", default="26s", help="YOLOE 축약명(예: 26s) 또는 .pt 경로")
-    parser.add_argument("--augmentation", choices=("yes", "no"), default="yes")
+    parser.add_argument(
+        "--model", default=DEFAULT_MODEL,
+        help="가중치 파일명 또는 경로. 축약어를 확장하지 않으므로 실제로 쓰이는\n"
+             "이름을 그대로 적는다 (예: yoloe-26s-seg.pt)",
+    )
+    parser.add_argument(
+        "--augmentation", action=argparse.BooleanOptionalAction, default=True,
+        help="S1~S5 온라인 증강. 끄려면 --no-augmentation",
+    )
     parser.add_argument("--augmentation-seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--imgsz", type=int, default=640)
@@ -38,7 +48,7 @@ def config_from_args(args: argparse.Namespace, **overrides) -> TrainingConfig:
         "model": args.model, "data": args.data,
         "run_root": getattr(args, "run_root", Path("runs/lego_worker")),
         "name": getattr(args, "name", None),
-        "augmentation": args.augmentation == "yes", "augmentation_seed": args.augmentation_seed,
+        "augmentation": bool(args.augmentation), "augmentation_seed": args.augmentation_seed,
         "epochs": args.epochs,
         "imgsz": args.imgsz, "patience": args.patience, "batch": args.batch,
         "device": args.device, "workers": args.workers, "seed": args.seed,

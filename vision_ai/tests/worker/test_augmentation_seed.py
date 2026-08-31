@@ -17,24 +17,32 @@ def load_training_module():
 
 
 def test_augmentation_rng_restarts_from_fixed_seed() -> None:
-    module = load_training_module()
-    module.configure_augmentation_seed(42)
-    first = module._augmentation_rng(None).integers(0, 1_000_000, size=8).tolist()
-    module.configure_augmentation_seed(42)
-    second = module._augmentation_rng(None).integers(0, 1_000_000, size=8).tolist()
+    from vision_ai.utils.augmentation.rng import augmentation_rng, configure_augmentation_seed
+
+    configure_augmentation_seed(42)
+    first = augmentation_rng(None).integers(0, 1_000_000, size=8).tolist()
+    configure_augmentation_seed(42)
+    second = augmentation_rng(None).integers(0, 1_000_000, size=8).tolist()
+
     assert first == second
 
 
 def test_augmentation_rng_is_independent_of_training_global_seed() -> None:
-    module = load_training_module()
-    module.configure_augmentation_seed(42)
-    module.random.seed(17)
-    module.np.random.seed(17)
-    first = module._augmentation_rng(None).integers(0, 1_000_000, size=8).tolist()
-    module.configure_augmentation_seed(42)
-    module.random.seed(3407)
-    module.np.random.seed(3407)
-    second = module._augmentation_rng(None).integers(0, 1_000_000, size=8).tolist()
+    """학습 seed 를 바꿔도 증강 난수열은 그대로여야 한다."""
+    import random
+
+    from vision_ai.utils.augmentation.rng import augmentation_rng, configure_augmentation_seed
+
+    configure_augmentation_seed(42)
+    random.seed(17)
+    np.random.seed(17)
+    first = augmentation_rng(None).integers(0, 1_000_000, size=8).tolist()
+
+    configure_augmentation_seed(42)
+    random.seed(3407)
+    np.random.seed(3407)
+    second = augmentation_rng(None).integers(0, 1_000_000, size=8).tolist()
+
     assert first == second
 
 
