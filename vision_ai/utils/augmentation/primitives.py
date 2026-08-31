@@ -80,105 +80,14 @@ def edge_blur(image, strength=1.0, edge_bias=1.8):
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
-def generate_frost_overlay_v3(image, coverage_ratio, temperature_delta, seed=None,
-                               n_octaves=4, edge_bias=1.8, ambient_brightness=None,
-                               n_anchors=None):
-    """Fine window frost: fern-like crystals, built from upscaled noise.
-
-    `coverage_ratio` 0-1 sets how much of the frame frosts over,
-    `temperature_delta` 0-1 how opaque it gets. Frost grows inward from
-    `n_anchors` random corners rather than from the centre.
-
-    Steps: octave noise -> vein texture -> corner bias -> threshold by
-    coverage -> sparkles -> tint and blend.
-    """
-    rng = _augmentation_rng(seed)
-    h, w = image.shape[:2]
-
-    combined = np.zeros((h, w), dtype=np.float32)
-    for octave in range(n_octaves):
-        res = 6 * (2 ** octave)
-        low_res = rng.random((res, res)).astype(np.float32)
-        upsampled = np.asarray(
-            Image.fromarray((low_res * 255).astype(np.uint8)).resize((w, h), Image.BICUBIC)
-        ).astype(np.float32) / 255.0
-        weight = 1.0 / (2 ** octave)
-        combined += upsampled * weight
-    combined /= combined.max()
-
-    # Vein texture: ridge noise (1 - |2x-1|) cubed into sharp filaments,
-    # then multiplied in so the field reads as crystals, not clouds.
-    veins = np.zeros((h, w), dtype=np.float32)
-    for octave in range(2):
-        res = 10 * (3 ** octave)
-        low_res = rng.random((res, res)).astype(np.float32)
-        upsampled = np.asarray(
-            Image.fromarray((low_res * 255).astype(np.uint8)).resize((w, h), Image.BICUBIC)
-        ).astype(np.float32) / 255.0
-        ridge = 1.0 - np.abs(upsampled * 2 - 1)
-        veins += (ridge ** 3) * (1.0 / (octave + 1))
-    veins /= veins.max()
-    combined = np.clip(combined * (0.7 + 0.55 * veins), 0, 1)
-    combined /= combined.max()
-
-    # Pick 1-2 corners; density falls off with distance from them.
-    if n_anchors is None:
-        n_anchors = int(rng.integers(1, 3))
-    corners = np.array([[0, 0], [0, w], [h, 0], [h, w]], dtype=np.float32)
-    anchor_idx = rng.choice(4, size=n_anchors, replace=False)
-    anchors = corners[anchor_idx]
-
-    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-    diag = float(np.sqrt(h ** 2 + w ** 2))
-    anchor_bias = np.ones((h, w), dtype=np.float32)
-    denom = 0.55 * diag  # distance at which density saturates; smaller = tighter to the corner
-    for ay, ax in anchors:
-        dist = np.sqrt((yy - ay) ** 2 + (xx - ax) ** 2) / denom
-        anchor_bias = np.minimum(anchor_bias, dist)
-    anchor_bias = np.clip(anchor_bias ** (edge_bias * 0.55), 0, 1)
-    combined = combined * (0.35 + 0.65 * anchor_bias)
-
-    threshold = 1.0 - coverage_ratio
-    frost = np.clip((combined - threshold) / (1 - threshold + 1e-6), 0, 1)
-    # Re-apply veins so saturated areas keep texture instead of going flat white.
-    frost = frost * (0.72 + 0.28 * veins)
-
-    n_sparkles = int(coverage_ratio * 300)
-    sparkle_mask = np.zeros((h, w), dtype=np.float32)
-    ys = rng.integers(0, h, n_sparkles)
-    xs = rng.integers(0, w, n_sparkles)
-    sparkle_mask[ys, xs] = 1.0
-    sparkle_mask = np.asarray(
-        Image.fromarray((sparkle_mask * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1))
-    ).astype(np.float32) / 255.0
-    frost = np.clip(frost + sparkle_mask * frost * 0.5, 0, 1)
-
-    frost_img = Image.fromarray((frost * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(0.8))
-    frost = np.asarray(frost_img).astype(np.float32) / 255.0
-
-    if ambient_brightness is None:
-        ambient_brightness = float(image.mean())
-    frost_tone = float(np.clip(ambient_brightness + 35, 40, 235))
-    tone_rgb = np.array(
-        [frost_tone - 6, frost_tone - 2, min(frost_tone + 8, 255)], dtype=np.float32
-    )
-
-    opacity = float(np.clip(temperature_delta, 0, 1) * 0.85)
-    alpha = (frost * opacity)[..., None]
-    frost_color = np.broadcast_to(tone_rgb, image.shape).astype(np.float32)
-    out = image.astype(np.float32) * (1 - alpha) + frost_color * alpha
-    return np.clip(out, 0, 255).astype(np.uint8)
-
-
 def generate_frost_overlay_chunky(image, coverage_ratio, temperature_delta, seed=None,
                                    ambient_brightness=None, n_blobs=None,
                                    blob_size_range=(0.03, 0.12), roughness=0.35,
                                    n_anchors=None, work_size=900):
     """Thick lumpy frost, the kind that cakes a lens in a freezer aisle.
 
-    Stacks many wobbly-edged blobs, unlike the fine crystals of
-    `generate_frost_overlay_v3`. `coverage_ratio` and `temperature_delta`
-    mean the same here: spread and opacity, both 0-1.
+    Stacks many wobbly-edged blobs. `coverage_ratio` sets how far they spread
+    from the corners, `temperature_delta` how opaque they are, both 0-1.
 
     `work_size`: the mask is built on a canvas this many pixels on its long
     side and upsampled to the original, since blob count scales with area.

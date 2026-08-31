@@ -12,8 +12,8 @@ Two disjoint sets:
                         Weakest tier: only the combination is new. Report it
                         as compositional generalisation, never as robustness
                         to unseen corruption.
-        unseen          one effect training never runs: haze, defocus blur,
-                        sensor noise, and a second way of darkening.
+        unseen          one effect training never runs: defocus blur, sensor
+                        noise, and a second way of darkening.
         unseen_compound those stacked -- nothing in the image comes from code
                         training executed. Closest to a real freezer aisle and
                         the strongest claim available.
@@ -40,7 +40,7 @@ import albumentations as A
 from vision_ai.utils.augmentation.primitives import (
     add_condensation, add_gaussian_noise, add_glare, add_motion_blur, adjust_gamma,
     color_jitter, disc_blur, edge_blur, gamma_brightness, gaussian_blur,
-    generate_frost_overlay_chunky, generate_frost_overlay_v3, poisson_gaussian_noise,
+    generate_frost_overlay_chunky, poisson_gaussian_noise,
 )
 from vision_ai.utils.augmentation.rng import (
     configure_augmentation_seed, isolated_augmentation_random_state,
@@ -87,9 +87,6 @@ ATOMS_OF_MECHANISM = {
     "condensation": ("add_condensation",),
     "glare": ("add_glare",),
     "frost": ("generate_frost_overlay_chunky",),
-    # Vapour fog, not frost: generate_frost_overlay_v3 draws elongated
-    # filaments, which read as drifting haze rather than crystals on a lens.
-    "haze": ("generate_frost_overlay_v3",),
     "defocus_blur": ("disc_blur", "edge_blur", "gaussian_blur"),
     "sensor_noise": ("poisson_gaussian_noise", "add_gaussian_noise"),
 }
@@ -145,10 +142,13 @@ TRAIN_RECIPES = (
            # range rather than two fixed levels.
            lambda image: adjust_gamma(image, random.uniform(0.55, 0.65))),
     Recipe("S1_motion_blur_short", "S1", "motion_blur",
-           # 45px smear at 18 degrees, the robot's usual travel direction.
-           lambda image: add_motion_blur(image, 45, 18)),
+           # 15px smear at 18 degrees, the robot's usual travel direction.
+           # Kernel length is capped so a person stays labelable: past ~30px
+           # on a 640px frame the figures smear into streaks, and a condition
+           # nobody could annotate teaches and measures nothing.
+           lambda image: add_motion_blur(image, 15, 18)),
     Recipe("S1_motion_blur_long", "S1", "motion_blur",
-           lambda image: add_motion_blur(image, 70, 18)),
+           lambda image: add_motion_blur(image, 25, 18)),
     Recipe("S1_color_jitter", "S1", "color_jitter",
            # Max relative shift: brightness .5, contrast .4, saturation .3,
            # hue .05. Hue stays small so colours do not flip.
@@ -260,16 +260,6 @@ EVAL_UNSEEN = (
            lambda image: gamma_brightness(image, factor=0.6, gamma=1.1)),
     Recipe("U_lowlight_linear_strong", "unseen", "gamma",
            lambda image: gamma_brightness(image, factor=0.4, gamma=1.3)),
-    # Warm humid air meeting freezer air, the fog that rolls in when a door
-    # opens. Settings are pushed well past this function's defaults, which
-    # leave the frame untouched; edge_bias below 1 spreads the veil across the
-    # frame instead of banking it in the corners.
-    Recipe("U_haze_vapour_thin", "unseen", "haze",
-           lambda image: generate_frost_overlay_v3(image, 0.90, 0.85, seed=None,
-                                                   edge_bias=0.8, n_anchors=4)),
-    Recipe("U_haze_vapour_dense", "unseen", "haze",
-           lambda image: generate_frost_overlay_v3(image, 0.95, 1.0, seed=None,
-                                                   edge_bias=0.4, n_anchors=4)),
     Recipe("U_defocus_disc", "unseen", "defocus_blur",
            lambda image: disc_blur(image, strength=1.2)),
     Recipe("U_defocus_edge", "unseen", "defocus_blur",
@@ -291,13 +281,11 @@ _UNSEEN_BY_ID = {recipe.id: recipe for recipe in EVAL_UNSEEN}
 # image. The strongest claim available without real degraded footage.
 EVAL_UNSEEN_COMPOUND = (
     _compound("X_freezer_mild", "unseen_compound", _UNSEEN_BY_ID,
-              "U_lowlight_linear_mild", "U_haze_vapour_thin",
-              "U_defocus_disc", "U_noise_shot"),
+              "U_lowlight_linear_mild", "U_defocus_disc", "U_noise_read"),
     _compound("X_freezer_strong", "unseen_compound", _UNSEEN_BY_ID,
-              "U_lowlight_linear_strong", "U_haze_vapour_dense",
-              "U_defocus_edge", "U_noise_shot"),
+              "U_lowlight_linear_strong", "U_defocus_edge", "U_noise_shot"),
     _compound("X_dim_defocus_noise", "unseen_compound", _UNSEEN_BY_ID,
-              "U_lowlight_linear_mild", "U_defocus_gaussian", "U_noise_read"),
+              "U_lowlight_linear_mild", "U_defocus_gaussian", "U_noise_shot"),
 )
 
 EVAL_RECIPES = EVAL_SEEN_COMPOUND + EVAL_UNSEEN + EVAL_UNSEEN_COMPOUND
