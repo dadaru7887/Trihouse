@@ -30,13 +30,12 @@ def _image():
     return rng.integers(0, 255, (120, 160, 3), dtype=np.uint8)
 
 
-def test_the_pool_holds_every_scenario() -> None:
+def test_the_pool_holds_every_training_recipe() -> None:
     module = _load()
-    names = [fn.__name__ for fn in module.MIXED_POOL]
 
-    assert len(names) == 12, names
-    for prefix, count in (("_s1_", 3), ("_s2_", 1), ("_s3_", 1), ("_s4_", 2), ("_s5_", 5)):
-        assert sum(n.startswith(prefix) for n in names) == count, (prefix, names)
+    assert len(module.MIXED_POOL) == 16
+    counts = {group: len(module.recipes_in(group)) for group in module.SCENARIOS}
+    assert counts == {"S1": 4, "S2": 5, "S3": 5, "S4": 2}
 
 
 @pytest.mark.parametrize("seed", [42, 7])

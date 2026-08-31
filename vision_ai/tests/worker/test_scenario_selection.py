@@ -1,66 +1,76 @@
-"""시나리오를 골라서 학습에 넣거나 빼는 규칙 (leave-one-out 실험용)."""
+"""The recipe registry: tags, grouping, and what holdout removes.
 
+Structural checks only. Whether holdout is leak-proof at runtime is
+test_augmentation_holdout.py's job.
+
+    pytest vision_ai/tests/worker/test_scenario_selection.py
+"""
+
+from __future__ import annotations
+
+import numpy as np
 import pytest
-
-pytest.importorskip("albumentations")
-pytest.importorskip("cv2")
 
 from vision_ai.utils.augmentation import scenarios
 
 
-def test_every_pool_function_has_a_scenario_tag() -> None:
-    """태그 없는 함수가 있으면 제외가 조용히 실패한다."""
-    for fn in scenarios.MIXED_POOL:
-        assert fn.__name__ in scenarios.SCENARIO_OF, fn.__name__
+def test_every_recipe_names_a_known_mechanism_and_group():
+    for recipe in scenarios.RECIPES:
+        assert recipe.group in scenarios.GROUPS, recipe.id
+        # Compounds name several mechanisms joined by '+'.
+        for mechanism in recipe.mechanism.split("+"):
+            assert mechanism in scenarios.ATOMS_OF_MECHANISM, recipe.id
 
 
-def test_the_tags_match_the_documented_counts() -> None:
-    counts = {}
-    for fn in scenarios.MIXED_POOL:
-        counts[scenarios.SCENARIO_OF[fn.__name__]] = counts.get(scenarios.SCENARIO_OF[fn.__name__], 0) + 1
-
-    assert counts == {"S1": 3, "S2": 1, "S3": 1, "S4": 2, "S5": 5}
-
-
-def test_holding_out_a_scenario_removes_exactly_its_functions() -> None:
-    pool = scenarios.pool_for(exclude={"S4"})
-    tags = {scenarios.SCENARIO_OF[fn.__name__] for fn in pool}
-
-    assert "S4" not in tags
-    assert len(pool) == len(scenarios.MIXED_POOL) - 2
+def test_training_recipes_are_single_mechanism():
+    """A training recipe mixing effects would make holdout ambiguous."""
+    for recipe in scenarios.TRAIN_RECIPES:
+        assert "+" not in recipe.mechanism, recipe.id
+        assert recipe.mechanism in scenarios.MECHANISMS, recipe.id
 
 
-def test_holding_out_nothing_returns_the_whole_pool() -> None:
-    assert scenarios.pool_for(exclude=set()) == scenarios.MIXED_POOL
+def test_the_training_groups_hold_the_documented_counts():
+    counts = {group: len(scenarios.recipes_in(group)) for group in scenarios.SCENARIOS}
+    assert counts == {"S1": 4, "S2": 5, "S3": 5, "S4": 2}
+    assert len(scenarios.TRAIN_RECIPES) == 16
 
 
-def test_an_unknown_scenario_is_refused() -> None:
-    """오타로 아무것도 안 빠진 채 실험이 도는 것을 막는다."""
-    with pytest.raises(ValueError, match="S9"):
-        scenarios.pool_for(exclude={"S9"})
+def test_holding_out_a_mechanism_removes_exactly_its_recipes():
+    pool = scenarios.pool_for(exclude={"condensation"})
+    assert not [r for r in pool if r.mechanism == "condensation"]
+    assert len(pool) == len(scenarios.TRAIN_RECIPES) - 5
 
 
-def test_holding_out_everything_is_refused() -> None:
-    with pytest.raises(ValueError, match="empty"):
-        scenarios.pool_for(exclude={"S1", "S2", "S3", "S4", "S5"})
+def test_holding_out_nothing_returns_every_training_recipe():
+    assert scenarios.pool_for(exclude=set()) == list(scenarios.TRAIN_RECIPES)
 
 
-def test_one_scenario_can_be_applied_on_its_own_for_evaluation() -> None:
-    """평가는 손상 하나를 지목해서 건다."""
-    import numpy as np
+def test_holding_out_an_unknown_mechanism_is_refused():
+    with pytest.raises(ValueError, match="unknown mechanism"):
+        scenarios.pool_for(exclude={"snow"})
 
-    image = np.random.default_rng(0).integers(0, 255, (80, 100, 3), dtype=np.uint8)
+
+def test_holding_out_everything_is_refused():
+    with pytest.raises(ValueError, match="empty pool"):
+        scenarios.pool_for(exclude=set(scenarios.MECHANISMS))
+
+
+def test_a_single_recipe_can_be_applied_for_evaluation():
+    image = np.random.default_rng(0).integers(0, 255, (48, 64, 3), dtype=np.uint8)
     scenarios.configure_augmentation_seed(42)
-
-    out = scenarios.apply_scenario(image, "S4")
-
+    out = scenarios.apply_recipe(image, "S4_frost_thick")
     assert out.shape == image.shape
     assert out.dtype == image.dtype
     assert not np.array_equal(out, image)
 
 
-def test_applying_an_unknown_scenario_is_refused() -> None:
-    import numpy as np
+def test_applying_an_unknown_recipe_is_refused():
+    image = np.zeros((10, 10, 3), dtype="uint8")
+    with pytest.raises(ValueError, match="unknown recipe"):
+        scenarios.apply_recipe(image, "S9_nonsense")
 
-    with pytest.raises(ValueError, match="S9"):
-        scenarios.apply_scenario(np.zeros((10, 10, 3), dtype="uint8"), "S9")
+
+def test_applying_an_unknown_group_is_refused():
+    image = np.zeros((10, 10, 3), dtype="uint8")
+    with pytest.raises(ValueError, match="unknown group"):
+        scenarios.apply_group(image, "S9")

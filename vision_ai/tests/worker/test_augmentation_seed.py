@@ -46,13 +46,10 @@ def test_training_frost_augmentations_do_not_download_remote_textures() -> None:
     module._load_frost_texture = lambda url: (_ for _ in ()).throw(AssertionError("network access"))
     image = np.full((64, 64, 3), 128, dtype=np.uint8)
     module.configure_augmentation_seed(42)
-    for augmentation in (
-        module._s4_frost,
-        module._s4_night_frost,
-        module._s5_lowlight_frost,
-        module._s5_frost_glare,
-    ):
-        result = augmentation(image.copy())
+    frost = [r for r in module.RECIPES if "frost" in r.mechanism]
+    assert frost, "no frost recipe to check"
+    for recipe in frost:
+        result = recipe(image.copy())
         assert result.shape == image.shape
 
 

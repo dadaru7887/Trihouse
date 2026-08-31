@@ -1,25 +1,37 @@
-"""Evaluate one trained model under each degradation scenario, one at a time.
+"""Score one trained model under each degradation condition, one at a time.
 
 Fix the evaluation set, vary the corruption -- the ImageNet-C shape. Every
-scenario is applied to the whole split, so no per-condition cell is thinner
+condition is applied to the whole split, so no per-condition cell is thinner
 than the split itself.
 
-    # one condition
+    # one condition: a group or a single recipe
     python -m vision_ai.models.perception.trainer.corruption_eval \
-        --run-dir runs/lego_worker/<run> --split valid --scenario S4
+        --run-dir runs/lego_worker/<run> --split valid --scenario unseen
 
-    # every condition, plus clean
+    # every group, plus clean
     python -m vision_ai.models.perception.trainer.corruption_eval \
         --run-dir runs/lego_worker/<run> --split valid --all
 
-Flow: copy the split -> apply the scenario to each image (labels untouched,
+    # every recipe, for severity curves
+    python -m vision_ai.models.perception.trainer.corruption_eval \
+        --run-dir runs/lego_worker/<run> --split valid --per-recipe
+
+Flow: copy the split -> apply the condition to each image (labels untouched,
 these are photometric effects) -> write a data.yaml pointing at the copy ->
 run the usual YOLOE evaluation against it.
 
-Reading the numbers: training on a scenario and evaluating on the same one
-measures whether the model learned that simulator, not whether it is robust
-to the real phenomenon. Pair this with `--holdout` at training time to get a
-model that never saw the scenario it is being scored on.
+Reading the numbers, weakest claim first:
+
+    S1..S4          the model trained on these. In-distribution reference,
+                    not evidence of robustness.
+    seen_compound   each effect was trained, the combination was not.
+                    Compositional generalisation.
+    unseen          the implementation never ran during training.
+    unseen_compound those unseen implementations stacked. The strongest
+                    claim available without real degraded footage.
+
+Report clean alongside every one of them: a gain under corruption that costs
+clean accuracy is not a gain.
 """
 
 from __future__ import annotations
@@ -58,8 +70,9 @@ def build_corrupted_split(dataset_yaml: Path, split: str, scenario: str,
 
     from vision_ai.utils.augmentation import scenarios
 
-    if scenario != CLEAN and scenario not in scenarios.SCENARIOS:
-        raise ValueError(f"unknown scenario: {scenario}")
+    if scenario != CLEAN and scenario not in scenarios.GROUPS \
+            and scenario not in {r.id for r in scenarios.RECIPES}:
+        raise ValueError(f"unknown group or recipe: {scenario}")
 
     images_in = _split_dir(Path(dataset_yaml), split)
     labels_in = images_in.parent / "labels"
@@ -77,8 +90,9 @@ def build_corrupted_split(dataset_yaml: Path, split: str, scenario: str,
             shutil.copyfile(image_path, images_out / image_path.name)
         else:
             image = cv2.imread(str(image_path))
-            cv2.imwrite(str(images_out / image_path.name),
-                        scenarios.apply_scenario(image, scenario))
+            corrupt = (scenarios.apply_group if scenario in scenarios.GROUPS
+                       else scenarios.apply_recipe)
+            cv2.imwrite(str(images_out / image_path.name), corrupt(image, scenario))
         label = labels_in / f"{image_path.stem}.txt"
         if label.is_file():
             shutil.copyfile(label, labels_out / label.name)
@@ -124,8 +138,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Score one trained model under each degradation scenario")
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--split", choices=("valid", "test"), default="valid")
-    parser.add_argument("--scenario", help="One of clean/S1..S5")
-    parser.add_argument("--all", action="store_true", help="clean plus every scenario")
+    parser.add_argument("--scenario", help="clean, a group (S1..S4, seen_compound, "
+                                           "unseen, unseen_compound) or a single recipe id")
+    parser.add_argument("--all", action="store_true",
+                        help="clean plus every group")
+    parser.add_argument("--per-recipe", action="store_true",
+                        help="clean plus every recipe, for severity curves")
     parser.add_argument("--weights", type=Path)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out", type=Path, help="Where to write the metrics JSON")
@@ -136,12 +154,14 @@ def main(argv: list[str] | None = None) -> int:
     from vision_ai.utils.augmentation import scenarios as scenario_module
 
     args = build_parser().parse_args(argv)
-    if args.all:
-        wanted = [CLEAN, *scenario_module.SCENARIOS]
+    if args.per_recipe:
+        wanted = [CLEAN, *(r.id for r in scenario_module.RECIPES)]
+    elif args.all:
+        wanted = [CLEAN, *scenario_module.GROUPS]
     elif args.scenario:
         wanted = [args.scenario]
     else:
-        print("pass --scenario or --all", flush=True)
+        print("pass --scenario, --all or --per-recipe", flush=True)
         return 2
 
     results = evaluate_scenarios(args.run_dir, args.split, wanted,

@@ -1,17 +1,17 @@
-"""Render what each augmentation scenario does to a real frame, for eyeballing.
+"""Render what each augmentation recipe does to a real frame, for eyeballing.
 
 Calls `vision_ai/utils/augmentation`, the same code training uses, so the
 reviewed image is the trained image.
 
-    # one sheet per source frame, original plus S1..S5
+    # one sheet per source frame, original plus one draw from every group
     python -m vision_ai.tooling.augmentation_preview.preview \
         --images data/pinky_camera/merged/valid/images --out runs/preview --limit 4
 
-    # every recipe inside one scenario, to compare them side by side
+    # every recipe in one group, side by side
     python -m vision_ai.tooling.augmentation_preview.preview \
-        --images ... --out runs/preview --scenario S2 --repeats 5
+        --images ... --out runs/preview --group S2
 
-Flow: read source images -> apply the chosen scenario(s) -> write one PNG per
+Flow: read source images -> apply the chosen recipes -> write one PNG per
 source image with the original and its variants tiled side by side.
 
 Output is a review artefact, not a dataset. Nothing reads it back.
@@ -71,19 +71,19 @@ def _tile(panels: list[tuple[str, "object"]]):
     return np.hstack(padded)
 
 
-def render(images_dir: Path, out_dir: Path, scenario: str | None = None,
-           limit: int = 4, repeats: int = 1, seed: int = 42) -> list[Path]:
+def render(images_dir: Path, out_dir: Path, group: str | None = None,
+           limit: int = 4, seed: int = 42) -> list[Path]:
     """Write one comparison PNG per source image and return the paths.
 
-    With `scenario` set, the row shows `repeats` draws from that scenario's
-    recipes. Without it, the row shows one draw from each of S1-S5.
+    With `group` set, the row shows every recipe in that group. Without it,
+    it shows one draw from each group, training and evaluation alike.
     """
     import cv2
 
     from vision_ai.utils.augmentation import scenarios
 
-    if scenario is not None and scenario not in scenarios.SCENARIOS:
-        raise ValueError(f"unknown scenario: {scenario}")
+    if group is not None and group not in scenarios.GROUPS:
+        raise ValueError(f"unknown group: {group}")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -92,12 +92,12 @@ def render(images_dir: Path, out_dir: Path, scenario: str | None = None,
         # Reseed per image so the same source always yields the same sheet.
         scenarios.configure_augmentation_seed(seed)
         panels = [("original", image)]
-        if scenario is None:
-            panels += [(s, scenarios.apply_scenario(image, s)) for s in scenarios.SCENARIOS]
+        if group is None:
+            panels += [(g, scenarios.apply_group(image, g)) for g in scenarios.GROUPS]
         else:
-            panels += [(f"{scenario} #{i + 1}", scenarios.apply_scenario(image, scenario))
-                       for i in range(repeats)]
-        target = out_dir / f"{name}__{scenario or 'all'}.png"
+            panels += [(recipe.id, scenarios.apply_recipe(image, recipe.id))
+                       for recipe in scenarios.recipes_in(group)]
+        target = out_dir / f"{name}__{group or 'all'}.png"
         cv2.imwrite(str(target), _tile(panels))
         written.append(target)
     return written
@@ -105,21 +105,20 @@ def render(images_dir: Path, out_dir: Path, scenario: str | None = None,
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Render augmentation scenarios over real frames for review")
+        description="Render augmentation recipes over real frames for review")
     parser.add_argument("--images", type=Path, required=True, help="Directory of source frames")
     parser.add_argument("--out", type=Path, required=True, help="Where to write the sheets")
-    parser.add_argument("--scenario", help="S1..S5; omit to show one draw from each")
+    parser.add_argument("--group", help="S1..S4, seen_compound, unseen, unseen_compound; "
+                                        "omit to show one draw from each")
     parser.add_argument("--limit", type=int, default=4, help="How many source frames to render")
-    parser.add_argument("--repeats", type=int, default=1,
-                        help="Draws per sheet when --scenario is given")
     parser.add_argument("--seed", type=int, default=42)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    written = render(args.images, args.out, scenario=args.scenario,
-                     limit=args.limit, repeats=args.repeats, seed=args.seed)
+    written = render(args.images, args.out, group=args.group,
+                     limit=args.limit, seed=args.seed)
     for path in written:
         print(path)
     return 0

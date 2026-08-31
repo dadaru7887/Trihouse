@@ -65,22 +65,22 @@ def test_the_default_model_is_a_full_name() -> None:
 # ---------------------------------------------- leave-one-out
 
 
-def test_no_scenario_is_held_out_by_default() -> None:
+def test_no_mechanism_is_held_out_by_default() -> None:
     assert _run([]).holdout == []
 
 
-def test_a_scenario_can_be_held_out_of_training() -> None:
-    """LOO: 학습에서 빼고, 그 시나리오로 평가해 못 본 손상 일반화를 잰다."""
-    assert _run(["--holdout", "S4"]).holdout == ["S4"]
+def test_a_mechanism_can_be_held_out_of_training() -> None:
+    """LOO: keep a mechanism out of training, then score on it."""
+    assert _run(["--holdout", "frost"]).holdout == ["frost"]
 
 
 def test_the_holdout_reaches_the_config() -> None:
-    config = config_from_args(_run(["--holdout", "S4", "--holdout", "S2"]),
+    config = config_from_args(_run(["--holdout", "frost", "--holdout", "glare"]),
                               run_root="/tmp/r", name="t")
 
-    assert config.augmentation_holdout == ("S2", "S4")
+    assert config.augmentation_holdout == ("frost", "glare")
 
 
-def test_an_unknown_scenario_is_refused_at_parse_time() -> None:
+def test_an_unknown_mechanism_is_refused_at_parse_time() -> None:
     with pytest.raises(SystemExit):
-        _run(["--holdout", "S9"])
+        _run(["--holdout", "S4"])

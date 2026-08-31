@@ -31,31 +31,31 @@ def test_renders_one_sheet_per_frame(tmp_path):
     assert all(path.is_file() for path in written)
 
 
-def test_sheet_has_one_panel_per_scenario_plus_original(tmp_path):
+def test_sheet_has_one_panel_per_group_plus_original(tmp_path):
     written = preview.render(_frames(tmp_path / "src", 1), tmp_path / "out")
     sheet = cv2.imread(str(written[0]))
-    # Panels are tiled horizontally at a fixed width: original + S1..S5.
-    assert sheet.shape[1] == preview.COLUMN_WIDTH * (1 + len(scenarios.SCENARIOS))
+    # Panels are tiled horizontally at a fixed width: original + every group.
+    assert sheet.shape[1] == preview.COLUMN_WIDTH * (1 + len(scenarios.GROUPS))
 
 
-def test_single_scenario_mode_repeats_that_scenario(tmp_path):
-    written = preview.render(_frames(tmp_path / "src", 1), tmp_path / "out",
-                             scenario="S2", repeats=3)
+def test_group_mode_shows_every_recipe_in_that_group(tmp_path):
+    written = preview.render(_frames(tmp_path / "src", 1), tmp_path / "out", group="S2")
     sheet = cv2.imread(str(written[0]))
-    assert sheet.shape[1] == preview.COLUMN_WIDTH * 4       # original + 3 draws
+    expected = 1 + len(scenarios.recipes_in("S2"))
+    assert sheet.shape[1] == preview.COLUMN_WIDTH * expected
 
 
-def test_uses_the_shared_scenario_code(tmp_path, monkeypatch):
+def test_uses_the_shared_recipe_code(tmp_path, monkeypatch):
     seen = []
-    monkeypatch.setattr(scenarios, "apply_scenario",
+    monkeypatch.setattr(scenarios, "apply_group",
                         lambda image, name: seen.append(name) or image)
     preview.render(_frames(tmp_path / "src", 1), tmp_path / "out")
-    assert seen == list(scenarios.SCENARIOS)
+    assert seen == list(scenarios.GROUPS)
 
 
-def test_rejects_unknown_scenario(tmp_path):
+def test_rejects_unknown_group(tmp_path):
     with pytest.raises(ValueError):
-        preview.render(_frames(tmp_path / "src", 1), tmp_path / "out", scenario="S9")
+        preview.render(_frames(tmp_path / "src", 1), tmp_path / "out", group="S9")
 
 
 def test_empty_source_directory_is_an_error(tmp_path):

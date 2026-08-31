@@ -108,7 +108,8 @@ def _default_components(
         training.configure_pool(exclude=set(holdout))
         if not enabled:
             return []
-        return [training.A.Lambda(image=training.mixed_augmentation, p=1.0, name="mixed_s1_s5")]
+        return [training.A.Lambda(image=training.mixed_augmentation, p=1.0,
+                                  name="mixed_train_recipes")]
 
     return YOLOE, YOLOEPESegTrainer, augmentations
 

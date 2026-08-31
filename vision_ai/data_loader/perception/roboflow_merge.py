@@ -16,8 +16,6 @@ Splits are by episode, never by frame: adjacent frames of one video are near
 identical, so a frame-level split measures memorisation.
 """
 
-from __future__ import annotations
-
 import argparse
 import csv
 import json

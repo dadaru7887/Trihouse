@@ -20,8 +20,10 @@ def add_training_arguments(parser: argparse.ArgumentParser, *, include_run: bool
     )
     parser.add_argument("--augmentation-seed", type=int, default=42)
     parser.add_argument(
-        "--holdout", action="append", default=[], choices=("S1", "S2", "S3", "S4", "S5"),
-        help="Scenario to keep out of training, for leave-one-out. Repeatable",
+        "--holdout", action="append", default=[],
+        choices=("gamma", "motion_blur", "color_jitter", "condensation", "glare", "frost"),
+        help="Degradation mechanism to keep out of training, for leave-one-out. "
+             "Removes every recipe that can produce it. Repeatable",
     )
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--imgsz", type=int, default=640)

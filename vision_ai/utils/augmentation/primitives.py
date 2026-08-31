@@ -594,6 +594,12 @@ def add_glare(image, intensity, size_ratio, center=None, seed=None):
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
+def color_jitter(image, brightness=0.5, contrast=0.4, saturation=0.3, hue=0.05):
+    """Jitter brightness, contrast, saturation and hue by up to the given fractions."""
+    return np.array(transforms.ColorJitter(brightness, contrast, saturation, hue)
+                    (Image.fromarray(image)))
+
+
 def add_gaussian_noise(image, sigma):
     """Add Gaussian noise of standard deviation `sigma`."""
     noise = np.random.normal(0, sigma, image.shape).astype(np.float32)
@@ -617,7 +623,3 @@ def add_motion_blur(image, ksize, angle):
     if s > 0:
         kernel /= s
     return cv2.filter2D(image, -1, kernel)
-
-
-
-
