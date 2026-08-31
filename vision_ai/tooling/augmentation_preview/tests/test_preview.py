@@ -4,8 +4,6 @@ one sheet per source frame, and report severity that tracks real strength.
     pytest vision_ai/tooling/augmentation_preview
 """
 
-from __future__ import annotations
-
 import numpy as np
 import pytest
 
@@ -123,11 +121,3 @@ def test_the_report_covers_every_recipe(frames):
 def test_the_report_flags_a_recipe_that_barely_changes_the_frame(frames, monkeypatch):
     monkeypatch.setattr(scenarios, "apply_recipe", lambda image, rid: image)
     assert "barely changes the frame" in preview.severity_report(frames)
-
-
-@pytest.mark.parametrize("name", sorted(preview.SWEEPS))
-def test_every_sweep_renders(name, frames, tmp_path):
-    target = preview.sweep(frames[0], name, tmp_path)
-    assert target.is_file()
-    sheet = cv2.imread(str(target))
-    assert sheet is not None and sheet.size > 0

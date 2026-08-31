@@ -11,10 +11,6 @@ review here is what the model actually sees.
     python -m vision_ai.tooling.augmentation_preview.preview \
         --dataset data/pinky_camera/merged --out runs/augmentation_preview --severity
 
-    # one effect at rising strength, for picking a setting by eye
-    python -m vision_ai.tooling.augmentation_preview.preview \
-        --dataset data/pinky_camera/merged --out runs/augmentation_preview --sweep blur
-
 Flow: pick source frames -> apply the chosen recipes -> write a PNG tiling the
 original beside its variants, or print the severity table.
 
@@ -23,13 +19,19 @@ that changes nothing scores like a free win, and a recipe that erases the
 subject teaches nothing and cannot be annotated either. What they cannot catch
 is whether the result looks like a warehouse -- that is what the sheets are for.
 
+To choose a setting rather than check the ones in use, see sweep.py.
+
 Output is a review artefact, not a dataset. Nothing reads it back.
 """
 
-from __future__ import annotations
-
 import argparse
+import csv
 from pathlib import Path
+
+import cv2
+import numpy as np
+
+from vision_ai.utils.augmentation import scenarios
 
 # Grid geometry: panel width in pixels, and how many before wrapping to a new row.
 COLUMN_WIDTH = 320
@@ -50,8 +52,6 @@ def frames_from_dataset(root: Path, limit: int = 1, posture: str = "fallen"):
     model has to keep finding; a frame of empty floor hides what an effect
     does to a person. Falls back to any valid frame when none match.
     """
-    import csv
-
     root = Path(root)
     manifest = root / "posture_manifest.csv"
     rows = list(csv.DictReader(manifest.open(encoding="utf-8")))
@@ -62,9 +62,11 @@ def frames_from_dataset(root: Path, limit: int = 1, posture: str = "fallen"):
     return [root / row["image"] for row in wanted[:limit]]
 
 
-def _read_images(source, limit: int) -> list[tuple[str, "object"]]:
-    """Load up to `limit` frames from a directory, or from a list of paths."""
-    import cv2
+def read_images(source, limit: int) -> list[tuple[str, "object"]]:
+    """Load up to `limit` frames from a directory, or from a list of paths.
+
+    Shared with sweep.py, which picks its source frame the same way.
+    """
 
     if isinstance(source, (str, Path)):
         paths = [path for path in sorted(Path(source).iterdir())
@@ -88,7 +90,6 @@ def _read_images(source, limit: int) -> list[tuple[str, "object"]]:
 
 def _label(image, text: str):
     """Burn a caption into the top-left corner so tiles stay identifiable."""
-    import cv2
 
     out = image.copy()
     # Dark strip behind the text; the frames are often bright enough to hide it.
@@ -98,14 +99,14 @@ def _label(image, text: str):
     return out
 
 
-def _tile(panels: list[tuple[str, "object"]], columns: int = COLUMNS):
+def tile(panels: list[tuple[str, "object"]], columns: int = COLUMNS):
     """Scale every panel to a common size and lay them out in a grid.
+
+    Shared with sweep.py so both kinds of sheet read the same.
 
     A single row would be thousands of pixels wide once a group has more than
     a handful of recipes, so panels wrap after `columns`.
     """
-    import cv2
-    import numpy as np
 
     scaled = []
     for caption, image in panels:
@@ -130,9 +131,6 @@ def render(source, out_dir: Path, group: str | None = None,
     With `group` set, the row shows every recipe in that group. Without it,
     it shows one draw from each group, training and evaluation alike.
     """
-    import cv2
-
-    from vision_ai.utils.augmentation import scenarios
 
     if group is not None and group not in scenarios.GROUPS:
         raise ValueError(f"unknown group: {group}")
@@ -140,7 +138,7 @@ def render(source, out_dir: Path, group: str | None = None,
     out_dir.mkdir(parents=True, exist_ok=True)
 
     written = []
-    for name, image in _read_images(source, limit):
+    for name, image in read_images(source, limit):
         # Reseed per image so the same source always yields the same sheet.
         scenarios.configure_augmentation_seed(seed)
         panels = [("original", image)]
@@ -150,7 +148,7 @@ def render(source, out_dir: Path, group: str | None = None,
             panels += [(recipe.id, scenarios.apply_recipe(image, recipe.id))
                        for recipe in scenarios.recipes_in(group)]
         target = out_dir / f"{name}__{group or 'all'}.png"
-        cv2.imwrite(str(target), _tile(panels))
+        cv2.imwrite(str(target), tile(panels))
         written.append(target)
     return written
 
@@ -161,7 +159,6 @@ def render_all_groups(source, out_dir: Path, seed: int = 42) -> list[Path]:
     Sheets are named by group so the directory reads in order, which is what
     a reviewer wants when checking whether any condition went too far.
     """
-    from vision_ai.utils.augmentation import scenarios
 
     for path in render(source, out_dir, seed=seed, limit=1):
         path.rename(path.with_name("00_overview.png"))   # the mixed sheet leads
@@ -178,9 +175,6 @@ def render_all_groups(source, out_dir: Path, seed: int = 42) -> list[Path]:
 
 def measure(frames, recipe_id: str) -> tuple[float, float]:
     """Return (mean pixel shift, share of the frame changed) for one recipe."""
-    import numpy as np
-
-    from vision_ai.utils.augmentation import scenarios
 
     shifts, shares = [], []
     for index, frame in enumerate(frames):
@@ -195,7 +189,6 @@ def measure(frames, recipe_id: str) -> tuple[float, float]:
 
 def severity_report(frames) -> str:
     """Build the per-recipe severity table, grouped the way the tiers are."""
-    from vision_ai.utils.augmentation import scenarios
 
     lines = [f"{'recipe':34}{'mean shift':>12}{'frame changed':>15}"]
     group = None
@@ -209,44 +202,10 @@ def severity_report(frames) -> str:
     return "\n".join(lines)
 
 
-# Strength ladders for the effects whose settings needed judging by eye.
-SWEEPS = {
-    "blur": ("motion_blur {ksize}px", "add_motion_blur",
-             [dict(ksize=k, angle=18) for k in (9, 15, 21, 25, 31, 45, 70)]),
-    "dark": ("gamma_brightness f={factor} g={gamma}", "gamma_brightness",
-             [dict(factor=f, gamma=g) for f, g in
-              ((0.8, 1.0), (0.6, 1.1), (0.5, 1.2), (0.4, 1.3), (0.3, 1.4))]),
-    "frost": ("frost cov={coverage_ratio} t={temperature_delta}",
-              "generate_frost_overlay_chunky",
-              [dict(coverage_ratio=c, temperature_delta=t, seed=7, n_anchors=4)
-               for c, t in ((0.15, 0.30), (0.30, 0.40), (0.45, 0.55), (0.60, 0.70))]),
-}
-
-
-def sweep(frame, name: str, out_dir: Path) -> Path:
-    """Render one effect at rising strength, for picking a setting by eye."""
-    import cv2
-
-    from vision_ai.utils.augmentation import primitives
-
-    caption, function, settings = SWEEPS[name]
-    effect = getattr(primitives, function)
-    panels = [("original", frame)]
-    for kwargs in settings:
-        panels.append((caption.format(**kwargs), effect(frame.copy(), **kwargs)))
-    panels = [(text, cv2.cvtColor(image, cv2.COLOR_RGB2BGR)) for text, image in panels]
-
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    target = out_dir / f"_sweep_{name}.png"
-    cv2.imwrite(str(target), _tile(panels, columns=4))
-    return target
-
-
 # -------------------------------------------------------------------- cli --
 
 def build_parser() -> argparse.ArgumentParser:
-    """Define the command line: which frames, and sheets or severity or sweep."""
+    """Define the command line: which frames, and sheets or the severity table."""
     parser = argparse.ArgumentParser(
         description="Render and measure augmentation recipes on real frames")
     source = parser.add_mutually_exclusive_group(required=True)
@@ -260,8 +219,6 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Write the overview and every group sheet in one run")
     parser.add_argument("--severity", action="store_true",
                         help="Print the per-recipe severity table instead of sheets")
-    parser.add_argument("--sweep", choices=sorted(SWEEPS),
-                        help="Render a strength ladder for one effect instead of sheets")
     parser.add_argument("--posture", default="fallen",
                         help="Posture to prefer when picking from --dataset")
     parser.add_argument("--limit", type=int, default=4, help="How many source frames to use")
@@ -271,7 +228,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the requested mode and print what was written."""
-    import cv2
 
     args = build_parser().parse_args(argv)
     # The severity table averages over several frames; the sheets use --limit.
@@ -279,12 +235,9 @@ def main(argv: list[str] | None = None) -> int:
     source = (args.images if args.images
               else frames_from_dataset(args.dataset, limit=count, posture=args.posture))
 
-    if args.sweep:
-        rgb = cv2.cvtColor(_read_images(source, 1)[0][1], cv2.COLOR_BGR2RGB)
-        print(sweep(rgb, args.sweep, args.out))
-    elif args.severity:
+    if args.severity:
         rgb = [cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-               for _, image in _read_images(source, count)]
+               for _, image in read_images(source, count)]
         text = severity_report(rgb)
         target = Path(args.out) / "severity.txt"
         target.parent.mkdir(parents=True, exist_ok=True)
