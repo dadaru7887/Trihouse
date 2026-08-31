@@ -57,9 +57,9 @@ __all__ = ["A", "configure_augmentation_seed", "configure_pool", "mixed_augmenta
 class Recipe:
     """One effect at one fixed setting.
 
-    `mechanism` is the physical phenomenon; holdout works on it. `group` is
-    where the recipe may be used: a scenario name for training recipes,
-    "compound" or "unseen" for evaluation-only ones.
+    `mechanism` is the physical phenomenon; holdout works on it. A compound
+    joins several with '+'. `group` says where the recipe may be used: S1..S4
+    for training, seen_compound/unseen/unseen_compound for scoring only.
     """
 
     id: str
@@ -68,6 +68,7 @@ class Recipe:
     apply: Callable
 
     def __call__(self, image):
+        """Apply the recipe, so a Recipe can be used wherever a function is."""
         return self.apply(image)
 
 
@@ -195,6 +196,7 @@ def _chain(registry, *recipe_ids):
     parts = [registry[rid] for rid in recipe_ids]
 
     def run(image):
+        """Feed the image through each recipe in turn."""
         for part in parts:
             image = part(image)
         return image
@@ -293,7 +295,7 @@ GROUPS = SCENARIOS + ("seen_compound", *STRICTLY_UNSEEN_GROUPS)
 
 _BY_ID = {recipe.id: recipe for recipe in RECIPES}
 
-# yoloe_trainer asserts this name exists; it is the callables of TRAIN_RECIPES.
+# Back-compat alias yoloe_trainer checks for: the callables of TRAIN_RECIPES.
 MIXED_POOL = [recipe.apply for recipe in TRAIN_RECIPES]
 
 # Which recipes mixed_augmentation currently draws from; configure_pool narrows it.

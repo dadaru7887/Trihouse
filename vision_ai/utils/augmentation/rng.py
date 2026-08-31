@@ -41,7 +41,7 @@ def augmentation_rng(seed=None):
 @contextmanager
 def isolated_augmentation_random_state():
     """Run one augmentation on an augmentation seed, then restore training RNGs.
-    S1-S5 recipes use the global random/np.random/torch, so this saves those
+    Recipes use the global random/np.random/torch, so this saves those
     three states on entry and puts them back on exit.
     """
     python_state = random.getstate()

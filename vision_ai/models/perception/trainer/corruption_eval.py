@@ -47,6 +47,7 @@ CLEAN = "clean"
 
 
 def _load_yaml(path: Path) -> dict:
+    """Read a YAML file into a dict."""
     return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
 
 
@@ -134,6 +135,7 @@ def evaluate_scenarios(run_dir: Path, split: str, scenarios_to_run: list[str],
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Define the command line: which run, which split, which conditions."""
     parser = argparse.ArgumentParser(
         description="Score one trained model under each degradation scenario")
     parser.add_argument("--run-dir", type=Path, required=True)
@@ -151,6 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Score the requested conditions and write the metrics JSON."""
     from vision_ai.utils.augmentation import scenarios as scenario_module
 
     args = build_parser().parse_args(argv)

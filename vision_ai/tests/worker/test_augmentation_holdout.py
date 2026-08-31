@@ -27,6 +27,7 @@ def atoms_used(monkeypatch):
     hits: set[str] = set()
 
     def instrument():
+        """Wrap every primitive so calling it is recorded."""
         for name in dir(P):
             fn = getattr(P, name)
             if not callable(fn) or name.startswith("_"):
@@ -35,6 +36,7 @@ def atoms_used(monkeypatch):
                 continue
 
             def wrap(fn=fn, name=name):
+                """Bind fn and name per iteration, then record each call."""
                 @functools.wraps(fn)
                 def inner(*args, **kwargs):
                     hits.add(name)
@@ -50,6 +52,7 @@ def atoms_used(monkeypatch):
     instrument()
 
     def run(recipes):
+        """Apply the recipes and return the set of primitives they ran."""
         hits.clear()
         S.configure_augmentation_seed(1)
         for recipe in recipes:
@@ -90,15 +93,18 @@ def test_holding_out_a_mechanism_removes_every_recipe_that_uses_it(mechanism, at
 
 
 def test_every_recipe_id_is_unique():
+    """A duplicate id would make one recipe unreachable by name."""
     ids = [recipe.id for recipe in S.RECIPES]
     assert len(ids) == len(set(ids))
 
 
 def test_training_and_evaluation_recipes_do_not_overlap():
+    """A recipe in both sets would score the model on its own training data."""
     assert not {r.id for r in S.TRAIN_RECIPES} & {r.id for r in S.EVAL_RECIPES}
 
 
 def test_every_group_has_recipes():
+    """An empty group would report as a silently skipped evaluation tier."""
     for group in S.GROUPS:
         assert S.recipes_in(group), group
 
@@ -114,6 +120,7 @@ def test_mixed_augmentation_draws_every_training_recipe_about_equally():
     original = S.random.choice
 
     def spy(pool):
+        """Record which recipe each draw returns."""
         chosen = original(pool)
         picks.append(chosen.id)
         return chosen

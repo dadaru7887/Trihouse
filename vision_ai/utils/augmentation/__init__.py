@@ -1,8 +1,8 @@
-"""Augmentation for training: RNG isolation, single effects, S1-S5 scenarios.
+"""Augmentation split so training and scoring never share an implementation.
 
     rng.py         seeds the augmentation stream, leaves the training RNG alone
     primitives.py  single effects (low light, blur, condensation, glare, frost)
-    scenarios.py   S1-S5 compositions and MIXED_POOL
+    scenarios.py   the recipe registry: TRAIN_RECIPES and the eval tiers
 """
 
 from .rng import (  # noqa: F401

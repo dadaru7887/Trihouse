@@ -75,11 +75,12 @@ def normalize_metrics(result: Any) -> dict[str, float]:
     return metrics
 
 
-# `augmentation_source` 를 주지 않았을 때 찾아갈 자리. 저장소 안의 상대 위치로만
-# 두고 절대 경로는 코드에 넣지 않는다 — 다른 체크아웃이나 다른 recipe 로 옮겨도
-# `--augmentation-source` 하나로 갈아 끼울 수 있어야 한다.
 def _load_augmentation_module(source: Path | None = None):
-    """Load the S1-S5 scenario module, or a drop-in replacement from `source`."""
+    """Load the recipe registry, or a drop-in replacement from `source`.
+
+    `source` lets a run swap in a different recipe set without editing code;
+    it must expose the same names as scenarios.py.
+    """
     if source is None:
         from vision_ai.utils.augmentation import scenarios
 
@@ -87,7 +88,7 @@ def _load_augmentation_module(source: Path | None = None):
     path = Path(source).expanduser().resolve()
     spec = importlib.util.spec_from_file_location("trihouse_augmentation_scenarios", path)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"증강 recipe 모듈을 불러올 수 없습니다: {path}")
+        raise RuntimeError(f"cannot load the augmentation recipe module: {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)

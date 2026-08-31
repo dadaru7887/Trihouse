@@ -3,9 +3,10 @@
 Every function takes an RGB uint8 image and returns one of the same shape.
 Photometric only -- pixels change, masks and labels do not.
 
-Called from `scenarios.py`, which composes these into the S1-S5 recipes;
-nothing here knows about S1-S5. Randomness comes from `rng.augmentation_rng()`,
-which keeps the training RNG untouched.
+Called from `scenarios.py`, which fixes each one's settings into a recipe;
+nothing here knows which recipes are for training and which for scoring.
+Randomness comes from `rng.augmentation_rng()`, which keeps the training RNG
+untouched.
 
 Effects that stack (`synthesize_*`) apply their parts in this order:
 blur -> darken -> frost -> sensor noise.
@@ -260,8 +261,9 @@ def generate_frost_overlay_chunky(image, coverage_ratio, temperature_delta, seed
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
-# Effects the S1-S5 recipes in scenarios.py call directly. Each takes its
-# strength as an argument instead of drawing one, so a recipe stays reproducible.
+# Effects the recipes in scenarios.py call directly. Each takes its strength
+# as an argument instead of drawing one, so a recipe id always means the
+# same picture.
 def add_condensation(image, coverage_ratio, intensity, center=None, seed=None, work_size=800):
     """Condensation on the lens: a field of droplets that blurs and hazes what is behind it.
 

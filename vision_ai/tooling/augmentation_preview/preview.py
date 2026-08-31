@@ -104,6 +104,7 @@ def render(images_dir: Path, out_dir: Path, group: str | None = None,
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Define the command line: source frames, output directory, which group."""
     parser = argparse.ArgumentParser(
         description="Render augmentation recipes over real frames for review")
     parser.add_argument("--images", type=Path, required=True, help="Directory of source frames")
@@ -116,6 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Render the sheets and print where each was written."""
     args = build_parser().parse_args(argv)
     written = render(args.images, args.out, group=args.group,
                      limit=args.limit, seed=args.seed)

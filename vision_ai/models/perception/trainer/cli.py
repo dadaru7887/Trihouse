@@ -16,7 +16,7 @@ def add_training_arguments(parser: argparse.ArgumentParser, *, include_run: bool
     )
     parser.add_argument(
         "--augmentation", action=argparse.BooleanOptionalAction, default=True,
-        help="S1~S5 온라인 증강. 끄려면 --no-augmentation",
+        help="Online augmentation from TRAIN_RECIPES. Disable with --no-augmentation",
     )
     parser.add_argument("--augmentation-seed", type=int, default=42)
     parser.add_argument(
@@ -36,8 +36,8 @@ def add_training_arguments(parser: argparse.ArgumentParser, *, include_run: bool
     parser.add_argument(
         "--augmentation-source",
         type=Path,
-        help="S1~S5 증강 recipe 모듈 경로. 생략하면 저장소의 "
-             "model/perception/segmentation/train.py 를 쓴다",
+        help="Drop-in replacement for the augmentation recipe module. "
+             "Omit to use vision_ai/utils/augmentation/scenarios.py",
     )
     parser.add_argument("--allow-posture-gap", action="store_true")
     parser.add_argument("--min-fallen-per-eval-split", type=int, default=10)
