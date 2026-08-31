@@ -1,10 +1,14 @@
 """Single optical-degradation effects: low light, blur, noise, condensation, glare, frost.
 
-Photometric only -- images change, masks and labels do not. Scenario
-compositions live in `scenarios.py`; nothing here is tied to S1-S5.
+Every function takes an RGB uint8 image and returns one of the same shape.
+Photometric only -- pixels change, masks and labels do not.
 
-Strength and placement come from `rng.augmentation_rng()` so the training
-RNG is left alone.
+Called from `scenarios.py`, which composes these into the S1-S5 recipes;
+nothing here knows about S1-S5. Randomness comes from `rng.augmentation_rng()`,
+which keeps the training RNG untouched.
+
+Effects that stack (`synthesize_*`) apply their parts in this order:
+blur -> darken -> frost -> sensor noise.
 """
 
 import io
@@ -43,11 +47,12 @@ def poisson_gaussian_noise(image, a=0.02, b=0.01, seed=None):
 
 
 def synthesize_low_light(image, exposure_ratio=None, gamma=None, a=0.02, b=0.01, seed=None):
-    '''저조도만 단독으로 쓸 때: 어둡게 + 센서노이즈. gamma를 같이 주면 단순히
-    밝기만 낮추는 게 아니라 톤 커브 자체가 달라져서 "어둡다"의 양상이 다양해짐
-    (예: 그림자만 깊어지는 느낌 vs 전체적으로 뿌옇게 어두워지는 느낌).
-    (성에와 합칠 땐 이 함수 대신 synthesize_night_frost를 써서 노이즈를 성에
-    합성 이후에 입히세요.)'''
+    """Low light on its own: darken, then sensor noise.
+
+    `exposure_ratio` scales brightness (random 0.15-0.55 if None); `gamma`
+    bends the tone curve (random 0.8-1.3 if None). To combine with frost use
+    `synthesize_night_frost`, which noises after the frost instead.
+    """
     if exposure_ratio is None:
         exposure_ratio = np.random.uniform(0.15, 0.55)
     if gamma is None:
@@ -56,18 +61,18 @@ def synthesize_low_light(image, exposure_ratio=None, gamma=None, a=0.02, b=0.01,
     return poisson_gaussian_noise(dark, a=a, b=b, seed=seed)
 
 
-# ── 블러 4종 (전부 해상도에 비례하게 설계 -> 고해상도 사진에서도 체감됨) ──
+# Four blurs. Every radius scales with the shorter side, so the effect is
+# the same fraction of the frame at any resolution.
 
 def gaussian_blur(image, strength=1.0):
-    '''전반적으로 고르게 흐리게. 안개/습기 낀 대기 느낌.'''
+    """Uniform blur, like haze in the air. Radius = 0.6% of the shorter side."""
     h, w = image.shape[:2]
     radius = max(1.0, min(h, w) * 0.006 * strength)
     return np.asarray(Image.fromarray(image).filter(ImageFilter.GaussianBlur(radius)))
 
 
 def disc_blur(image, strength=1.0):
-    '''원형(디스크) 커널 블러 -> 아웃포커스/보케 느낌. 렌즈에 김/성에 껴서
-    초점이 안 맞을 때가 이 모양에 가까움.'''
+    """Disc-kernel blur: out-of-focus bokeh. Radius = 0.8% of the shorter side."""
     h, w = image.shape[:2]
     radius = max(2, int(min(h, w) * 0.008 * strength))
     yy, xx = np.mgrid[-radius:radius + 1, -radius:radius + 1]
@@ -78,7 +83,7 @@ def disc_blur(image, strength=1.0):
 
 
 def motion_blur(image, strength=1.0, angle=None):
-    '''특정 방향으로 쭉 늘어지는 블러. 카메라/로봇이 움직이는 동안 노출됐을 때.'''
+    """Smear along one direction. Length = 1.2% of the shorter side; random angle if None."""
     h, w = image.shape[:2]
     length = max(3, int(min(h, w) * 0.012 * strength))
     if length % 2 == 0:
@@ -96,8 +101,7 @@ def motion_blur(image, strength=1.0, angle=None):
 
 
 def edge_blur(image, strength=1.0, edge_bias=1.8):
-    '''중심은 선명하고 가장자리로 갈수록 흐려짐 (렌즈 주변부 화질저하 느낌).
-    성에의 edge_bias 패턴과 같은 논리라 성에와 같이 쓰면 자연스럽게 붙음.'''
+    """Sharp centre fading to blurred edges. `edge_bias` > 1 keeps the centre wider."""
     h, w = image.shape[:2]
     radius = max(1.0, min(h, w) * 0.012 * strength)
     blurred = np.asarray(
@@ -120,16 +124,17 @@ BLUR_FUNCS = {
 
 
 def random_blur(image, strength_range=(0.8, 1.6), types=None):
-    '''매번 블러 타입 중 하나를 무작위로 골라서 적용.
-    기본은 disc(보케)/motion(움직임) 두 가지만 씀 -- edge/gaussian은 실전감이
-    떨어져서 기본 후보에서 제외 (types로 직접 지정하면 다른 것도 쓸 수 있음).'''
+    """Draw one blur type and one strength, then apply it.
+
+    `types` defaults to disc and motion; pass a list to widen it to any key
+    in BLUR_FUNCS.
+    """
     types = types or ["disc", "motion"]
     choice = np.random.choice(types)
     strength = np.random.uniform(*strength_range)
     return BLUR_FUNCS[choice](image, strength=strength)
 
 
-# scaled_blur이라는 이름으로도 예전 코드와 호환되게 유지 (gaussian_blur의 별칭)
 def scaled_blur(image, strength=1.0):
     """Alias for `gaussian_blur`, kept for a uniform strength argument."""
     return gaussian_blur(image, strength=strength)
@@ -138,15 +143,15 @@ def scaled_blur(image, strength=1.0):
 def generate_frost_overlay_v3(image, coverage_ratio, temperature_delta, seed=None,
                                n_octaves=4, edge_bias=1.8, ambient_brightness=None,
                                n_anchors=None):
-    '''노이즈 업스케일링 기반 성에 (v4 개선).
-    - 비대칭 성장: 화면 중앙 기준 방사형 대신, 1~2개의 무작위 모서리(코너)에서부터
-      진해지는 구조라 실제 서리처럼 한쪽으로 삐뚤빼뚤 자란 모양이 됨.
-    - 결정(vein) 텍스처: 능선 모양 노이즈를 곱해서 뭉게구름 대신 가늘게 뻗은
-      결정/깃털 무늬가 섞이도록 함.
-    - 살짝 푸르스름한 흰색 톤 (순수 회색이 아니라 R,G 약간 낮추고 B를 올림).
-    - frost_color는 ambient_brightness(장면 평균 밝기)에 맞춰 정해서, 어두운
-      장면에서는 성에도 칙칙하게 나오도록 함.
-    '''
+    """Fine window frost: fern-like crystals, built from upscaled noise.
+
+    `coverage_ratio` 0-1 sets how much of the frame frosts over,
+    `temperature_delta` 0-1 how opaque it gets. Frost grows inward from
+    `n_anchors` random corners rather than from the centre.
+
+    Steps: octave noise -> vein texture -> corner bias -> threshold by
+    coverage -> sparkles -> tint and blend.
+    """
     rng = _augmentation_rng(seed)
     h, w = image.shape[:2]
 
@@ -161,7 +166,8 @@ def generate_frost_overlay_v3(image, coverage_ratio, temperature_delta, seed=Non
         combined += upsampled * weight
     combined /= combined.max()
 
-    # 결정(vein) 텍스처: 능선 모양 노이즈(1 - |2x-1|)를 세제곱해서 뾰족한 무늬로 만들고 곱해줌
+    # Vein texture: ridge noise (1 - |2x-1|) cubed into sharp filaments,
+    # then multiplied in so the field reads as crystals, not clouds.
     veins = np.zeros((h, w), dtype=np.float32)
     for octave in range(2):
         res = 10 * (3 ** octave)
@@ -175,7 +181,7 @@ def generate_frost_overlay_v3(image, coverage_ratio, temperature_delta, seed=Non
     combined = np.clip(combined * (0.7 + 0.55 * veins), 0, 1)
     combined /= combined.max()
 
-    # 비대칭 성장: 화면 중앙이 아니라 1~2개의 무작위 모서리에서부터 진해짐
+    # Pick 1-2 corners; density falls off with distance from them.
     if n_anchors is None:
         n_anchors = int(rng.integers(1, 3))
     corners = np.array([[0, 0], [0, w], [h, 0], [h, w]], dtype=np.float32)
@@ -185,7 +191,7 @@ def generate_frost_overlay_v3(image, coverage_ratio, temperature_delta, seed=Non
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     diag = float(np.sqrt(h ** 2 + w ** 2))
     anchor_bias = np.ones((h, w), dtype=np.float32)
-    denom = 0.55 * diag  # 이 거리 안쪽에서 성에 농도가 1에 도달 (작을수록 코너 쪽에 더 몰림)
+    denom = 0.55 * diag  # distance at which density saturates; smaller = tighter to the corner
     for ay, ax in anchors:
         dist = np.sqrt((yy - ay) ** 2 + (xx - ax) ** 2) / denom
         anchor_bias = np.minimum(anchor_bias, dist)
@@ -194,7 +200,7 @@ def generate_frost_overlay_v3(image, coverage_ratio, temperature_delta, seed=Non
 
     threshold = 1.0 - coverage_ratio
     frost = np.clip((combined - threshold) / (1 - threshold + 1e-6), 0, 1)
-    # 완전히 뒤덮인(포화된) 영역도 밋밋한 흰 덩어리로 안 보이게 vein 텍스처를 한 번 더 곱함
+    # Re-apply veins so saturated areas keep texture instead of going flat white.
     frost = frost * (0.72 + 0.28 * veins)
 
     n_sparkles = int(coverage_ratio * 300)
@@ -226,10 +232,10 @@ def generate_frost_overlay_v3(image, coverage_ratio, temperature_delta, seed=Non
 
 def synthesize_night_frost(image, exposure_ratio, coverage_ratio, temperature_delta,
                             gamma=None, blur_strength=0.0, blur_fn=None, a=0.02, b=0.01, seed=None):
-    '''저조도 + 성에를 물리적으로 맞는 순서로 합침.
-    순서: 블러 -> 노출 감소(암부, gamma로 톤 커브까지 다양화) -> 성에 합성(암부 밝기에 맞춘 톤)
-    -> 센서노이즈(마지막, 전체 균일)
-    blur_fn을 안 주면 random_blur를 써서 매번 다른 블러 모양이 나오게 함.'''
+    """Low light plus fine window frost: blur -> darken -> frost -> noise.
+
+    `blur_fn` defaults to `random_blur`, so the blur shape varies per call.
+    """
     blur_fn = blur_fn or random_blur
     if gamma is None:
         gamma = np.random.uniform(0.8, 1.3)
@@ -249,16 +255,15 @@ def generate_frost_overlay_chunky(image, coverage_ratio, temperature_delta, seed
                                    ambient_brightness=None, n_blobs=None,
                                    blob_size_range=(0.03, 0.12), roughness=0.35,
                                    n_anchors=None, work_size=900):
-    '''냉동/냉장 창고에서 실제로 보이는 "두툼하고 울퉁불퉁하게 뭉친" 성에를 모사.
-    v3(유리창 성에, 가는 결정/양치식물 무늬)와는 다른 종류 -- 이건 렌즈에 눈/성에
-    덩어리가 겹겹이 쌓이는 형태라, PDF에서 말한 "빗방울 생성 알고리즘 기반"과
-    같은 원리로 구현: 울퉁불퉁한 경계를 가진 덩어리(blob)를 여러 개 겹쳐 쌓음.
+    """Thick lumpy frost, the kind that cakes a lens in a freezer aisle.
 
-    work_size: 실제 마스크 연산은 이 크기(짧은 변 기준)로 축소해서 계산한 뒤
-    원본 해상도로 다시 확대함. 블롭 개수/크기가 이미지 크기에 비례하므로 고해상도
-    사진(4000px+)에서 그대로 계산하면 매우 느려짐 -> 작은 캔버스에서 계산 후
-    업샘플하면 수십 배 빨라지고 육안상 차이는 거의 없음.
-    '''
+    Stacks many wobbly-edged blobs, unlike the fine crystals of
+    `generate_frost_overlay_v3`. `coverage_ratio` and `temperature_delta`
+    mean the same here: spread and opacity, both 0-1.
+
+    `work_size`: the mask is built on a canvas this many pixels on its long
+    side and upsampled to the original, since blob count scales with area.
+    """
     rng = _augmentation_rng(seed)
     h, w = image.shape[:2]
 
@@ -273,10 +278,10 @@ def generate_frost_overlay_chunky(image, coverage_ratio, temperature_delta, seed
     anchors = corners[anchor_idx]
 
     if n_blobs is None:
-        n_blobs = int(70 + coverage_ratio * 450)  # 기존보다 훨씬 촘촘하게
+        n_blobs = int(70 + coverage_ratio * 450)   # 70 blobs at coverage 0, 520 at coverage 1
 
     mask = np.zeros((wh, ww), dtype=np.float32)
-    h, w = wh, ww  # 이하 블롭 루프는 축소된 캔버스 기준으로 계산
+    h, w = wh, ww          # the blob loop below works on the reduced canvas
 
     for _ in range(n_blobs):
         anchor = anchors[rng.integers(0, len(anchors))]
@@ -284,9 +289,9 @@ def generate_frost_overlay_chunky(image, coverage_ratio, temperature_delta, seed
         cy = float(np.clip(anchor[0] + rng.normal(0, spread), 0, h - 1))
         cx = float(np.clip(anchor[1] + rng.normal(0, spread), 0, w - 1))
         radius = diag * rng.uniform(*blob_size_range)
-        max_r = radius * (1.0 + roughness)  # wobble로 커질 수 있는 최대 반경
+        max_r = radius * (1.0 + roughness)   # largest radius the wobble can reach
 
-        # 성능 최적화: 이미지 전체가 아니라 덩어리 주변 bounding box만 계산
+        # Compute this blob only inside its bounding box, not the whole canvas.
         y0 = max(0, int(cy - max_r - 2))
         y1 = min(h, int(cy + max_r + 2))
         x0 = max(0, int(cx - max_r - 2))
@@ -299,7 +304,8 @@ def generate_frost_overlay_chunky(image, coverage_ratio, temperature_delta, seed
         dx = xx_local - cx
         dist = np.sqrt(dy ** 2 + dx ** 2)
         theta = np.arctan2(dy, dx)
-        # 원이 아니라 각도별로 반지름이 흔들리게 -> 울퉁불퉁한 덩어리 경계
+        # Three sine harmonics vary the radius by angle, giving a lumpy edge
+        # instead of a circle. Random phase per blob so no two match.
         wobble = 1.0 + roughness * (
             0.5 * np.sin(theta * 3 + rng.uniform(0, 6.28))
             + 0.3 * np.sin(theta * 7 + rng.uniform(0, 6.28))
@@ -307,19 +313,19 @@ def generate_frost_overlay_chunky(image, coverage_ratio, temperature_delta, seed
         )
         local_radius = radius * wobble
         blob = np.clip(1.0 - dist / (local_radius + 1e-6), 0, 1)
-        blob = blob ** 1.1  # 1.5 -> 1.1 : 가장자리가 너무 급하게 옅어지지 않게
+        blob = blob ** 1.1     # falloff exponent; higher = sharper edge
         mask[y0:y1, x0:x1] = np.maximum(mask[y0:y1, x0:x1], blob)
 
     mask_img = Image.fromarray((mask * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.0))
-    # 축소 캔버스에서 계산한 마스크를 원본 해상도로 업샘플
+    # Upsample the reduced-canvas mask back to the source resolution.
     orig_h, orig_w = image.shape[:2]
     mask_img = mask_img.resize((orig_w, orig_h), Image.BICUBIC)
     mask = np.asarray(mask_img).astype(np.float32) / 255.0
 
     if ambient_brightness is None:
         ambient_brightness = float(image.mean())
-    # 어두운 장면일수록 성에도 같이 어두워지면 대비가 사라지므로, 절대적으로 확실한
-    # 밝기 차이(배율 2.3배 또는 최소 +90 중 큰 쪽)를 보장 -> 어떤 밝기에서도 눈에 띄게 함
+    # Frost stays brighter than the scene by 2.3x or +90, whichever is larger,
+    # so it remains visible on a dark frame.
     frost_tone = float(np.clip(max(ambient_brightness * 2.3, ambient_brightness + 90), 80, 250))
     tone_rgb = np.array(
         [frost_tone - 4, frost_tone - 1, min(frost_tone + 10, 255)], dtype=np.float32
@@ -328,7 +334,7 @@ def generate_frost_overlay_chunky(image, coverage_ratio, temperature_delta, seed
     opacity = float(np.clip(temperature_delta, 0, 1) * 0.95)
     alpha = (mask * opacity)[..., None]
     frost_color = np.broadcast_to(tone_rgb, image.shape).astype(np.float32)
-    # 덩어리 내부에도 밝기 요철(울퉁불퉁한 입체감)을 살짝 반영
+    # Shade thicker parts of a blob brighter, for a sense of depth.
     shade = 0.85 + 0.15 * mask
     frost_color = frost_color * shade[..., None]
 
@@ -340,9 +346,10 @@ def synthesize_night_frost_chunky(image, exposure_ratio, coverage_ratio, tempera
                                    gamma=None, blur_strength=0.0, blur_fn=None,
                                    n_blobs=None, blob_size_range=(0.03, 0.12), roughness=0.35,
                                    a=0.02, b=0.01, seed=None):
-    '''chunky(냉동고) 성에 버전의 야간 성에 합성. 순서는 night_frost와 동일:
-    블러 -> 암부 -> 성에 -> 노이즈.
-    n_blobs를 직접 지정하면 자동 계산값 대신 그 개수를 씀 (더 촘촘하게 끼우고 싶을 때).'''
+    """Low light plus chunky frost: blur -> darken -> frost -> noise.
+
+    `n_blobs` overrides the count derived from `coverage_ratio`.
+    """
     blur_fn = blur_fn or random_blur
     if gamma is None:
         gamma = np.random.uniform(0.8, 1.3)
@@ -359,9 +366,9 @@ def synthesize_night_frost_chunky(image, exposure_ratio, coverage_ratio, tempera
     return noisy
 
 
-# ── 실사 텍스처 블렌딩 성에 ────────────────────────────────
-# 무료(Unsplash License, 별도 출처표기 불필요) 성에/얼음 매크로사진.
-# 모양/커버리지는 우리 procedural 마스크가 제어하고, 결정 디테일만 실사에서 가져옴.
+# Frost built from photographic texture. The procedural mask still controls
+# shape and coverage; the photo supplies only the crystal detail inside it.
+# Both are Unsplash-licensed macro shots and need no attribution.
 FROST_TEXTURE_URLS = [
     "https://images.unsplash.com/photo-1762172189607-91ee2d5f1e34?fm=jpg&q=80&w=2000&auto=format&fit=crop",
     "https://images.unsplash.com/photo-1679287300349-e3ac52f291f1?fm=jpg&q=80&w=2000&auto=format&fit=crop",
@@ -381,8 +388,11 @@ def _load_frost_texture(url):
 
 
 def _sample_texture_patch(h, w, seed=None):
-    '''실사 텍스처에서 (h,w) 크기의 디테일 패치를 뽑아 0~1로 정규화해서 반환.
-    2x2 미러 타일링으로 이음새를 줄이고, 랜덤 크롭+스케일로 매번 다르게 보이게 함.'''
+    """Return an (h, w) detail patch from a frost photo, normalised to 0-1.
+
+    Mirror-tiled 2x2 to hide seams, then randomly cropped and scaled so
+    repeated calls do not show the same patch.
+    """
     rng = _augmentation_rng(seed)
     url = FROST_TEXTURE_URLS[rng.integers(0, len(FROST_TEXTURE_URLS))]
     tex = _load_frost_texture(url)
@@ -412,9 +422,12 @@ def generate_frost_overlay_textured(image, coverage_ratio, temperature_delta, se
                                      ambient_brightness=None, n_blobs=None,
                                      blob_size_range=(0.03, 0.12), roughness=0.35,
                                      n_anchors=None, work_size=900, texture_strength=0.7):
-    '''chunky 마스크(모양/커버리지 제어) + 실사 성에 텍스처(결정 디테일)를 합성.
-    모양은 procedural로 계속 제어하고, 안쪽 결의 디테일만 실제 성에 매크로사진에서
-    가져와서 노이즈 기반보다 훨씬 자연스러운 결정 무늬가 나오게 함.'''
+    """Chunky blob mask for shape, photographic texture for crystal detail.
+
+    `texture_strength` 0-1 mixes the two: 0 is the plain chunky mask,
+    1 lets the photo fully modulate the alpha. Needs network access on first
+    call to fetch the texture.
+    """
     rng = _augmentation_rng(seed)
     h, w = image.shape[:2]
 
@@ -429,7 +442,7 @@ def generate_frost_overlay_textured(image, coverage_ratio, temperature_delta, se
     anchors = corners[anchor_idx]
 
     if n_blobs is None:
-        n_blobs = int(70 + coverage_ratio * 450)  # 기존보다 훨씬 촘촘하게
+        n_blobs = int(70 + coverage_ratio * 450)   # same count rule as the chunky mask
 
     mask_small = np.zeros((wh, ww), dtype=np.float32)
     for _ in range(n_blobs):
@@ -458,7 +471,7 @@ def generate_frost_overlay_textured(image, coverage_ratio, temperature_delta, se
             + 0.2 * np.sin(theta * 11 + rng.uniform(0, 6.28))
         )
         local_radius = radius * wobble
-        blob = np.clip(1.0 - dist / (local_radius + 1e-6), 0, 1) ** 1.1  # 1.5 -> 1.1
+        blob = np.clip(1.0 - dist / (local_radius + 1e-6), 0, 1) ** 1.1   # falloff exponent
         mask_small[y0:y1, x0:x1] = np.maximum(mask_small[y0:y1, x0:x1], blob)
 
     mask_img = Image.fromarray((mask_small * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.0))
@@ -472,8 +485,8 @@ def generate_frost_overlay_textured(image, coverage_ratio, temperature_delta, se
 
     if ambient_brightness is None:
         ambient_brightness = float(image.mean())
-    # 어두운 장면일수록 성에도 같이 어두워지면 대비가 사라지므로, 절대적으로 확실한
-    # 밝기 차이(배율 2.3배 또는 최소 +90 중 큰 쪽)를 보장 -> 어떤 밝기에서도 눈에 띄게 함
+    # Frost stays brighter than the scene by 2.3x or +90, whichever is larger,
+    # so it remains visible on a dark frame.
     frost_tone = float(np.clip(max(ambient_brightness * 2.3, ambient_brightness + 90), 80, 250))
     tone_rgb = np.array(
         [frost_tone - 4, frost_tone - 1, min(frost_tone + 10, 255)], dtype=np.float32
@@ -491,7 +504,7 @@ def generate_frost_overlay_textured(image, coverage_ratio, temperature_delta, se
 def synthesize_night_frost_textured(image, exposure_ratio, coverage_ratio, temperature_delta,
                                      gamma=None, blur_strength=0.0, blur_fn=None,
                                      a=0.02, b=0.01, seed=None):
-    '''textured(실사 텍스처) 성에 버전의 야간 성에 합성.'''
+    """Low light plus textured frost: blur -> darken -> frost -> noise."""
     blur_fn = blur_fn or random_blur
     if gamma is None:
         gamma = np.random.uniform(0.8, 1.3)
@@ -508,13 +521,15 @@ def synthesize_night_frost_textured(image, exposure_ratio, coverage_ratio, tempe
 
 
 
-# ============================================================
-# 2. S1~S5 헬퍼 함수
-# ============================================================
-# ── S1~S5 후보군 튜닝에서 썼던 헬퍼 함수들 (add_condensation 등) ──
+# Effects the S1-S5 recipes in scenarios.py call directly. Each takes its
+# strength as an argument instead of drawing one, so a recipe stays reproducible.
 def add_condensation(image, coverage_ratio, intensity, center=None, seed=None, work_size=800):
-    '''렌즈에 맺힌 결로(물방울) 모사. 축소 캔버스에서 계산(work_size 트릭, 고해상도에서 빠름) +
-    블러 후 mask 정규화(피크값 복원) + haze 블렌딩까지 반영된 최종 버전.'''
+    """Condensation on the lens: a field of droplets that blurs and hazes what is behind it.
+
+    `coverage_ratio` sets how wide the droplet field spreads, `intensity`
+    how strongly it hazes, `center` where it sits (random middle 40% if None).
+    Built on a `work_size` canvas and resized back, as in the chunky frost.
+    """
     rng = _augmentation_rng(seed)
     h, w = image.shape[:2]
 

@@ -31,30 +31,19 @@ from vision_ai.utils.augmentation.rng import (
     configure_augmentation_seed, isolated_augmentation_random_state,
 )
 
-# yoloe_trainer reaches into this module for these three names.
+# yoloe_trainer, corruption_eval and the preview tool import from here.
 __all__ = ["A", "configure_augmentation_seed", "configure_pool", "mixed_augmentation",
            "MIXED_POOL", "SCENARIOS", "SCENARIO_OF", "apply_scenario", "pool_for"]
 
 # Functions mixed_augmentation currently draws from; configure_pool() narrows it.
 _active_pool = None
 
-# 증강 전용 난수 스트림의 기본 seed.
-#
-# **여기서 전역 RNG(random / np.random / torch)를 건드리지 않는다.** 예전에는
-# 이 자리에서 세 개를 전부 seed(42) 로 고정했는데, `yoloe_trainer.train()` 이
-# `seed_everything(config.seed)` **직후에** 이 모듈을 import 하므로 사용자가 준
-# --seed 가 그 자리에서 42 로 덮였다. 예외가 아니라 "재현이 안 된다" 로만
-# 나타나서 원인에서 가장 먼 버그였다.
-#
-# 학습 seed 는 호출부(`utils/reproducibility.seed_everything`)가, 증강 seed 는
+# Importing this module must not seed any global RNG. The training seed is
+# owned by utils/reproducibility.seed_everything, the augmentation seed by
+# configure_augmentation_seed.
 
-# ============================================================
-# 3. S1~S5 다 섞기 (mixed_augmentation)
-# ============================================================
-# ── S1~S5 튜닝 결과를 하나의 풀(pool)로 섞기 ──
-# 지금까지 candidate-group에서 눈으로 확정한 값들을 그대로 가져와서,
-# 매 학습 스텝마다 이 풀에서 하나를 무작위로 뽑아 적용합니다.
-# (전부 RGB 이미지 기준 -- 학습 파이프라인이 RGB라서 candidate-group 셀과 달리 BGR 변환 없음)
+# One function per recipe below. All take and return RGB uint8, matching the
+# training pipeline; parameter values were fixed by visual review.
 
 def _s1_gamma(image):
     """S1: darken with gamma in 0.55-0.65."""
