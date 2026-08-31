@@ -21,10 +21,11 @@ def build_seed_command(
     runner_module: str = SEED_RUNNER_MODULE,
     data_override: Path | None = None,
 ) -> tuple[list[str], dict[str, str]]:
-    """seed 하나를 돌릴 자식 프로세스 명령을 만든다.
+    """Build the child-process command that runs one seed.
 
-    스크립트 경로가 아니라 `-m <모듈>` 로 부른다. 경로로 부르면 실험이 자기 소스
-    위치를 알아야 하고, 폴더를 옮기는 순간 그 값이 조용히 어긋난다.
+    Invoked as `-m <module>` rather than a script path: a path would make the
+    experiment depend on where its own source lives, which breaks silently as
+    soon as a folder moves.
     """
     command = [
         str(python), "-m", runner_module, "--config", str(config), "--seed", str(seed),

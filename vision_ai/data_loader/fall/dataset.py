@@ -1,16 +1,18 @@
-"""낙상 분류기 학습 데이터셋을 읽고, 학습을 시작하기 전에 의심한다.
+"""Read the fall-classifier dataset, and refuse it before training if it cannot score.
 
-세그멘테이션 쪽 `training/dataloader/audit.py` 와 같은 자리다. 형식만 맞으면
-통과시키는 것이 아니라, 지표를 낼 수 없는 데이터셋이면 학습 자체를 거절한다 —
-조용히 이상한 모델을 만드는 것보다 뜨지 않는 편이 낫다.
+    from vision_ai.data_loader.fall.dataset import load_dataset
+    splits = load_dataset(path)     # {"train": [...], "valid": [...], "test": [...]}
 
-한 줄에 한 인스턴스인 JSONL 이다.
+The counterpart of `data_loader/perception/audit.py` on the segmentation side:
+passing the format check is not enough. A split with no fallen examples, or no
+upright ones, cannot produce a metric, so training stops rather than building
+a model whose numbers mean nothing.
+
+One instance per JSONL line, split being one of train, valid or test:
 
     {"features": [aspect_ratio, pca_angle, centroid_y,
                   contact_person_iou, contact_obstacle_iou],
      "fallen": true, "split": "train"}
-
-`split` 은 `train` / `valid` / `test` 셋뿐이다.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ SPLITS = ("train", "valid", "test")
 
 
 class DatasetError(ValueError):
-    """학습을 시작할 수 없는 데이터셋. 조용히 이상한 모델을 만드는 대신 터진다."""
+    """A dataset training cannot start on: raised instead of building a bad model."""
 
 
 def load_dataset(path: Path) -> dict[str, tuple[list[list[float]], list[int]]]:

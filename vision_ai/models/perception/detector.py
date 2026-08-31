@@ -1,13 +1,16 @@
-"""1단계 — 프레임 한 장에서 사람/장애물을 검출한다.
+"""Stage 1 -- find people and obstacles in one frame.
 
-`model_registry` 가 고른 weight 를 싣고, 프레임을 받아 `Detection` 목록을 낸다.
-**자세는 여기서 판단하지 않는다.** 자세는 `person_worker/posture.py` 가 mask 를
-받아 재고, 낙상 여부는 `person_worker/policy.py` 가 시간축으로 정한다. 셋을 나눈
-이유는 `docs` 가 아니라 비용에 있다 — 검출은 매 프레임 돌아야 하고(로봇 안전
-gate 가 이 결과로 감속한다), 자세 판정은 사람이 잡혔을 때만 돌면 된다.
+    detector = Detector(DetectorConfig(weights=..., person_class_id=1))
+    detections = detector.detect(frame)      # -> list[Detection]
 
-무거운 import(`ultralytics`, `torch`)는 `load()` 안에서만 한다. 그래야 GPU 가 없는
-곳에서도 이 모듈을 읽고 시험할 수 있다.
+**Posture is not decided here.** `robot/perception/posture.py` measures it
+from the mask and `robot/perception/policy.py` decides a fall over time. The
+split is about cost, not tidiness: detection runs on every frame because the
+robot's safety gate slows down on its output, while posture only has to run
+when a person was found.
+
+The heavy imports (`ultralytics`, `torch`) happen inside `load()`, so this
+module can be read and tested on a machine with no GPU.
 """
 
 from dataclasses import dataclass
@@ -18,18 +21,18 @@ import json
 
 @dataclass(frozen=True)
 class DetectorConfig:
-    """`configs/realtime.yaml` 의 `inference` 절과 같은 모양."""
+    """Mirrors the `inference` section of `configs/realtime.yaml`."""
 
     confidence: float = 0.25
     image_size: int = 640
     device: str = "auto"
-    # `data.yaml` 의 `names: ['obstacle', 'person']` 에서 온다. 클래스 순서가
-    # 바뀌면 이 값도 바뀌므로 코드에 숫자를 박지 않고 설정으로 받는다.
+    # Comes from `names: ['obstacle', 'person']` in data.yaml. Reordering the
+    # classes changes it, so it is configured rather than hardcoded.
     person_class_id: int = 1
-    # 켜면 `predict` 대신 `track(persist=True)` 로 돌려 프레임을 넘는 track_id 를
-    # 받는다. 사람별로 상태를 따로 들고 있으려면 이 신원이 있어야 한다. 기본이
-    # 꺼짐인 이유는 tracker 가 매 프레임 비용과 상태를 더하기 때문이다 — 사람
-    # 하나만 보는 호출부는 그 값을 치를 이유가 없다.
+    # On, this runs track(persist=True) instead of predict, which yields a
+    # track_id that survives across frames. Per-person state needs that
+    # identity. Off by default because the tracker adds per-frame cost and
+    # state that a caller watching one person has no reason to pay.
     tracking: bool = False
 
     def __post_init__(self) -> None:
@@ -43,11 +46,11 @@ class DetectorConfig:
 
 @dataclass(frozen=True)
 class Detection:
-    """한 인스턴스의 검출 결과. `mask` 는 프레임 크기의 bool 배열이다.
+    """One detected instance. `mask` is a frame-sized bool array.
 
-    `track_id` 는 tracking 을 켰을 때만 채워진다. 빈 문자열은 "이 프레임의
-    검출일 뿐 프레임을 넘는 신원은 없다" 는 뜻이다 — 사람별 상태를 들고 있는
-    쪽이 그 차이를 알아야 한다.
+    `track_id` is filled only when tracking is on. An empty string means "a
+    detection in this frame, with no identity across frames" -- whatever holds
+    per-person state has to tell those apart.
     """
 
     class_id: int
@@ -57,10 +60,11 @@ class Detection:
 
 
 def resolve_weights(value: Path) -> Path:
-    """`best.pt` 를 직접 받거나 `selected_model.json` 을 거쳐 찾는다.
+    """Resolve weights given either a best.pt or a selected_model.json.
 
-    multi-seed 실험은 대표 모델을 `selected_model.json` 으로 남긴다. 배포 쪽이
-    그 파일을 그대로 가리킬 수 있어야 seed 를 바꿔 학습해도 배포 명령이 안 바뀐다.
+    A multi-seed experiment records its representative model as
+    selected_model.json. Deployment points at that file, so retraining with
+    different seeds does not change the deployment command.
     """
     value = Path(value).expanduser().resolve()
     if value.suffix == ".json":
@@ -72,10 +76,10 @@ def resolve_weights(value: Path) -> Path:
 
 
 def select_best(detections: Sequence[Detection], class_id: int) -> Detection | None:
-    """그 클래스에서 가장 확신이 높은 하나. 없으면 `None`.
+    """The most confident detection of that class, or `None`.
 
-    순수 함수로 떼어 둔 이유는 이것이 시험 가능한 유일한 판단이기 때문이다.
-    모델 출력 파싱과 붙여 두면 GPU 없이는 한 줄도 확인할 수 없다.
+    Kept a pure function because it is the one decision here that can be
+    tested; folded into the output parsing, none of it runs without a GPU.
     """
     candidates = [item for item in detections if item.class_id == class_id]
     if not candidates:
@@ -84,11 +88,11 @@ def select_best(detections: Sequence[Detection], class_id: int) -> Detection | N
 
 
 def detections_from_result(result: Any, mask_threshold: float = 0.5) -> list[Detection]:
-    """ultralytics 결과 객체 하나를 `Detection` 목록으로 옮긴다.
+    """Convert one ultralytics result object into a list of `Detection`.
 
-    mask 가 없는 결과(검출 0건)는 빈 목록이다. `None` 을 돌려주지 않는 이유는
-    호출부가 "검출이 없다" 와 "추론이 실패했다" 를 섞지 않게 하기 위해서다 —
-    추론 실패는 예외로 올라온다.
+    A result with no masks gives an empty list, never `None`, so a caller
+    cannot confuse "nothing was detected" with "inference failed" -- a failure
+    arrives as an exception.
     """
     masks = getattr(result, "masks", None)
     if masks is None or not len(masks.data):
@@ -110,7 +114,7 @@ def detections_from_result(result: Any, mask_threshold: float = 0.5) -> list[Det
 
 
 class Detector:
-    """weight 하나를 싣고 프레임마다 검출을 낸다."""
+    """Load one set of weights and detect on each frame."""
 
     def __init__(self, weights: Path, config: DetectorConfig) -> None:
         self.weights = resolve_weights(weights)
@@ -119,7 +123,7 @@ class Detector:
         self._device: Any = None
 
     def load(self) -> Any:
-        """모델과 device 를 준비한다. 이미 준비됐으면 그대로 쓴다."""
+        """Prepare the model and device; reuse them if already prepared."""
         if self._model is not None:
             return self._device
         from ultralytics import YOLOE
@@ -139,8 +143,9 @@ class Detector:
             verbose=False,
         )
         if self.config.tracking:
-            # persist=True 가 없으면 tracker 가 프레임마다 새로 시작해 번호를
-            # 다시 매긴다 — track_id 가 있어도 프레임을 넘는 신원이 아니게 된다.
+            # Without persist=True the tracker restarts each frame and
+            # renumbers, so a track_id would exist but mean nothing across
+            # frames.
             result = self._model.track(frame, persist=True, **options)[0]
         else:
             result = self._model.predict(frame, **options)[0]

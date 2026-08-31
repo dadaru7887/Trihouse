@@ -1,14 +1,14 @@
-"""seed 하나로 학습·검증·test 를 돌린다. multi-seed 실험이 프로세스로 띄운다.
+"""Run train, validation and test for one seed. The multi-seed experiment starts it.
 
-**모듈로 실행한다** — `python -m vision_ai.models.perception.trainer.seed_runner`.
-스크립트 경로(`<project_dir>/train_seed.py`)로 부르면 실험이 자기 소스 위치를
-알아야 하고, 그 경로는 폴더를 옮기는 순간 조용히 어긋난다. 모듈 이름은 설치
-방식이 바뀌어도 같다.
+    python -m vision_ai.models.perception.trainer.seed_runner --config <yaml> --seed 42
 
-seed 마다 프로세스를 새로 띄우는 이유는 재현성이다. `PYTHONHASHSEED` 는
-인터프리터가 뜬 뒤에는 바꿀 수 없고, CUDA·cuDNN 의 전역 상태도 프로세스 안에
-남는다. 같은 프로세스에서 seed 를 바꿔 가며 돌리면 앞 seed 가 뒤 seed 에
-새어 든다.
+**Invoked as a module, not a script path.** A path would make the experiment
+depend on knowing where its own source lives, and that breaks silently the
+moment a folder moves; the module name survives a change of layout.
+
+Each seed gets a fresh process because reproducibility needs one: PYTHONHASHSEED
+cannot be changed after the interpreter starts, and CUDA/cuDNN keep global
+state, so seeds run in one process leak into each other.
 """
 
 import argparse
@@ -25,8 +25,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--experiment-dir", type=Path, required=True)
-    # 부모 실험이 --data 로 config 를 덮어썼다면 그 값이 여기까지 와야 한다.
-    # 안 오면 자식은 config 파일의 경로로 조용히 학습한다.
+    # When the parent experiment overrode the config with --data, that value
+    # has to reach here; otherwise this child quietly trains on the config path.
     parser.add_argument("--data", type=Path)
     return parser
 

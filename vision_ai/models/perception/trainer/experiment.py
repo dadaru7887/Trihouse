@@ -17,7 +17,7 @@ from vision_ai.models.perception.trainer.multi_seed import aggregate_seed_runs, 
 class MultiSeedExperiment:
     config: ExperimentConfig
     experiment_dir: Path
-    # 부모가 --data 로 덮어썼으면 seed 자식들에게도 같은 값을 넘겨야 한다.
+    # Pass the --data override down, so every seed trains on the same dataset.
     data_override: Path | None = None
 
     @classmethod

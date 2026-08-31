@@ -52,13 +52,13 @@ def _resolve(root: Path, value: str | None) -> Path | None:
     return path.resolve() if path.is_absolute() else (root / path).resolve()
 
 
-# config 안의 상대 경로가 무엇을 기준으로 하는가. **저장소 루트**다.
+# What a relative path inside a config is relative to: the repo root.
 #
-# 전에는 config 파일 위치에서 `path.parents[4]` 로 거슬러 올라갔다. 그러면 config
-# 를 다른 깊이로 옮기는 순간 조용히 엉뚱한 곳을 가리킨다 — 오류가 아니라 "데이터가
-# 없다" 로 나타나서 원인에서 멀다. 여기서는 이 모듈의 위치로 루트를 잡는다.
-# `vision_ai/utils/config_loader.py` -> parents[4] 가 저장소 루트다.
-# 저장소 밖의 config 를 쓰려면 `project_root` 를 명시적으로 넘긴다.
+# Derived from this module's own location, not the config file's: walking up
+# from the config would point somewhere else as soon as a config moves to a
+# different depth, and that shows up as "no data" rather than an error.
+# vision_ai/utils/config_loader.py -> parents[4] is the repo root.
+# Pass `project_root` explicitly for a config kept outside the repo.
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 
 
@@ -67,10 +67,11 @@ def load_experiment_config(
     project_root: Path | str | None = None,
     data_override: Path | str | None = None,
 ) -> ExperimentConfig:
-    """`data_override` 가 있으면 config 의 dataset.data_yaml 을 이긴다.
+    """Load a config; `data_override` beats the config's dataset.data_yaml.
 
-    데이터셋 경로는 실험마다 바뀌는 값이므로 config 파일을 고쳐 가며 쓰는 것이
-    아니라 인자로 들어올 수 있어야 한다. 우선순위는 인자 > config > (기본값 없음).
+    The dataset path changes per experiment, so it must be passable as an
+    argument instead of by editing the file. Priority: argument > config, with
+    no default.
     """
     path = Path(path).expanduser().resolve()
     if not path.is_file():

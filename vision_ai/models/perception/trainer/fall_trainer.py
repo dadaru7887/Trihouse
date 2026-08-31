@@ -1,31 +1,31 @@
-"""낙상 분류기 학습 진입점 — train 으로 맞추고, valid 로 고르고, test 는 마지막에 한 번.
+"""Train the fall classifier: fit on train, choose on valid, open test once.
 
     python -m vision_ai.models.perception.trainer.fall_trainer \
-        --dataset /path/to/features.jsonl \
-        --out runs/fallen_classifier \
-        --seed 42 --min-recall 0.85
+        --dataset runs/fall/features.jsonl --out runs/fall \
+        --seed 42 --min-recall 0.85 --wandb
 
-**경로는 전부 인자다.** 데이터셋 위치를 코드에도 기본값에도 넣지 않는다 — 다른
-체크아웃이나 다른 데이터셋으로 옮길 때 코드를 고치지 않아야 한다.
+Every path is an argument; no dataset location is written into the code or a
+default, so another checkout or dataset needs no edit.
 
-입력은 피처가 이미 뽑힌 JSONL 한 줄에 한 인스턴스다. 피처를 뽑는 쪽은
-`vision_ai/models/perception/features.py` 이고, 원본 이미지·mask 에서 이 JSONL 을 만드는
-어댑터는 데이터셋 형식마다 다르므로 여기서 강제하지 않는다.
+Input is one instance per JSONL line, with the features already extracted --
+`models/perception/features.py` does that. Building the JSONL from images and
+masks is dataset-specific, so no adapter is imposed here.
 
     {"features": [aspect_ratio, pca_angle, centroid_y,
                   contact_person_iou, contact_obstacle_iou],
      "fallen": true, "split": "train"}
 
-`split` 은 `train` / `valid` / `test` 셋뿐이다.
+Flow, and the split each stage may look at:
 
-- `train`  — scaler 와 logistic regression 을 맞춘다
-- `valid`  — 결정 임계값을 고른다. **여기까지만 보고 모델을 정한다**
-- `test`   — 마지막에 한 번 재고 어떤 선택에도 쓰지 않는다
+    train   fit the scaler and the logistic regression
+    valid   choose the decision threshold -- the model is decided here
+    test    measured once at the end, feeding no choice
 
-임계값은 recall 바닥을 만족하는 것 중 precision 이 가장 높은 값이다. 안전 경보라
-recall 을 우선한다 — 오탐은 사람이 한 번 더 보는 비용이지만 미탐은 실제 낙상을
-놓치는 비용이다. 바닥을 만족하는 후보가 없으면 recall 이 가장 높은 값으로 두고
-`recall_floor_met` 을 False 로 남긴다. 조용히 통과시키지 않는다.
+The threshold is the most precise one that still meets the recall floor.
+Recall wins because this is a safety alarm: a false alarm costs a second look,
+a miss costs a fall nobody sees. If no candidate meets the floor, the
+highest-recall one is kept and `recall_floor_met` is False -- it is never
+passed off as met.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from typing import Any
 from vision_ai.models.perception.features import FEATURE_NAMES
 from vision_ai.data_loader.fall.dataset import SPLITS, DatasetError, load_dataset
 
-# 배달본이 쓴 후보 격자와 같다.
+# The same candidate grid the delivered bundle used.
 THRESHOLD_CANDIDATES = [round(0.05 + 0.05 * step, 2) for step in range(19)]
 
 
@@ -63,9 +63,9 @@ def _select_threshold(labels: list[int], probabilities: list[float],
         rows.append((candidate, scored))
     passing = [row for row in rows if row[1]["recall"] >= min_recall]
     if passing:
-        # 동점이면 `max` 가 앞의 것을 남기고 후보는 오름차순이므로 **가장 낮은**
-        # 임계값이 이긴다. 즉 성능이 같으면 더 민감한 쪽을 고른다 — 안전 경보에서
-        # 의도한 방향이다. 우연이 아니라 선택이다.
+        # On a tie `max` keeps the first, and candidates ascend, so the
+        # lowest threshold wins: equal scores pick the more sensitive one.
+        # That is the intended direction for a safety alarm, not an accident.
         threshold, scored = max(passing, key=lambda row: (row[1]["precision"], row[1]["recall"]))
         return threshold, scored, True
     threshold, scored = max(rows, key=lambda row: (row[1]["recall"], row[1]["precision"]))
@@ -94,11 +94,11 @@ def train_classifier(dataset_path: Path, out_dir: Path, *, seed: int = 42,
         features = np.asarray(splits[split][0], dtype=np.float64)
         return [float(p) for p in model.predict_proba(scaler.transform(features))[:, 1]]
 
-    # 임계값은 valid 로만 고른다. 여기까지가 "모델을 정하는" 구간이다.
+    # The threshold is chosen on valid alone; deciding the model ends here.
     threshold, validation, floor_met = _select_threshold(
         splits["valid"][1], probabilities("valid"), min_recall
     )
-    # test 는 이제 딱 한 번. 어떤 선택에도 되먹임되지 않는다.
+    # test is measured once and feeds back into no choice.
     test_probabilities = probabilities("test")
     test = _scores(splits["test"][1], [1 if p >= threshold else 0 for p in test_probabilities])
 

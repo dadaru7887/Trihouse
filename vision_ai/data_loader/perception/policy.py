@@ -1,4 +1,4 @@
-"""증강을 offline 학습에만 제한하고 실시간 영상 원본을 지키는 정책."""
+"""Policy keeping augmentation to offline training, so live frames stay untouched."""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -45,5 +45,5 @@ class DatasetPolicy:
 
     @staticmethod
     def inference_input(frame: Frame) -> Frame:
-        """실시간 카메라 frame은 바꾸지 않고 반환한다. 전처리는 증강과 다르다."""
+        """Return a live camera frame unchanged. Preprocessing is not augmentation."""
         return frame
