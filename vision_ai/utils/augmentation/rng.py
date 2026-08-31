@@ -30,7 +30,6 @@ def configure_augmentation_seed(seed):
 
 def augmentation_rng(seed=None):
     """Return an independent RNG for one augmentation call.
-
     Fixed to `seed` when given, otherwise drawn from the parent stream.
     """
     if seed is not None:
@@ -42,7 +41,6 @@ def augmentation_rng(seed=None):
 @contextmanager
 def isolated_augmentation_random_state():
     """Run one augmentation on an augmentation seed, then restore training RNGs.
-
     S1-S5 recipes use the global random/np.random/torch, so this saves those
     three states on entry and puts them back on exit.
     """
