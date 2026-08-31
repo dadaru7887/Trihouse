@@ -17,8 +17,12 @@ git checkout dev
 conda create -n trihouse-vision python=3.10 -y
 conda activate trihouse-vision
 
-# torch first, matched to the server's CUDA. Check with nvidia-smi.
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# Install the same CUDA 12.8 PyTorch wheels as the inference Docker image.
+# The NVIDIA driver must support CUDA 12.8; confirm it with `nvidia-smi` first.
+python -m pip install --upgrade pip
+python -m pip install \
+    torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 \
+    --index-url https://download.pytorch.org/whl/cu128
 
 pip install ultralytics albumentations opencv-python pillow \
             scikit-learn pandas pyyaml joblib roboflow wandb
@@ -27,7 +31,16 @@ pip install ultralytics albumentations opencv-python pillow \
 Verify the GPU is visible before going further:
 
 ```bash
-python -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count())"
+python - <<'PY'
+import torch
+import torchvision
+
+print("torch      :", torch.__version__)
+print("torchvision:", torchvision.__version__)
+print("CUDA build :", torch.version.cuda)
+print("CUDA ready :", torch.cuda.is_available())
+print("GPU        :", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "NOT DETECTED")
+PY
 ```
 
 `--device auto` picks CUDA when it is there, then MPS, then CPU. If this
