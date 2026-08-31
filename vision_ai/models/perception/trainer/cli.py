@@ -41,6 +41,11 @@ def add_training_arguments(parser: argparse.ArgumentParser, *, include_run: bool
              "Omit to use vision_ai/utils/augmentation/scenarios.py",
     )
     parser.add_argument("--allow-posture-gap", action="store_true")
+    parser.add_argument("--wandb", action="store_true",
+                        help="Mirror metrics to Weights & Biases. Falls back to "
+                             "metrics.jsonl when wandb is absent or offline")
+    parser.add_argument("--wandb-project", default="trihouse-vision",
+                        help="wandb project to log the run into")
     parser.add_argument("--min-fallen-per-eval-split", type=int, default=10)
     parser.add_argument("--min-mask-recall", type=float, default=0.90)
     parser.add_argument("--min-mask-map50", type=float, default=0.80)
@@ -66,6 +71,8 @@ def config_from_args(args: argparse.Namespace, **overrides) -> TrainingConfig:
         "preflight_only": getattr(args, "preflight_only", False),
         "min_fallen_per_eval_split": args.min_fallen_per_eval_split,
         "min_mask_recall": args.min_mask_recall, "min_mask_map50": args.min_mask_map50,
+        "wandb": bool(getattr(args, "wandb", False)),
+        "wandb_project": getattr(args, "wandb_project", "trihouse-vision"),
     }
     values.update(overrides)
     return TrainingConfig(**values)

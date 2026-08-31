@@ -132,26 +132,64 @@ def train_classifier(dataset_path: Path, out_dir: Path, *, seed: int = 42,
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Define the command line: which features, where to write, how strict."""
     parser = argparse.ArgumentParser(
-        description="낙상 분류기 학습: train 으로 맞추고, valid 로 고르고, test 는 한 번"
+        description="Train the fall classifier: fit on train, choose on valid, "
+                    "open test once"
     )
     parser.add_argument("--dataset", type=Path, required=True,
-                        help="피처가 뽑힌 JSONL. features/fallen/split 세 필드")
-    parser.add_argument("--out", type=Path, required=True, help="번들과 metrics.json 을 쓸 디렉터리")
+                        help="Feature JSONL with the fields features/fallen/split")
+    parser.add_argument("--out", type=Path, required=True,
+                        help="Directory for the bundle and metrics.json")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--min-recall", type=float, default=0.85,
-                        help="임계값 선택 시 만족해야 할 recall 바닥")
+                        help="Recall floor the chosen threshold must meet. Recall "
+                             "wins over precision here: a false alarm costs a "
+                             "second look, a miss costs a fall nobody sees")
+    parser.add_argument("--wandb", action="store_true",
+                        help="Mirror metrics to Weights & Biases")
+    parser.add_argument("--wandb-project", default="trihouse-vision",
+                        help="wandb project to log the run into")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Train the classifier and report what it chose."""
+    from vision_ai.utils.run_logging import Tracker, setup_logging
+
     args = build_parser().parse_args(argv)
+    logger = setup_logging(args.out)
+    logger.info("fall classifier | dataset=%s | seed=%s | min_recall=%.2f",
+                args.dataset, args.seed, args.min_recall)
+    tracker = Tracker(enabled=args.wandb, project=args.wandb_project,
+                      name=f"fall-{args.out.name}",
+                      config={"dataset": str(args.dataset), "seed": args.seed,
+                              "min_recall": args.min_recall},
+                      run_dir=args.out)
     try:
         result = train_classifier(args.dataset, args.out, seed=args.seed,
                                   min_recall=args.min_recall)
     except DatasetError as error:
-        print(f"[DATASET 실패] {error}")
+        logger.error("DATASET failed | %s", error)
+        tracker.finish()
         return 2
+
+    logger.info("threshold=%.4f | recall_floor_met=%s",
+                result["threshold"], result["recall_floor_met"])
+    for split in ("validation", "test"):
+        logger.info("%s %s", split.upper(),
+                    " ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
+                             for k, v in sorted(result[split].items())))
+    if not result["recall_floor_met"]:
+        logger.warning("no threshold met the recall floor; kept the highest-recall one")
+    tracker.summary({
+        "threshold": result["threshold"],
+        "recall_floor_met": result["recall_floor_met"],
+        **{f"val/{k}": v for k, v in result["validation"].items()},
+        **{f"test/{k}": v for k, v in result["test"].items()},
+    })
+    tracker.finish()
+    logger.info("bundle written to %s", result["bundle"])
     print(json.dumps({
         "threshold": result["threshold"],
         "recall_floor_met": result["recall_floor_met"],

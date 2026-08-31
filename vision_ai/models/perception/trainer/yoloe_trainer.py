@@ -137,6 +137,13 @@ class YOLOEBackend:
 
     def train(self, config: TrainingConfig, run_dir: Path) -> Path:
         seed_everything(config.seed, config.deterministic)
+        if config.wandb:
+            # The orchestrator already called wandb.init, and ultralytics'
+            # callback reuses an open run rather than starting a second one,
+            # so our config and its per-epoch metrics land together.
+            from ultralytics.utils import SETTINGS
+
+            SETTINGS["wandb"] = True
         self._ensure_components(config.augmentation_source)
         assert self.model_factory is not None and self.augmentation_factory is not None
         model = self.model_factory(resolve_model(config.model))

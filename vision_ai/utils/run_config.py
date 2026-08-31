@@ -22,10 +22,9 @@ class TrainingConfig:
     seed: int = 42
     deterministic: bool = True
     posture_manifest: Path | None = None
-    # S1~S5 환경 증강 recipe 를 담고 있는 모듈. `vision_ai.models.perception` 은 이것을
-    # 재구현하지 않고 가져다 쓴다(`training/dataset_policy.py` 의 경계와 같다).
-    # 경로를 코드에 박지 않는 이유는 이 저장소 밖에 두거나 다른 recipe 로
-    # 갈아 끼울 수 있어야 하기 때문이다. `None` 이면 저장소 기본 위치를 쓴다.
+    # Module holding the augmentation recipes. None uses the repo default,
+    # vision_ai/utils/augmentation/scenarios.py; a path swaps in another set
+    # without editing code.
     augmentation_source: Path | None = None
     allow_posture_gap: bool = False
     preflight_only: bool = False
@@ -33,6 +32,10 @@ class TrainingConfig:
     min_mask_recall: float = 0.90
     min_mask_map50: float = 0.80
     test_on_validation_gate_failure: bool = False
+    # Mirror metrics to a wandb run. Off by default: a compute node with no
+    # network must still train.
+    wandb: bool = False
+    wandb_project: str = "trihouse-vision"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "data", Path(self.data).expanduser().resolve())
