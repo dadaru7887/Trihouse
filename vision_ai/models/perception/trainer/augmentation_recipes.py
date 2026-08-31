@@ -55,32 +55,42 @@ __all__ = ["A", "configure_augmentation_seed", "mixed_augmentation", "MIXED_POOL
 
 def _s1_gamma(image):
     """S1: darken with gamma in 0.55-0.65."""
-    gamma = random.uniform(0.55, 0.65)  # 확정한 mild(0.65)~strong(0.55) 범위
+    # gamma < 1 darkens. 0.65 is the mild end, 0.55 the strong end; drawn
+    # continuously so the model sees the whole band, not two fixed levels.
+    gamma = random.uniform(0.55, 0.65)
     return adjust_gamma(image, gamma)
 
 
 def _s1_motion_blur(image):
     """S1: motion blur at 18 degrees, kernel 45 or 70."""
+    # Kernel length in pixels: 45 = a short shake, 70 = a long one.
     ksize = random.choice([45, 70])
-    return add_motion_blur(image, ksize, 18)  # 홀수 보정 불필요, 그대로 45/70 사용
+    # 18 degrees is the robot's usual travel direction, so the smear runs
+    # along the way it moves.
+    return add_motion_blur(image, ksize, 18)
 
 
 def _s1_color_jitter(image):
     """S1: jitter brightness, contrast, saturation and hue."""
     pil_img = Image.fromarray(image)
-    jitter = transforms.ColorJitter(0.5, 0.4, 0.3, 0.05)  # 확정한 wide 설정
+    # Max relative shift per channel: brightness .5, contrast .4,
+    # saturation .3, hue .05. Hue stays small so colours do not flip.
+    jitter = transforms.ColorJitter(0.5, 0.4, 0.3, 0.05)
     return np.array(jitter(pil_img))
 
 
 def _s2_condensation(image):
     """S2: condensation, one of five coverage/intensity/placement recipes."""
     h, w = image.shape[:2]
+    # (coverage, intensity, centre). coverage = how much of the frame the
+    # droplet field spans; intensity = how opaque the haze is;
+    # centre = None means a random point in the middle 40% of the frame.
     recipe = random.choice([
-        (0.35, 0.18, None),
-        (0.80, 0.34, None),
-        (0.55, 0.24, (int(w * 0.50), int(h * 0.12))),   # top_edge
-        (0.55, 0.24, (int(w * 0.50), int(h * 0.88))),   # bottom_edge
-        (0.42, 0.48, None),                              # wide_haze
+        (0.35, 0.18, None),                              # light film over the middle
+        (0.80, 0.34, None),                              # heavy film over most of the frame
+        (0.55, 0.24, (int(w * 0.50), int(h * 0.12))),    # fog banked along the top edge
+        (0.55, 0.24, (int(w * 0.50), int(h * 0.88))),    # fog banked along the bottom edge
+        (0.42, 0.48, None),                              # small but very opaque patch
     ])
     coverage, intensity, center = recipe
     return add_condensation(image, coverage, intensity, center)
@@ -89,12 +99,15 @@ def _s2_condensation(image):
 def _s3_glare(image):
     """S3: glare, one of five intensity/size/placement recipes."""
     h, w = image.shape[:2]
+    # (intensity, size_ratio, centre). intensity = how white the core goes;
+    # size_ratio = radius as a fraction of the shorter side;
+    # centre = None means anywhere in the frame.
     recipe = random.choice([
-        (0.65, 0.30, None),
-        (0.45, 0.25, (int(w * 0.5), int(h * 0.30))),   # ceiling_near_mild
-        (0.70, 0.45, (int(w * 0.5), int(h * 0.30))),   # ceiling_near_strong
-        (0.40, 0.30, (int(w * 0.5), int(h * 0.85))),   # floor_near_mild
-        (0.65, 0.55, (int(w * 0.5), int(h * 0.85))),   # floor_near_strong
+        (0.65, 0.30, None),                             # bright spot, position unconstrained
+        (0.45, 0.25, (int(w * 0.5), int(h * 0.30))),    # ceiling light, mild
+        (0.70, 0.45, (int(w * 0.5), int(h * 0.30))),    # ceiling light, strong
+        (0.40, 0.30, (int(w * 0.5), int(h * 0.85))),    # floor reflection, mild
+        (0.65, 0.55, (int(w * 0.5), int(h * 0.85))),    # floor reflection, strong
     ])
     intensity, size_ratio, center = recipe
     return add_glare(image, intensity, size_ratio, center)
@@ -102,15 +115,23 @@ def _s3_glare(image):
 
 def _s4_frost(image):
     """S4: frost overlay, mild or strong coverage."""
-    coverage, temperature = random.choice([(0.15, 0.30), (0.45, 0.55)])
+    # (coverage, temperature_delta). coverage = how far the frost blobs
+    # spread from the corners; temperature_delta = opacity of the frost.
+    coverage, temperature = random.choice([
+        (0.15, 0.30),   # thin rime at the corners
+        (0.45, 0.55),   # thick frost over much of the lens
+    ])
+    # n_anchors=4 grows the frost inward from all four corners.
     return generate_frost_overlay_chunky(image, coverage, temperature, seed=None, n_anchors=4)
 
 
 def _s4_night_frost(image):
     """S4: low exposure plus frost plus blur."""
+    # (exposure_ratio, coverage, temperature_delta, blur_strength).
+    # exposure_ratio < 1 darkens; the freezer aisle is dim as well as frosted.
     exposure, coverage, temperature, blur_strength = random.choice([
-        (0.45, 0.35, 0.45, 1.0),   # night_light
-        (0.60, 0.35, 0.45, 1.3),   # night_heavy
+        (0.45, 0.35, 0.45, 1.0),   # dim aisle, moderate frost
+        (0.60, 0.35, 0.45, 1.3),   # darker still, blurrier
     ])
     return synthesize_night_frost_chunky(
         image, exposure_ratio=exposure, coverage_ratio=coverage,
@@ -118,11 +139,15 @@ def _s4_night_frost(image):
     )
 
 
-# S5: 확정한 5가지 조합(mild/strong) -- Motion Blur는 항상 마지막
+# S5 pairs two S1-S4 effects and always ends with motion blur, because a
+# moving robot smears whatever the lens already has on it.
+# Each function draws mild (first branch) or strong (second) with equal odds.
 def _s5_lowlight_condensation(image):
     """S5: gamma -> condensation -> motion blur."""
     if random.random() < 0.5:
+        # mild: gamma .65, light condensation, short 45px smear
         return add_motion_blur(add_condensation(adjust_gamma(image, 0.65), 0.35, 0.18), 45, 18)
+    # strong: gamma .55, heavy condensation, long 70px smear
     return add_motion_blur(add_condensation(adjust_gamma(image, 0.55), 0.80, 0.34), 70, 18)
 
 
@@ -130,8 +155,10 @@ def _s5_lowlight_glare(image):
     """S5: gamma -> glare -> motion blur."""
     h, w = image.shape[:2]
     if random.random() < 0.5:
+        # mild: gamma .65, ceiling glare, short smear
         return add_motion_blur(
             add_glare(adjust_gamma(image, 0.65), 0.45, 0.25, (int(w * 0.5), int(h * 0.30))), 45, 18)
+    # strong: gamma .55, floor glare, long smear
     return add_motion_blur(
         add_glare(adjust_gamma(image, 0.55), 0.65, 0.55, (int(w * 0.5), int(h * 0.85))), 70, 18)
 
@@ -140,9 +167,11 @@ def _s5_condensation_glare(image):
     """S5: condensation -> glare -> motion blur."""
     h, w = image.shape[:2]
     if random.random() < 0.5:
+        # mild: top-edge fog, then ceiling glare through it, short smear
         return add_motion_blur(
             add_glare(add_condensation(image, 0.55, 0.24, (int(w * 0.5), int(h * 0.12))),
                       0.45, 0.25, (int(w * 0.5), int(h * 0.30))), 45, 18)
+    # strong: dense fog patch, then floor glare, long smear
     return add_motion_blur(
         add_glare(add_condensation(image, 0.42, 0.48),
                   0.65, 0.55, (int(w * 0.5), int(h * 0.85))), 70, 18)
@@ -151,8 +180,10 @@ def _s5_condensation_glare(image):
 def _s5_lowlight_frost(image):
     """S5: gamma -> frost -> motion blur."""
     if random.random() < 0.5:
+        # mild: gamma .65, thin rime, short smear
         frosted = generate_frost_overlay_chunky(adjust_gamma(image, 0.65), 0.15, 0.30, seed=None, n_anchors=4)
         return add_motion_blur(frosted, 45, 18)
+    # strong: gamma .55, thick frost, long smear
     frosted = generate_frost_overlay_chunky(adjust_gamma(image, 0.55), 0.45, 0.55, seed=None, n_anchors=4)
     return add_motion_blur(frosted, 70, 18)
 
@@ -161,13 +192,15 @@ def _s5_frost_glare(image):
     """S5: frost -> glare -> motion blur."""
     h, w = image.shape[:2]
     if random.random() < 0.5:
+        # mild: thin rime, ceiling glare scattering off it, short smear
         frosted = generate_frost_overlay_chunky(image, 0.15, 0.30, seed=None, n_anchors=4)
         return add_motion_blur(add_glare(frosted, 0.45, 0.25, (int(w * 0.5), int(h * 0.30))), 45, 18)
+    # strong: thick frost, floor glare, long smear
     frosted = generate_frost_overlay_chunky(image, 0.45, 0.55, seed=None, n_anchors=4)
     return add_motion_blur(add_glare(frosted, 0.65, 0.55, (int(w * 0.5), int(h * 0.85))), 70, 18)
 
 
-# ── 전체 풀: S1~S5 다 섞기 ──
+# One entry per augmentation function; mixed_augmentation draws from this.
 MIXED_POOL = [
     _s1_gamma, _s1_motion_blur, _s1_color_jitter,          # S1
     _s2_condensation,                                       # S2
