@@ -1,5 +1,5 @@
-"""Guard the preview tool: it must call the shared augmentation code and
-produce one sheet per source frame.
+"""Guard the review tool: it must call the shared augmentation code, produce
+one sheet per source frame, and report severity that tracks real strength.
 
     pytest vision_ai/tooling/augmentation_preview
 """
@@ -99,3 +99,35 @@ def test_all_groups_writes_one_sheet_per_group_plus_an_overview(tmp_path):
     names = sorted(p.name for p in written)
     assert names == sorted(["00_overview.png"] + [f"{g}.png" for g in scenarios.GROUPS])
     assert all(p.is_file() for p in written)
+
+
+@pytest.fixture
+def frames():
+    """Two synthetic RGB frames, enough for the severity maths."""
+    rng = np.random.default_rng(0)
+    return [rng.integers(0, 255, (64, 80, 3), dtype=np.uint8) for _ in range(2)]
+
+
+def test_a_heavier_recipe_reports_a_larger_share(frames):
+    _, light = preview.measure(frames, "S4_frost_rime")
+    _, heavy = preview.measure(frames, "S4_frost_thick")
+    assert heavy > light
+
+
+def test_the_report_covers_every_recipe(frames):
+    text = preview.severity_report(frames)
+    for recipe in scenarios.RECIPES:
+        assert recipe.id in text
+
+
+def test_the_report_flags_a_recipe_that_barely_changes_the_frame(frames, monkeypatch):
+    monkeypatch.setattr(scenarios, "apply_recipe", lambda image, rid: image)
+    assert "barely changes the frame" in preview.severity_report(frames)
+
+
+@pytest.mark.parametrize("name", sorted(preview.SWEEPS))
+def test_every_sweep_renders(name, frames, tmp_path):
+    target = preview.sweep(frames[0], name, tmp_path)
+    assert target.is_file()
+    sheet = cv2.imread(str(target))
+    assert sheet is not None and sheet.size > 0
