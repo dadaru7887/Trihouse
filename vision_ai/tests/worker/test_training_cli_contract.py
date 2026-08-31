@@ -84,3 +84,43 @@ def test_the_holdout_reaches_the_config() -> None:
 def test_an_unknown_mechanism_is_refused_at_parse_time() -> None:
     with pytest.raises(SystemExit):
         _run(["--holdout", "S4"])
+
+
+def test_preflight_persists_a_device_the_trainer_can_use(tmp_path, monkeypatch) -> None:
+    """resolved.json is read back by `evaluate`, which hands device to ultralytics.
+
+    "auto" is a trihouse token invented in utils/device.py; ultralytics does
+    not know it, so persisting it unresolved makes a later evaluate fail or
+    silently pick a different device than the run trained on.
+    """
+    import json
+    from vision_ai.models.perception.trainer import pipeline
+
+    data = tmp_path / "data.yaml"
+    data.write_text("names: [obstacle, person]\nnc: 2\ntrain: t\nval: v\ntest: s\n",
+                    encoding="utf-8")
+
+    class Report:
+        fingerprint = "f" * 64
+        person_class_id = 1
+
+    monkeypatch.setattr("vision_ai.data_loader.perception.audit.audit_dataset",
+                        lambda *a, **k: Report())
+    out = tmp_path / "run"
+    assert pipeline.main(["preflight", "--data", str(data), "--output", str(out)]) == 0
+
+    resolved = json.loads((out / "config/resolved.json").read_text(encoding="utf-8"))
+    assert resolved["device"] != "auto"
+
+
+def test_the_holdout_choices_come_from_the_recipe_registry() -> None:
+    """A mechanism added to scenarios.py must not be rejected by argparse."""
+    import argparse
+
+    from vision_ai.models.perception.trainer.cli import add_training_arguments
+    from vision_ai.utils.augmentation import scenarios
+
+    parser = argparse.ArgumentParser()
+    add_training_arguments(parser)
+    action = next(a for a in parser._actions if a.dest == "holdout")
+    assert tuple(action.choices) == tuple(scenarios.MECHANISMS)

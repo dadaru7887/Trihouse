@@ -108,7 +108,7 @@ def test_a_bundle_with_the_wrong_feature_count_is_refused(tmp_path) -> None:
         clf=LogisticRegression().fit(scaler.transform(features), labels),
     )
 
-    with pytest.raises(ValueError, match="five"):
+    with pytest.raises(ValueError, match="contracted features"):
         FallenClassifier(path, digest, approved=True).load()
 
 
@@ -154,3 +154,58 @@ def test_a_half_configured_classifier_fails_loudly(env) -> None:
 
     with pytest.raises(ValueError, match="FALLEN_CLASSIFIER"):
         build_classifier_from_env(env)
+
+
+def test_a_bundle_whose_feature_order_differs_is_refused(tmp_path):
+    """The count alone cannot catch a reordering, and five wrong-order values
+    load clean and produce silently wrong probabilities.
+
+    aspect_ratio carries the largest coefficient in the delivered bundle, so
+    swapping it with centroid_y flips the strongest signal with no error.
+    """
+    import joblib
+    import numpy as np
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.preprocessing import StandardScaler
+
+    from vision_ai.models.perception.features import FEATURE_NAMES
+    from vision_ai.models.perception.fall_classifier import FallenClassifier
+
+    rows = np.random.default_rng(0).random((20, len(FEATURE_NAMES)))
+    labels = (rows[:, 0] > 0.5).astype(int)
+    scaler = StandardScaler().fit(rows)
+    model = LogisticRegression().fit(scaler.transform(rows), labels)
+
+    shuffled = list(FEATURE_NAMES)
+    shuffled[0], shuffled[2] = shuffled[2], shuffled[0]
+    bundle = tmp_path / "bundle.joblib"
+    joblib.dump({"clf": model, "scaler": scaler, "threshold": 0.5,
+                 "feature_names": shuffled, "config": {}}, bundle)
+    digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+
+    with pytest.raises(ValueError, match="feature order"):
+        FallenClassifier(bundle, digest).load()
+
+
+def test_a_bundle_with_the_contracted_order_loads(tmp_path):
+    import joblib
+    import numpy as np
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.preprocessing import StandardScaler
+
+    from vision_ai.models.perception.features import FEATURE_NAMES
+    from vision_ai.models.perception.fall_classifier import FallenClassifier
+
+    rows = np.random.default_rng(0).random((20, len(FEATURE_NAMES)))
+    labels = (rows[:, 0] > 0.5).astype(int)
+    scaler = StandardScaler().fit(rows)
+    model = LogisticRegression().fit(scaler.transform(rows), labels)
+
+    bundle = tmp_path / "bundle.joblib"
+    joblib.dump({"clf": model, "scaler": scaler, "threshold": 0.4,
+                 "feature_names": list(FEATURE_NAMES), "config": {}}, bundle)
+    digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+
+    classifier = FallenClassifier(bundle, digest)
+    classifier.load()
+    assert classifier.threshold == 0.4

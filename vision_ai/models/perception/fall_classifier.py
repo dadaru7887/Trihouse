@@ -46,7 +46,17 @@ class FallenClassifier:
         model = bundle["clf"]
         if int(getattr(model, "n_features_in_", 0)) != len(FEATURE_NAMES):
             raise ValueError(
-                "fallen classifier must take exactly the five contracted features"
+                f"fallen classifier must take exactly the {len(FEATURE_NAMES)} "
+                f"contracted features: {', '.join(FEATURE_NAMES)}"
+            )
+        # Features are passed positionally, so the count matching proves nothing
+        # about the order. A bundle trained with aspect_ratio and centroid_y
+        # swapped loads clean and inverts the strongest signal.
+        names = bundle.get("feature_names")
+        if names is not None and tuple(names) != FEATURE_NAMES:
+            raise ValueError(
+                "fallen classifier bundle has a different feature order: "
+                f"expected {FEATURE_NAMES}, bundle has {tuple(names)}"
             )
         self._scaler = bundle["scaler"]
         self._model = model

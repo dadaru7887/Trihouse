@@ -103,8 +103,9 @@ TRAIN_ATOMS = frozenset({"adjust_gamma", "add_motion_blur", "color_jitter",
 EVAL_ONLY_ATOMS = frozenset(
     atom for atoms in ATOMS_OF_MECHANISM.values() for atom in atoms) - TRAIN_ATOMS
 
-# Helpers with no mechanism of their own; calling one is not a leak.
-UNTRACKED_ATOMS = frozenset({"remap_label_text"})
+# Primitives with no mechanism of their own; calling one is not a leak.
+# Empty today -- every primitive maps to a mechanism.
+UNTRACKED_ATOMS = frozenset()
 
 
 # ---------------------------------------------------------------- training --
@@ -297,7 +298,8 @@ GROUPS = SCENARIOS + ("seen_compound", *STRICTLY_UNSEEN_GROUPS)
 
 _BY_ID = {recipe.id: recipe for recipe in RECIPES}
 
-# Back-compat alias yoloe_trainer checks for: the callables of TRAIN_RECIPES.
+# Back-compat alias: the callables of TRAIN_RECIPES. Read by
+# tests/worker/test_yoloe_backend.py and test_augmentation_behaviour_lock.py.
 MIXED_POOL = [recipe.apply for recipe in TRAIN_RECIPES]
 
 # Which recipes mixed_augmentation currently draws from; configure_pool narrows it.

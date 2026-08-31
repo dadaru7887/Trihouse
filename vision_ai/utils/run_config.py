@@ -11,7 +11,8 @@ class TrainingConfig:
     name: str | None = None
     augmentation: bool = True
     augmentation_seed: int = 42
-    # Scenarios kept out of training, for leave-one-out experiments.
+    # Degradation mechanisms kept out of training, for leave-one-out. Names
+    # come from scenarios.MECHANISMS; holding out a scenario name raises.
     augmentation_holdout: tuple[str, ...] = ()
     epochs: int = 200
     imgsz: int = 640

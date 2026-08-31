@@ -21,6 +21,7 @@ seed 하나를 돌리는 것은 `vision_ai.models.perception.trainer.seed_runner
 """
 
 import argparse
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -92,7 +93,12 @@ def _labels(args: argparse.Namespace) -> int:
 def _preflight(args: argparse.Namespace) -> int:
     from vision_ai.data_loader.perception.audit import DatasetAuditError, audit_dataset
 
+    from vision_ai.utils.device import resolve_device
+
     config = config_from_args(args, run_root=args.output.parent, name=args.output.name)
+    # `evaluate` reads this config back and hands device to ultralytics, which
+    # does not know the "auto" token, so resolve it before writing it down.
+    config = dataclasses.replace(config, device=resolve_device(config.device).resolved)
     try:
         report = audit_dataset(
             config.data, args.output / "preflight", config.posture_manifest,

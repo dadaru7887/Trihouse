@@ -3,13 +3,15 @@
 Every function takes an RGB uint8 image and returns one of the same shape.
 Photometric only -- pixels change, masks and labels do not.
 
-Called from `scenarios.py`, which fixes each one's settings into a recipe;
-nothing here knows which recipes are for training and which for scoring.
-Randomness comes from `rng.augmentation_rng()`, which keeps the training RNG
-untouched.
+Called from `scenarios.py`, which fixes each one's settings into a recipe and
+owns all stacking; nothing here knows which recipes are for training and which
+for scoring.
 
-Effects that stack (`synthesize_*`) apply their parts in this order:
-blur -> darken -> frost -> sensor noise.
+Effects that place or texture something take their randomness from
+`rng.augmentation_rng()`. `gamma_brightness`, `add_gaussian_noise` and
+`color_jitter` draw from the global numpy/torch RNG instead, so callers must
+wrap them in `rng.isolated_augmentation_random_state()` to stay reproducible;
+`scenarios.apply_recipe` and `mixed_augmentation` already do.
 """
 
 import random

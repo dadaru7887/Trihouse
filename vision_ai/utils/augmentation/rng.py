@@ -1,8 +1,10 @@
 """RNG for online augmentation, kept separate from the training RNG.
 
-Called from the training path only:
-    yoloe_trainer.train() -> configure_augmentation_seed(aug_seed)
+Called from every path that augments, training and scoring alike:
+    yoloe_trainer.train()          -> configure_augmentation_seed(aug_seed)
     scenarios.mixed_augmentation() -> isolated_augmentation_random_state()
+    scenarios.apply_recipe/group   -> isolated_augmentation_random_state()
+      (reached from corruption_eval and tooling/augmentation_preview)
 
 Flow: configure_augmentation_seed() fixes a parent stream; each augmentation
 draws a child seed from it, runs, and restores the training RNG state.

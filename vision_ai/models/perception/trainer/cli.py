@@ -1,10 +1,21 @@
 import argparse
 from pathlib import Path
 
-# 축약어를 쓰지 않는다. 여기 적힌 이름이 곧 ultralytics 가 찾는 파일명이다.
+# No shorthand: the name written here is the filename ultralytics looks for.
 DEFAULT_MODEL = "yoloe-26s-seg.pt"
 
 from vision_ai.utils.run_config import TrainingConfig
+
+
+def _mechanisms() -> tuple[str, ...]:
+    """Holdout choices, read from the recipe registry rather than restated.
+
+    Restating them lets argparse reject a mechanism scenarios.py has added, or
+    accept one it has removed until the failure surfaces inside training.
+    """
+    from vision_ai.utils.augmentation.scenarios import MECHANISMS
+
+    return MECHANISMS
 
 
 def add_training_arguments(parser: argparse.ArgumentParser, *, include_run: bool = True) -> None:
@@ -20,8 +31,7 @@ def add_training_arguments(parser: argparse.ArgumentParser, *, include_run: bool
     )
     parser.add_argument("--augmentation-seed", type=int, default=42)
     parser.add_argument(
-        "--holdout", action="append", default=[],
-        choices=("gamma", "motion_blur", "color_jitter", "condensation", "glare", "frost"),
+        "--holdout", action="append", default=[], choices=_mechanisms(),
         help="Degradation mechanism to keep out of training, for leave-one-out. "
              "Removes every recipe that can produce it. Repeatable",
     )
