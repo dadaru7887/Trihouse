@@ -29,6 +29,7 @@ from typing import Iterable
 
 import yaml
 
+
 # Class order the runtime depends on: robot/configs/realtime.yaml sets
 # person_class_id: 1. Swapping these swaps people and obstacles.
 MERGED_CLASSES = ["obstacle", "person"]
@@ -67,10 +68,12 @@ def remap_label_text(text: str, mapping: dict[int, int]) -> str:
     for number, line in enumerate(text.splitlines(), 1):
         if not line.strip():
             continue
-        parts = line.split()
+        parts = line.split()          # "<class> x1 y1 x2 y2 ..."
         source = int(parts[0])
         if source not in mapping:
+            # Skipping an unmapped class would drop the instance silently.
             raise ValueError(f"line {number}: class {source} is outside the mapping")
+        # Only the class id changes; polygon coordinates are untouched.
         lines.append(" ".join([str(mapping[source]), *parts[1:]]))
     return "\n".join(lines) + ("\n" if lines else "")
 
@@ -99,8 +102,9 @@ def plan_splits(episode_stats: dict[str, dict[str, int]], seed: int = 42,
     total_frames = sum(s["frames"] for s in stats.values())
     target = {"valid": total_frames * eval_ratio, "test": total_frames * eval_ratio,
               "train": total_frames * (1 - 2 * eval_ratio)}
+    # Largest episodes first; a big one placed last swings the ratios.
     order = sorted(stats, key=lambda e: (-stats[e]["frames"], e))
-    random.Random(seed).shuffle(order[len(order) // 2:])   # break ties among the small ones
+    random.Random(seed).shuffle(order[len(order) // 2:])   # shuffle the small half by seed
 
     plan: dict[str, list[str]] = {"train": [], "valid": [], "test": []}
     frames = {"train": 0, "valid": 0, "test": 0}
@@ -110,8 +114,11 @@ def plan_splits(episode_stats: dict[str, dict[str, int]], seed: int = 42,
         # An eval split that one episode would fill on its own cannot tell that
         # episode's quirks from real generalisation, so oversized episodes go to
         # train and the eval splits collect several smaller ones.
+        # train always qualifies; an eval split qualifies only while taking
+        # this episode keeps it within OVERSHOOT_LIMIT x its frame target.
         candidates = [s for s in ("train", "valid", "test")
                       if s == "train" or (frames[s] + size) / target[s] <= OVERSHOOT_LIMIT]
+        # Send it to whichever split would stay least full relative to target.
         split = min(candidates, key=lambda s: (frames[s] + size) / target[s])
         plan[split].append(episode)
         frames[split] += stats[episode]["frames"]
@@ -121,6 +128,7 @@ def plan_splits(episode_stats: dict[str, dict[str, int]], seed: int = 42,
     # the fallen-richest episode still sitting in train.
     for split in ("valid", "test"):
         while fallen[split] < min_fallen:
+            # Fallen-richest first; episodes with no fallen frames cannot help.
             donors = sorted(plan["train"], key=lambda e: (-stats[e]["fallen"], e))
             donors = [e for e in donors if stats[e]["fallen"] > 0]
             if not donors:
@@ -168,6 +176,8 @@ def _collect(export_root: Path) -> list[tuple[Path, Path, list[str]]]:
 
 def _posture_of(label_text: str, names: list[str]) -> str:
     """Image-level posture: fallen wins, then standing, else unknown."""
+    # One image may hold several people, but the manifest has one row per
+    # image, so the most severe posture becomes the representative value.
     seen = {names[int(line.split()[0])].strip().lower()
             for line in label_text.splitlines() if line.strip()}
     if "fallen" in seen:
@@ -188,6 +198,8 @@ def merge_exports(exports: dict[str, Path], out_dir: Path, seed: int = 42,
     if not frames:
         raise ValueError("no annotated frames found in the given exports")
 
+    # Count frames and fallen frames per episode before assigning splits;
+    # plan_splits needs both to satisfy the ratio and the fallen floor at once.
     stats: dict[str, dict[str, int]] = {}
     for image, label, names in frames:
         episode = stats.setdefault(episode_of(image.name), {"frames": 0, "fallen": 0})
@@ -204,9 +216,12 @@ def merge_exports(exports: dict[str, Path], out_dir: Path, seed: int = 42,
     manifest_rows, counts = [], {s: 0 for s in ("train", "valid", "test")}
     for image, label, names in frames:
         split = split_of[episode_of(image.name)]
+        # Class order differs per export, so rebuild the export-index ->
+        # merged-index table for each frame. (fallen: 0,1,2 / segmentation: 0,1)
         mapping = {i: NAME_TO_MERGED[n.strip().lower()] for i, n in enumerate(names)
                    if n.strip().lower() in NAME_TO_MERGED}
         text = label.read_text(encoding="utf-8")
+        # Images are copied as-is; augmentation happens at training time.
         (out_dir / split / "images" / image.name).write_bytes(image.read_bytes())
         (out_dir / split / "labels" / label.name).write_text(
             remap_label_text(text, mapping), encoding="utf-8")

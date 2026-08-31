@@ -4,9 +4,10 @@ from pathlib import Path
 import pytest
 
 
-TEST_DIR = Path(__file__).resolve().parent
-RECORDING_NOTEBOOK = TEST_DIR / "camera_recording.ipynb"
-SLICING_NOTEBOOK = TEST_DIR / "records_slicing.ipynb"
+# 노트북은 한 단계 위(tooling/collection/)에 있고 여기에는 시험만 둔다.
+COLLECTION_DIR = Path(__file__).resolve().parents[1]
+RECORDING_NOTEBOOK = COLLECTION_DIR / "camera_recording.ipynb"
+SLICING_NOTEBOOK = COLLECTION_DIR / "records_slicing.ipynb"
 
 
 class MemorySocket:

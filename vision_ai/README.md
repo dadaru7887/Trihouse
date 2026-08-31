@@ -31,6 +31,11 @@ robot/               ★ 로봇에 올라가는 프로세스 — 가중치만 �
     safety/          실행 전 안전 gate 설정
     marker/ media/ object/   그 밖의 로봇 측 vision worker
 
+tooling/             ★ 사람이 손으로 돌리는 준비 도구 — 학습·로봇 어느 쪽도 import 하지 않는다
+    collection/      카메라 녹화 · 구간 슬라이싱 노트북
+    calibration/     QR/ArUco 캘리브레이션 노트북
+    augmentation_preview/   증강 시나리오를 실제 프레임에 걸어 눈으로 확인
+
 upstream/            원본 저장소 보관본 (dev_driving · dev_vision). 아무도 import 하지 않는다
 tests/               worker/ · recovery/
 ```
