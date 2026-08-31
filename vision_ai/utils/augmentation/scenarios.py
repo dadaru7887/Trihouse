@@ -12,10 +12,14 @@ Two disjoint sets:
                         Weakest tier: only the combination is new. Report it
                         as compositional generalisation, never as robustness
                         to unseen corruption.
-        unseen          one effect whose implementation training never runs.
-        unseen_compound those unseen implementations stacked -- nothing in the
-                        image comes from code training executed. Closest to a
-                        real freezer aisle and the strongest claim available.
+        unseen          one effect training never runs: haze, defocus blur,
+                        sensor noise, and a second way of darkening.
+        unseen_compound those stacked -- nothing in the image comes from code
+                        training executed. Closest to a real freezer aisle and
+                        the strongest claim available.
+
+Frost is the one trained mechanism with no unseen counterpart; verify it with
+--holdout frost and score group S4.
 
 Called from:
     yoloe_trainer._default_components() -> configure_pool, mixed_augmentation
@@ -82,7 +86,10 @@ ATOMS_OF_MECHANISM = {
     "color_jitter": ("color_jitter",),
     "condensation": ("add_condensation",),
     "glare": ("add_glare",),
-    "frost": ("generate_frost_overlay_chunky", "generate_frost_overlay_v3"),
+    "frost": ("generate_frost_overlay_chunky",),
+    # Vapour fog, not frost: generate_frost_overlay_v3 draws elongated
+    # filaments, which read as drifting haze rather than crystals on a lens.
+    "haze": ("generate_frost_overlay_v3",),
     "defocus_blur": ("disc_blur", "edge_blur", "gaussian_blur"),
     "sensor_noise": ("poisson_gaussian_noise", "add_gaussian_noise"),
 }
@@ -242,9 +249,10 @@ EVAL_SEEN_COMPOUND = (
 )
 
 # Tier 2 -- unseen: one effect whose implementation training never runs.
-# Frost is the sharpest of these: generate_frost_overlay_v3 builds the same
-# phenomenon from upscaled octave noise instead of stacked blobs, so scoring
-# on it asks whether the model learned frost or learned one blob generator.
+# Every mechanism here is absent from training entirely, so a score is about
+# generalising to a corruption type, not to a second implementation of a
+# trained one. Frost has no second implementation, so frost is verified by
+# holdout (--holdout frost, then score S4) rather than by this tier.
 EVAL_UNSEEN = (
     Recipe("U_lowlight_linear_mild", "unseen", "gamma",
            # Darkens by a linear factor on top of the tone curve, unlike the
@@ -252,16 +260,14 @@ EVAL_UNSEEN = (
            lambda image: gamma_brightness(image, factor=0.6, gamma=1.1)),
     Recipe("U_lowlight_linear_strong", "unseen", "gamma",
            lambda image: gamma_brightness(image, factor=0.4, gamma=1.3)),
-    # Calibrated against the training frost, not copied from it: v3 thresholds
-    # its noise field at 1 - coverage and then damps it toward the corners, so
-    # the same numbers that give chunky heavy frost leave v3 blank. These
-    # settings match S4_frost_rime and S4_frost_thick on how much of the frame
-    # they change (~48% and ~80% of pixels, measured over the valid split), so
-    # a score difference is about the algorithm, not about severity.
-    Recipe("U_frost_crystal_mild", "unseen", "frost",
+    # Warm humid air meeting freezer air, the fog that rolls in when a door
+    # opens. Settings are pushed well past this function's defaults, which
+    # leave the frame untouched; edge_bias below 1 spreads the veil across the
+    # frame instead of banking it in the corners.
+    Recipe("U_haze_vapour_thin", "unseen", "haze",
            lambda image: generate_frost_overlay_v3(image, 0.90, 0.85, seed=None,
                                                    edge_bias=0.8, n_anchors=4)),
-    Recipe("U_frost_crystal_thick", "unseen", "frost",
+    Recipe("U_haze_vapour_dense", "unseen", "haze",
            lambda image: generate_frost_overlay_v3(image, 0.95, 1.0, seed=None,
                                                    edge_bias=0.4, n_anchors=4)),
     Recipe("U_defocus_disc", "unseen", "defocus_blur",
@@ -285,10 +291,10 @@ _UNSEEN_BY_ID = {recipe.id: recipe for recipe in EVAL_UNSEEN}
 # image. The strongest claim available without real degraded footage.
 EVAL_UNSEEN_COMPOUND = (
     _compound("X_freezer_mild", "unseen_compound", _UNSEEN_BY_ID,
-              "U_lowlight_linear_mild", "U_frost_crystal_mild",
+              "U_lowlight_linear_mild", "U_haze_vapour_thin",
               "U_defocus_disc", "U_noise_shot"),
     _compound("X_freezer_strong", "unseen_compound", _UNSEEN_BY_ID,
-              "U_lowlight_linear_strong", "U_frost_crystal_thick",
+              "U_lowlight_linear_strong", "U_haze_vapour_dense",
               "U_defocus_edge", "U_noise_shot"),
     _compound("X_dim_defocus_noise", "unseen_compound", _UNSEEN_BY_ID,
               "U_lowlight_linear_mild", "U_defocus_gaussian", "U_noise_read"),

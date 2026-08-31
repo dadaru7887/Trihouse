@@ -122,27 +122,35 @@ def test_unseen_compounds_only_name_unseen_recipes():
             assert mechanism in unseen, recipe.id
 
 
-@pytest.mark.parametrize("train_id, eval_id", [
-    ("S4_frost_rime", "U_frost_crystal_mild"),
-    ("S4_frost_thick", "U_frost_crystal_thick"),
-])
-def test_the_unseen_frost_matches_the_trained_frost_in_severity(train_id, eval_id):
-    """Both frost implementations must degrade a comparable share of the frame.
+@pytest.mark.parametrize("recipe_id", [r.id for r in
+                                      __import__("vision_ai.utils.augmentation.scenarios",
+                                                 fromlist=["x"]).EVAL_RECIPES])
+def test_every_evaluation_recipe_actually_degrades_the_image(recipe_id):
+    """A scoring recipe that barely changes the frame reports as an easy win.
 
-    Their coverage_ratio scales differ, so equal numbers give wildly unequal
-    pictures; if the eval frost is milder the model scores well for the wrong
-    reason. Tolerance is wide because the two algorithms differ in shape.
+    U_haze_vapour ran at this function's default settings and left the image
+    untouched, so the tier carrying the strongest claim was scoring on clean
+    pixels. Anything under a few percent of the frame is not a condition.
     """
     rng = np.random.default_rng(5)
-    trained, unseen = [], []
-    for _ in range(4):
+    changed = []
+    for _ in range(3):
         image = rng.integers(0, 255, (240, 320, 3), dtype=np.uint8)
-        for recipe_id, bucket in ((train_id, trained), (eval_id, unseen)):
-            scenarios.configure_augmentation_seed(11)
-            out = scenarios.apply_recipe(image.copy(), recipe_id)
-            delta = np.abs(out.astype(np.int16) - image.astype(np.int16)).max(axis=2)
-            bucket.append((delta > 12).mean())
+        scenarios.configure_augmentation_seed(11)
+        out = scenarios.apply_recipe(image.copy(), recipe_id)
+        delta = np.abs(out.astype(np.int16) - image.astype(np.int16)).max(axis=2)
+        changed.append((delta > 12).mean())
+    assert np.mean(changed) > 0.05, (
+        f"{recipe_id} changes only {np.mean(changed):.1%} of the frame")
 
-    assert abs(np.mean(trained) - np.mean(unseen)) < 0.20, (
-        f"{train_id} changes {np.mean(trained):.0%} of pixels but "
-        f"{eval_id} changes {np.mean(unseen):.0%}")
+
+def test_frost_has_no_unseen_counterpart_so_it_is_verified_by_holdout():
+    """Guard the documented gap: nothing outside training produces frost.
+
+    If an unseen frost recipe is ever added, the docstring telling readers to
+    use --holdout frost must be updated with it.
+    """
+    unseen = {r.mechanism for group in scenarios.STRICTLY_UNSEEN_GROUPS
+              for r in scenarios.recipes_in(group)}
+    assert "frost" not in {m for entry in unseen for m in entry.split("+")}
+    assert "frost" in scenarios.MECHANISMS
