@@ -47,7 +47,7 @@ def test_backend_passes_resolved_training_arguments_and_returns_best(tmp_path: P
     backend = YOLOEBackend(
         model_factory=lambda weight: FakeModel(weight, calls),
         trainer_class="trainer-sentinel",
-        augmentation_factory=lambda enabled, seed: [("augmentation", seed)] if enabled else [],
+        augmentation_factory=lambda enabled, seed, holdout=(): [("augmentation", seed)] if enabled else [],
     )
     run_dir = tmp_path / "run"
 
@@ -70,7 +70,7 @@ def test_backend_evaluates_explicit_split_and_normalizes_metrics(tmp_path: Path)
     backend = YOLOEBackend(
         model_factory=lambda weight: FakeModel(weight, calls),
         trainer_class=None,
-        augmentation_factory=lambda enabled, seed: [],
+        augmentation_factory=lambda enabled, seed, holdout=(): [],
     )
     weights = tmp_path / "best.pt"
     weights.write_bytes(b"best")
@@ -157,7 +157,7 @@ def test_the_weight_name_reaches_the_model_factory_unchanged(tmp_path: Path) -> 
     backend = YOLOEBackend(
         model_factory=lambda weight: FakeModel(weight, calls),
         trainer_class=None,
-        augmentation_factory=lambda enabled, seed: [],
+        augmentation_factory=lambda enabled, seed, holdout=(): [],
     )
 
     backend.train(make_config(tmp_path), tmp_path / "run")

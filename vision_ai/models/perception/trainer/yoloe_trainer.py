@@ -102,8 +102,10 @@ def _default_components(
 
     training = _load_augmentation_module(augmentation_source)
 
-    def augmentations(enabled: bool, augmentation_seed: int) -> list[Any]:
+    def augmentations(enabled: bool, augmentation_seed: int,
+                      holdout: tuple[str, ...] = ()) -> list[Any]:
         training.configure_augmentation_seed(augmentation_seed)
+        training.configure_pool(exclude=set(holdout))
         if not enabled:
             return []
         return [training.A.Lambda(image=training.mixed_augmentation, p=1.0, name="mixed_s1_s5")]
@@ -136,7 +138,8 @@ class YOLOEBackend:
         self._ensure_components(config.augmentation_source)
         assert self.model_factory is not None and self.augmentation_factory is not None
         model = self.model_factory(resolve_model(config.model))
-        transforms = self.augmentation_factory(config.augmentation, config.augmentation_seed)
+        transforms = self.augmentation_factory(
+            config.augmentation, config.augmentation_seed, config.augmentation_holdout)
 
         def set_augmentations(trainer: Any) -> None:
             trainer.args.augmentations = transforms

@@ -19,10 +19,6 @@ from torchvision import transforms
 
 from .rng import augmentation_rng as _augmentation_rng
 
-# ============================================================
-# 1. 핵심 증강 함수 (Data_Aug_Test_Combined_merged.ipynb 그대로)
-# ============================================================
-# ── 2. 핵심 증강 함수 ─────────────────────────────────────
 
 def gamma_brightness(image, factor=None, gamma=None):
     """Darken by gamma curve and brightness factor (factor: random 0.1-0.5 if None)."""
@@ -510,7 +506,6 @@ def synthesize_night_frost_textured(image, exposure_ratio, coverage_ratio, tempe
     noisy = poisson_gaussian_noise(frosted, a=a, b=b, seed=seed)
     return noisy
 
-print("핵심 함수 정의 완료")
 
 
 # ============================================================
@@ -609,6 +604,5 @@ def add_motion_blur(image, ksize, angle):
     return cv2.filter2D(image, -1, kernel)
 
 
-print("S1~S5용 헬퍼 함수 정의 완료")
 
 

@@ -19,6 +19,10 @@ def add_training_arguments(parser: argparse.ArgumentParser, *, include_run: bool
         help="S1~S5 온라인 증강. 끄려면 --no-augmentation",
     )
     parser.add_argument("--augmentation-seed", type=int, default=42)
+    parser.add_argument(
+        "--holdout", action="append", default=[], choices=("S1", "S2", "S3", "S4", "S5"),
+        help="Scenario to keep out of training, for leave-one-out. Repeatable",
+    )
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--patience", type=int, default=20)
@@ -49,6 +53,7 @@ def config_from_args(args: argparse.Namespace, **overrides) -> TrainingConfig:
         "run_root": getattr(args, "run_root", Path("runs/lego_worker")),
         "name": getattr(args, "name", None),
         "augmentation": bool(args.augmentation), "augmentation_seed": args.augmentation_seed,
+        "augmentation_holdout": tuple(sorted(set(getattr(args, "holdout", []) or ()))),
         "epochs": args.epochs,
         "imgsz": args.imgsz, "patience": args.patience, "batch": args.batch,
         "device": args.device, "workers": args.workers, "seed": args.seed,

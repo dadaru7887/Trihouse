@@ -11,6 +11,8 @@ class TrainingConfig:
     name: str | None = None
     augmentation: bool = True
     augmentation_seed: int = 42
+    # Scenarios kept out of training, for leave-one-out experiments.
+    augmentation_holdout: tuple[str, ...] = ()
     epochs: int = 200
     imgsz: int = 640
     patience: int = 20
@@ -48,6 +50,7 @@ class TrainingConfig:
 
     def to_dict(self) -> dict[str, Any]:
         values = asdict(self)
+        values["augmentation_holdout"] = list(values["augmentation_holdout"])
         for key in ("data", "run_root", "posture_manifest", "augmentation_source"):
             if values[key] is not None:
                 values[key] = str(values[key])
@@ -56,4 +59,7 @@ class TrainingConfig:
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "TrainingConfig":
         allowed = cls.__dataclass_fields__.keys()
-        return cls(**{key: value for key, value in values.items() if key in allowed})
+        kept = {key: value for key, value in values.items() if key in allowed}
+        if "augmentation_holdout" in kept:
+            kept["augmentation_holdout"] = tuple(kept["augmentation_holdout"])
+        return cls(**kept)

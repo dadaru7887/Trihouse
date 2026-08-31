@@ -32,7 +32,11 @@ from vision_ai.utils.augmentation.rng import (
 )
 
 # yoloe_trainer reaches into this module for these three names.
-__all__ = ["A", "configure_augmentation_seed", "mixed_augmentation", "MIXED_POOL"]
+__all__ = ["A", "configure_augmentation_seed", "configure_pool", "mixed_augmentation",
+           "MIXED_POOL", "SCENARIOS", "SCENARIO_OF", "apply_scenario", "pool_for"]
+
+# Functions mixed_augmentation currently draws from; configure_pool() narrows it.
+_active_pool = None
 
 # 증강 전용 난수 스트림의 기본 seed.
 #
@@ -210,11 +214,54 @@ MIXED_POOL = [
 ]
 
 
-def mixed_augmentation(image, **kwargs):
-    """Pick one function from MIXED_POOL and apply it, on the augmentation RNG."""
+# Which scenario each pool function belongs to. Leave-one-out experiments and
+# per-scenario evaluation both key off this.
+SCENARIO_OF = {
+    "_s1_gamma": "S1", "_s1_motion_blur": "S1", "_s1_color_jitter": "S1",
+    "_s2_condensation": "S2",
+    "_s3_glare": "S3",
+    "_s4_frost": "S4", "_s4_night_frost": "S4",
+    "_s5_lowlight_condensation": "S5", "_s5_lowlight_glare": "S5",
+    "_s5_condensation_glare": "S5", "_s5_lowlight_frost": "S5",
+    "_s5_frost_glare": "S5",
+}
+SCENARIOS = ("S1", "S2", "S3", "S4", "S5")
+
+
+def pool_for(exclude=frozenset()):
+    """Return MIXED_POOL without the named scenarios' functions."""
+    unknown = set(exclude) - set(SCENARIOS)
+    if unknown:
+        raise ValueError(f"unknown scenario(s): {sorted(unknown)}")
+    # Untagged entries (a test double, a drop-in pool) cannot be excluded by
+    # scenario, so they stay.
+    pool = [fn for fn in MIXED_POOL if SCENARIO_OF.get(fn.__name__) not in exclude]
+    if not pool:
+        raise ValueError("holding out every scenario leaves an empty pool")
+    return pool
+
+
+def apply_scenario(image, scenario):
+    """Apply one scenario to an image, for per-corruption evaluation."""
+    if scenario not in SCENARIOS:
+        raise ValueError(f"unknown scenario: {scenario}")
+    choices = [fn for fn in MIXED_POOL if SCENARIO_OF.get(fn.__name__) == scenario]
+    if not choices:
+        raise ValueError(f"no functions tagged {scenario} in the pool")
     with isolated_augmentation_random_state():
-        fn = random.choice(MIXED_POOL)
-        return fn(image)
+        return random.choice(choices)(image)
 
 
-print(f"MIXED_POOL 구성 완료: 총 {len(MIXED_POOL)}개 증강 함수 (S1~S5 전부 포함)")
+def mixed_augmentation(image, **kwargs):
+    """Pick one function from the active pool and apply it, on the augmentation RNG."""
+    with isolated_augmentation_random_state():
+        return random.choice(_active_pool or MIXED_POOL)(image)
+
+
+def configure_pool(exclude=frozenset()):
+    """Set which scenarios mixed_augmentation may draw from, for leave-one-out."""
+    global _active_pool
+    _active_pool = pool_for(exclude)
+    return _active_pool
+
+

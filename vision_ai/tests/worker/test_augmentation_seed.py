@@ -56,9 +56,13 @@ def test_training_frost_augmentations_do_not_download_remote_textures() -> None:
         assert result.shape == image.shape
 
 
-def test_mixed_augmentation_does_not_consume_model_torch_rng() -> None:
+def test_mixed_augmentation_does_not_consume_model_torch_rng(monkeypatch) -> None:
     module = load_training_module()
-    module.MIXED_POOL = [lambda image: np.full_like(image, int(torch.rand(1).item() * 255))]
+    # monkeypatch so the swapped pool is put back; the module is a singleton and
+    # a leaked pool breaks every later test that reads it.
+    monkeypatch.setattr(module, "MIXED_POOL",
+                        [lambda image: np.full_like(image, int(torch.rand(1).item() * 255))])
+    monkeypatch.setattr(module, "_active_pool", None)
     image = np.zeros((4, 4, 3), dtype=np.uint8)
 
     module.configure_augmentation_seed(42)
