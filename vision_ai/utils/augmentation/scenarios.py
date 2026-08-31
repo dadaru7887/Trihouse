@@ -76,16 +76,13 @@ class Recipe:
 # implementation of a phenomenon has to be listed here -- including the ones
 # reserved for evaluation.
 ATOMS_OF_MECHANISM = {
-    "gamma": ("adjust_gamma", "gamma_brightness", "synthesize_low_light"),
-    "motion_blur": ("add_motion_blur", "motion_blur"),
+    "gamma": ("adjust_gamma", "gamma_brightness"),
+    "motion_blur": ("add_motion_blur",),
     "color_jitter": ("color_jitter",),
     "condensation": ("add_condensation",),
     "glare": ("add_glare",),
-    "frost": ("generate_frost_overlay_chunky", "generate_frost_overlay_v3",
-              "generate_frost_overlay_textured", "synthesize_night_frost",
-              "synthesize_night_frost_chunky", "synthesize_night_frost_textured"),
-    "defocus_blur": ("disc_blur", "edge_blur", "gaussian_blur", "scaled_blur",
-                     "random_blur"),
+    "frost": ("generate_frost_overlay_chunky", "generate_frost_overlay_v3"),
+    "defocus_blur": ("disc_blur", "edge_blur", "gaussian_blur"),
     "sensor_noise": ("poisson_gaussian_noise", "add_gaussian_noise"),
 }
 
@@ -184,59 +181,75 @@ SCENARIOS = ("S1", "S2", "S3", "S4")
 
 
 # ------------------------------------------------------------ evaluation --
-# Never drawn during training. Two tiers, each answering a different question.
+# Never drawn during training. Three tiers, each answering a different question.
 
-def _compound(*steps):
-    """Chain single effects left to right into one compound recipe body."""
+_TRAIN_BY_ID = {recipe.id: recipe for recipe in TRAIN_RECIPES}
+
+
+def _chain(registry, *recipe_ids):
+    """Apply the named recipes in order, so a compound is built from real recipes.
+
+    Compounds hold no parameters of their own: change a recipe and every
+    compound using it changes with it.
+    """
+    parts = [registry[rid] for rid in recipe_ids]
+
     def run(image):
-        for step in steps:
-            image = step(image)
+        for part in parts:
+            image = part(image)
         return image
     return run
 
 
-# Tier 1 -- seen_compound. Every effect here also appears in TRAIN_RECIPES;
-# only the stacking is new. Motion blur goes last because a moving robot
-# smears whatever the lens already has on it.
+def _mechanisms_of(registry, recipe_ids):
+    """Join the mechanisms of the named recipes, for the compound's own label."""
+    return "+".join(sorted({registry[rid].mechanism for rid in recipe_ids}))
+
+
+def _compound(name, group, registry, *recipe_ids):
+    """Build one compound recipe out of existing recipes from `registry`."""
+    return Recipe(name, group, _mechanisms_of(registry, recipe_ids),
+                  _chain(registry, *recipe_ids))
+
+
+# Tier 1 -- seen_compound: training recipes stacked. Every effect here is one
+# training already runs, so only the ordering is new; motion blur goes last
+# because a moving robot smears whatever the lens already has on it.
+# Read it as compositional generalisation, never as unseen-corruption robustness.
 EVAL_SEEN_COMPOUND = (
-    Recipe("C_lowlight_condensation_mild", "seen_compound", "gamma+condensation+motion_blur",
-           _compound(lambda i: adjust_gamma(i, 0.65), _condensation(0.35, 0.18),
-                     lambda i: add_motion_blur(i, 45, 18))),
-    Recipe("C_lowlight_condensation_strong", "seen_compound", "gamma+condensation+motion_blur",
-           _compound(lambda i: adjust_gamma(i, 0.55), _condensation(0.80, 0.34),
-                     lambda i: add_motion_blur(i, 70, 18))),
-    Recipe("C_lowlight_glare_mild", "seen_compound", "gamma+glare+motion_blur",
-           _compound(lambda i: adjust_gamma(i, 0.65), _glare(0.45, 0.25, _at(0.5, 0.30)),
-                     lambda i: add_motion_blur(i, 45, 18))),
-    Recipe("C_lowlight_glare_strong", "seen_compound", "gamma+glare+motion_blur",
-           _compound(lambda i: adjust_gamma(i, 0.55), _glare(0.65, 0.55, _at(0.5, 0.85)),
-                     lambda i: add_motion_blur(i, 70, 18))),
-    Recipe("C_condensation_glare_mild", "seen_compound", "condensation+glare+motion_blur",
-           _compound(_condensation(0.55, 0.24, _at(0.5, 0.12)),
-                     _glare(0.45, 0.25, _at(0.5, 0.30)),
-                     lambda i: add_motion_blur(i, 45, 18))),
-    Recipe("C_condensation_glare_strong", "seen_compound", "condensation+glare+motion_blur",
-           _compound(_condensation(0.42, 0.48), _glare(0.65, 0.55, _at(0.5, 0.85)),
-                     lambda i: add_motion_blur(i, 70, 18))),
-    Recipe("C_lowlight_frost_mild", "seen_compound", "gamma+frost+motion_blur",
-           _compound(lambda i: adjust_gamma(i, 0.65), _frost(0.15, 0.30),
-                     lambda i: add_motion_blur(i, 45, 18))),
-    Recipe("C_lowlight_frost_strong", "seen_compound", "gamma+frost+motion_blur",
-           _compound(lambda i: adjust_gamma(i, 0.55), _frost(0.45, 0.55),
-                     lambda i: add_motion_blur(i, 70, 18))),
-    Recipe("C_frost_glare_mild", "seen_compound", "frost+glare+motion_blur",
-           _compound(_frost(0.15, 0.30), _glare(0.45, 0.25, _at(0.5, 0.30)),
-                     lambda i: add_motion_blur(i, 45, 18))),
-    Recipe("C_frost_glare_strong", "seen_compound", "frost+glare+motion_blur",
-           _compound(_frost(0.45, 0.55), _glare(0.65, 0.55, _at(0.5, 0.85)),
-                     lambda i: add_motion_blur(i, 70, 18))),
+    _compound("C_lowlight_condensation_mild", "seen_compound", _TRAIN_BY_ID,
+              "S1_gamma", "S2_condensation_light_film", "S1_motion_blur_short"),
+    _compound("C_lowlight_condensation_strong", "seen_compound", _TRAIN_BY_ID,
+              "S1_gamma", "S2_condensation_heavy_film", "S1_motion_blur_long"),
+    _compound("C_lowlight_glare_mild", "seen_compound", _TRAIN_BY_ID,
+              "S1_gamma", "S3_glare_ceiling_mild", "S1_motion_blur_short"),
+    _compound("C_lowlight_glare_strong", "seen_compound", _TRAIN_BY_ID,
+              "S1_gamma", "S3_glare_floor_strong", "S1_motion_blur_long"),
+    _compound("C_condensation_glare_mild", "seen_compound", _TRAIN_BY_ID,
+              "S2_condensation_top_bank", "S3_glare_ceiling_mild", "S1_motion_blur_short"),
+    _compound("C_condensation_glare_strong", "seen_compound", _TRAIN_BY_ID,
+              "S2_condensation_dense_patch", "S3_glare_floor_strong", "S1_motion_blur_long"),
+    _compound("C_lowlight_frost_mild", "seen_compound", _TRAIN_BY_ID,
+              "S1_gamma", "S4_frost_rime", "S1_motion_blur_short"),
+    _compound("C_lowlight_frost_strong", "seen_compound", _TRAIN_BY_ID,
+              "S1_gamma", "S4_frost_thick", "S1_motion_blur_long"),
+    _compound("C_frost_glare_mild", "seen_compound", _TRAIN_BY_ID,
+              "S4_frost_rime", "S3_glare_ceiling_mild", "S1_motion_blur_short"),
+    _compound("C_frost_glare_strong", "seen_compound", _TRAIN_BY_ID,
+              "S4_frost_thick", "S3_glare_floor_strong", "S1_motion_blur_long"),
 )
 
-# Tier 2 -- unseen: implementations training never runs. Frost is the sharpest
-# of these: generate_frost_overlay_v3 builds the same phenomenon from upscaled
-# octave noise instead of stacked blobs, so scoring on it asks whether the
-# model learned frost or learned one blob generator.
+# Tier 2 -- unseen: one effect whose implementation training never runs.
+# Frost is the sharpest of these: generate_frost_overlay_v3 builds the same
+# phenomenon from upscaled octave noise instead of stacked blobs, so scoring
+# on it asks whether the model learned frost or learned one blob generator.
 EVAL_UNSEEN = (
+    Recipe("U_lowlight_linear_mild", "unseen", "gamma",
+           # Darkens by a linear factor on top of the tone curve, unlike the
+           # pure LUT of adjust_gamma used in training.
+           lambda image: gamma_brightness(image, factor=0.6, gamma=1.1)),
+    Recipe("U_lowlight_linear_strong", "unseen", "gamma",
+           lambda image: gamma_brightness(image, factor=0.4, gamma=1.3)),
     Recipe("U_frost_crystal_mild", "unseen", "frost",
            lambda image: generate_frost_overlay_v3(image, 0.15, 0.30, seed=None)),
     Recipe("U_frost_crystal_thick", "unseen", "frost",
@@ -255,25 +268,20 @@ EVAL_UNSEEN = (
            lambda image: poisson_gaussian_noise(image, a=0.02, b=0.01, seed=None)),
 )
 
-# Tier 3 -- unseen_compound: the freezer condition (dim, frosted, out of
-# focus, noisy) assembled entirely from implementations training never ran.
-# gamma_brightness darkens by a linear factor on top of the tone curve, unlike
-# the pure LUT of adjust_gamma used in training.
+_UNSEEN_BY_ID = {recipe.id: recipe for recipe in EVAL_UNSEEN}
+
+# Tier 3 -- unseen_compound: the freezer condition (dim, frosted, out of focus,
+# noisy) built only from tier-2 recipes, so no code training ran touches the
+# image. The strongest claim available without real degraded footage.
 EVAL_UNSEEN_COMPOUND = (
-    Recipe("X_freezer_mild", "unseen_compound", "gamma+frost+defocus_blur+sensor_noise",
-           _compound(lambda i: gamma_brightness(i, factor=0.6, gamma=1.1),
-                     lambda i: generate_frost_overlay_v3(i, 0.15, 0.30, seed=None),
-                     lambda i: disc_blur(i, strength=1.0),
-                     lambda i: poisson_gaussian_noise(i, a=0.02, b=0.01, seed=None))),
-    Recipe("X_freezer_strong", "unseen_compound", "gamma+frost+defocus_blur+sensor_noise",
-           _compound(lambda i: gamma_brightness(i, factor=0.4, gamma=1.3),
-                     lambda i: generate_frost_overlay_v3(i, 0.45, 0.55, seed=None),
-                     lambda i: edge_blur(i, strength=1.5),
-                     lambda i: poisson_gaussian_noise(i, a=0.04, b=0.02, seed=None))),
-    Recipe("X_dim_defocus_noise", "unseen_compound", "gamma+defocus_blur+sensor_noise",
-           _compound(lambda i: gamma_brightness(i, factor=0.5, gamma=0.9),
-                     lambda i: gaussian_blur(i, strength=1.4),
-                     lambda i: add_gaussian_noise(i, 12.0))),
+    _compound("X_freezer_mild", "unseen_compound", _UNSEEN_BY_ID,
+              "U_lowlight_linear_mild", "U_frost_crystal_mild",
+              "U_defocus_disc", "U_noise_shot"),
+    _compound("X_freezer_strong", "unseen_compound", _UNSEEN_BY_ID,
+              "U_lowlight_linear_strong", "U_frost_crystal_thick",
+              "U_defocus_edge", "U_noise_shot"),
+    _compound("X_dim_defocus_noise", "unseen_compound", _UNSEEN_BY_ID,
+              "U_lowlight_linear_mild", "U_defocus_gaussian", "U_noise_read"),
 )
 
 EVAL_RECIPES = EVAL_SEEN_COMPOUND + EVAL_UNSEEN + EVAL_UNSEEN_COMPOUND

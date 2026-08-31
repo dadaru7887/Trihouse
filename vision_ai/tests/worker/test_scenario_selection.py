@@ -74,3 +74,38 @@ def test_applying_an_unknown_group_is_refused():
     image = np.zeros((10, 10, 3), dtype="uint8")
     with pytest.raises(ValueError, match="unknown group"):
         scenarios.apply_group(image, "S9")
+
+
+def test_a_compound_is_built_from_the_training_recipes_it_names():
+    """Editing a training recipe must change every compound that uses it.
+
+    Compounds that copied their parameters instead would silently drift.
+    """
+    image = np.random.default_rng(1).integers(0, 255, (48, 64, 3), dtype=np.uint8)
+    original = scenarios._TRAIN_BY_ID["S4_frost_thick"].apply
+
+    scenarios.configure_augmentation_seed(3)
+    before = scenarios.apply_recipe(image, "C_lowlight_frost_strong")
+    try:
+        # Swap the training recipe body for a no-op.
+        object.__setattr__(scenarios._TRAIN_BY_ID["S4_frost_thick"], "apply",
+                           lambda img: img)
+        scenarios.configure_augmentation_seed(3)
+        after = scenarios.apply_recipe(image, "C_lowlight_frost_strong")
+    finally:
+        object.__setattr__(scenarios._TRAIN_BY_ID["S4_frost_thick"], "apply", original)
+
+    assert not np.array_equal(before, after)
+
+
+def test_seen_compounds_only_name_training_recipes():
+    for recipe in scenarios.recipes_in("seen_compound"):
+        for mechanism in recipe.mechanism.split("+"):
+            assert mechanism in scenarios.MECHANISMS, recipe.id
+
+
+def test_unseen_compounds_only_name_unseen_recipes():
+    unseen = {r.mechanism for r in scenarios.recipes_in("unseen")}
+    for recipe in scenarios.recipes_in("unseen_compound"):
+        for mechanism in recipe.mechanism.split("+"):
+            assert mechanism in unseen, recipe.id

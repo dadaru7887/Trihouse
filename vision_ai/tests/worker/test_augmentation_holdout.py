@@ -3,8 +3,8 @@ primitives actually execute, so a hidden dispatch cannot smuggle an effect in.
 
     pytest vision_ai/tests/worker/test_augmentation_holdout.py
 
-Static import checks are not enough here: random_blur reaches disc_blur through
-a dict lookup, which no import graph shows.
+Static import checks are not enough: an effect reached through a dict lookup or
+a default argument shows up in no import graph.
 """
 
 from __future__ import annotations
@@ -47,10 +47,6 @@ def atoms_used(monkeypatch):
             # as module globals at call time, so patch that namespace too.
             if hasattr(S, name):
                 monkeypatch.setattr(S, name, wrapped)
-        # BLUR_FUNCS captured its values before patching.
-        monkeypatch.setattr(P, "BLUR_FUNCS",
-                            {k: getattr(P, v.__name__) for k, v in P.BLUR_FUNCS.items()})
-
     instrument()
 
     def run(recipes):

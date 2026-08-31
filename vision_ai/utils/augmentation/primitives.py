@@ -11,14 +11,11 @@ Effects that stack (`synthesize_*`) apply their parts in this order:
 blur -> darken -> frost -> sensor noise.
 """
 
-import io
 import random
 
 import cv2
 import numpy as np
-import requests
-import torch
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageFilter
 from torchvision import transforms
 
 from .rng import augmentation_rng as _augmentation_rng
@@ -46,21 +43,6 @@ def poisson_gaussian_noise(image, a=0.02, b=0.01, seed=None):
     return np.clip(noisy * 255.0, 0, 255).astype(np.uint8)
 
 
-def synthesize_low_light(image, exposure_ratio=None, gamma=None, a=0.02, b=0.01, seed=None):
-    """Low light on its own: darken, then sensor noise.
-
-    `exposure_ratio` scales brightness (random 0.15-0.55 if None); `gamma`
-    bends the tone curve (random 0.8-1.3 if None). To combine with frost use
-    `synthesize_night_frost`, which noises after the frost instead.
-    """
-    if exposure_ratio is None:
-        exposure_ratio = np.random.uniform(0.15, 0.55)
-    if gamma is None:
-        gamma = np.random.uniform(0.8, 1.3)
-    dark = gamma_brightness(image, factor=exposure_ratio, gamma=gamma)
-    return poisson_gaussian_noise(dark, a=a, b=b, seed=seed)
-
-
 # Four blurs. Every radius scales with the shorter side, so the effect is
 # the same fraction of the frame at any resolution.
 
@@ -82,24 +64,6 @@ def disc_blur(image, strength=1.0):
     return cv2.filter2D(image, -1, kernel)
 
 
-def motion_blur(image, strength=1.0, angle=None):
-    """Smear along one direction. Length = 1.2% of the shorter side; random angle if None."""
-    h, w = image.shape[:2]
-    length = max(3, int(min(h, w) * 0.012 * strength))
-    if length % 2 == 0:
-        length += 1
-    if angle is None:
-        angle = np.random.uniform(0, 180)
-    kernel = np.zeros((length, length), dtype=np.float32)
-    kernel[length // 2, :] = 1.0
-    M = cv2.getRotationMatrix2D((length / 2, length / 2), angle, 1)
-    kernel = cv2.warpAffine(kernel, M, (length, length))
-    kernel_sum = kernel.sum()
-    if kernel_sum > 0:
-        kernel /= kernel_sum
-    return cv2.filter2D(image, -1, kernel)
-
-
 def edge_blur(image, strength=1.0, edge_bias=1.8):
     """Sharp centre fading to blurred edges. `edge_bias` > 1 keeps the centre wider."""
     h, w = image.shape[:2]
@@ -113,31 +77,6 @@ def edge_blur(image, strength=1.0, edge_bias=1.8):
     mask = np.clip(dist ** edge_bias, 0, 1)[..., None]
     out = image.astype(np.float32) * (1 - mask) + blurred * mask
     return np.clip(out, 0, 255).astype(np.uint8)
-
-
-BLUR_FUNCS = {
-    "gaussian": gaussian_blur,
-    "disc": disc_blur,
-    "motion": motion_blur,
-    "edge": edge_blur,
-}
-
-
-def random_blur(image, strength_range=(0.8, 1.6), types=None):
-    """Draw one blur type and one strength, then apply it.
-
-    `types` defaults to disc and motion; pass a list to widen it to any key
-    in BLUR_FUNCS.
-    """
-    types = types or ["disc", "motion"]
-    choice = np.random.choice(types)
-    strength = np.random.uniform(*strength_range)
-    return BLUR_FUNCS[choice](image, strength=strength)
-
-
-def scaled_blur(image, strength=1.0):
-    """Alias for `gaussian_blur`, kept for a uniform strength argument."""
-    return gaussian_blur(image, strength=strength)
 
 
 def generate_frost_overlay_v3(image, coverage_ratio, temperature_delta, seed=None,
@@ -230,27 +169,6 @@ def generate_frost_overlay_v3(image, coverage_ratio, temperature_delta, seed=Non
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
-def synthesize_night_frost(image, exposure_ratio, coverage_ratio, temperature_delta,
-                            gamma=None, blur_strength=0.0, blur_fn=None, a=0.02, b=0.01, seed=None):
-    """Low light plus fine window frost: blur -> darken -> frost -> noise.
-
-    `blur_fn` defaults to `random_blur`, so the blur shape varies per call.
-    """
-    blur_fn = blur_fn or random_blur
-    if gamma is None:
-        gamma = np.random.uniform(0.8, 1.3)
-    out = image
-    if blur_strength > 0:
-        out = blur_fn(out, strength_range=(blur_strength, blur_strength)) if blur_fn is random_blur else blur_fn(out, strength=blur_strength)
-    dark = gamma_brightness(out, factor=exposure_ratio, gamma=gamma)
-    frosted = generate_frost_overlay_v3(
-        dark, coverage_ratio, temperature_delta,
-        seed=seed, ambient_brightness=float(dark.mean())
-    )
-    noisy = poisson_gaussian_noise(frosted, a=a, b=b, seed=seed)
-    return noisy
-
-
 def generate_frost_overlay_chunky(image, coverage_ratio, temperature_delta, seed=None,
                                    ambient_brightness=None, n_blobs=None,
                                    blob_size_range=(0.03, 0.12), roughness=0.35,
@@ -340,185 +258,6 @@ def generate_frost_overlay_chunky(image, coverage_ratio, temperature_delta, seed
 
     out = image.astype(np.float32) * (1 - alpha) + frost_color * alpha
     return np.clip(out, 0, 255).astype(np.uint8)
-
-
-def synthesize_night_frost_chunky(image, exposure_ratio, coverage_ratio, temperature_delta,
-                                   gamma=None, blur_strength=0.0, blur_fn=None,
-                                   n_blobs=None, blob_size_range=(0.03, 0.12), roughness=0.35,
-                                   a=0.02, b=0.01, seed=None):
-    """Low light plus chunky frost: blur -> darken -> frost -> noise.
-
-    `n_blobs` overrides the count derived from `coverage_ratio`.
-    """
-    blur_fn = blur_fn or random_blur
-    if gamma is None:
-        gamma = np.random.uniform(0.8, 1.3)
-    out = image
-    if blur_strength > 0:
-        out = blur_fn(out, strength_range=(blur_strength, blur_strength)) if blur_fn is random_blur else blur_fn(out, strength=blur_strength)
-    dark = gamma_brightness(out, factor=exposure_ratio, gamma=gamma)
-    frosted = generate_frost_overlay_chunky(
-        dark, coverage_ratio, temperature_delta,
-        seed=seed, ambient_brightness=float(dark.mean()),
-        n_blobs=n_blobs, blob_size_range=blob_size_range, roughness=roughness,
-    )
-    noisy = poisson_gaussian_noise(frosted, a=a, b=b, seed=seed)
-    return noisy
-
-
-# Frost built from photographic texture. The procedural mask still controls
-# shape and coverage; the photo supplies only the crystal detail inside it.
-# Both are Unsplash-licensed macro shots and need no attribution.
-FROST_TEXTURE_URLS = [
-    "https://images.unsplash.com/photo-1762172189607-91ee2d5f1e34?fm=jpg&q=80&w=2000&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1679287300349-e3ac52f291f1?fm=jpg&q=80&w=2000&auto=format&fit=crop",
-]
-
-_frost_texture_cache = {}
-
-
-def _load_frost_texture(url):
-    """Fetch and cache a frost texture as greyscale. The only network call here."""
-    if url not in _frost_texture_cache:
-        resp = requests.get(url, timeout=20)
-        resp.raise_for_status()
-        tex = Image.open(io.BytesIO(resp.content)).convert("L")
-        _frost_texture_cache[url] = tex
-    return _frost_texture_cache[url]
-
-
-def _sample_texture_patch(h, w, seed=None):
-    """Return an (h, w) detail patch from a frost photo, normalised to 0-1.
-
-    Mirror-tiled 2x2 to hide seams, then randomly cropped and scaled so
-    repeated calls do not show the same patch.
-    """
-    rng = _augmentation_rng(seed)
-    url = FROST_TEXTURE_URLS[rng.integers(0, len(FROST_TEXTURE_URLS))]
-    tex = _load_frost_texture(url)
-    tw, th = tex.size
-
-    tile = Image.new("L", (tw * 2, th * 2))
-    tile.paste(tex, (0, 0))
-    tile.paste(ImageOps.mirror(tex), (tw, 0))
-    tile.paste(ImageOps.flip(tex), (0, th))
-    tile.paste(ImageOps.mirror(ImageOps.flip(tex)), (tw, th))
-
-    scale = rng.uniform(0.6, 1.4)
-    need_w, need_h = int(w / scale) + 1, int(h / scale) + 1
-    max_x = max(1, tile.width - need_w)
-    max_y = max(1, tile.height - need_h)
-    x0 = int(rng.integers(0, max_x)) if max_x > 1 else 0
-    y0 = int(rng.integers(0, max_y)) if max_y > 1 else 0
-    crop = tile.crop((x0, y0, x0 + need_w, y0 + need_h)).resize((w, h), Image.BICUBIC)
-
-    arr = np.asarray(crop).astype(np.float32) / 255.0
-    lo, hi = np.percentile(arr, 2), np.percentile(arr, 98)
-    arr = np.clip((arr - lo) / max(hi - lo, 1e-6), 0, 1)
-    return arr
-
-
-def generate_frost_overlay_textured(image, coverage_ratio, temperature_delta, seed=None,
-                                     ambient_brightness=None, n_blobs=None,
-                                     blob_size_range=(0.03, 0.12), roughness=0.35,
-                                     n_anchors=None, work_size=900, texture_strength=0.7):
-    """Chunky blob mask for shape, photographic texture for crystal detail.
-
-    `texture_strength` 0-1 mixes the two: 0 is the plain chunky mask,
-    1 lets the photo fully modulate the alpha. Needs network access on first
-    call to fetch the texture.
-    """
-    rng = _augmentation_rng(seed)
-    h, w = image.shape[:2]
-
-    scale = min(1.0, work_size / max(h, w))
-    wh, ww = max(1, int(round(h * scale))), max(1, int(round(w * scale)))
-    diag = float(np.sqrt(wh ** 2 + ww ** 2))
-
-    if n_anchors is None:
-        n_anchors = int(rng.integers(1, 3))
-    corners = np.array([[0, 0], [0, ww], [wh, 0], [wh, ww]], dtype=np.float32)
-    anchor_idx = rng.choice(4, size=n_anchors, replace=False)
-    anchors = corners[anchor_idx]
-
-    if n_blobs is None:
-        n_blobs = int(70 + coverage_ratio * 450)   # same count rule as the chunky mask
-
-    mask_small = np.zeros((wh, ww), dtype=np.float32)
-    for _ in range(n_blobs):
-        anchor = anchors[rng.integers(0, len(anchors))]
-        spread = diag * (0.15 + 0.55 * coverage_ratio)
-        cy = float(np.clip(anchor[0] + rng.normal(0, spread), 0, wh - 1))
-        cx = float(np.clip(anchor[1] + rng.normal(0, spread), 0, ww - 1))
-        radius = diag * rng.uniform(*blob_size_range)
-        max_r = radius * (1.0 + roughness)
-
-        y0 = max(0, int(cy - max_r - 2))
-        y1 = min(wh, int(cy + max_r + 2))
-        x0 = max(0, int(cx - max_r - 2))
-        x1 = min(ww, int(cx + max_r + 2))
-        if y1 <= y0 or x1 <= x0:
-            continue
-
-        yy_l, xx_l = np.mgrid[y0:y1, x0:x1].astype(np.float32)
-        dy = yy_l - cy
-        dx = xx_l - cx
-        dist = np.sqrt(dy ** 2 + dx ** 2)
-        theta = np.arctan2(dy, dx)
-        wobble = 1.0 + roughness * (
-            0.5 * np.sin(theta * 3 + rng.uniform(0, 6.28))
-            + 0.3 * np.sin(theta * 7 + rng.uniform(0, 6.28))
-            + 0.2 * np.sin(theta * 11 + rng.uniform(0, 6.28))
-        )
-        local_radius = radius * wobble
-        blob = np.clip(1.0 - dist / (local_radius + 1e-6), 0, 1) ** 1.1   # falloff exponent
-        mask_small[y0:y1, x0:x1] = np.maximum(mask_small[y0:y1, x0:x1], blob)
-
-    mask_img = Image.fromarray((mask_small * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.0))
-    mask_img = mask_img.resize((w, h), Image.BICUBIC)
-    mask = np.asarray(mask_img).astype(np.float32) / 255.0
-
-    texture = _sample_texture_patch(h, w, seed=seed)
-
-    combined_alpha = mask * (1 - texture_strength + texture_strength * texture)
-    combined_alpha = np.clip(combined_alpha, 0, 1)
-
-    if ambient_brightness is None:
-        ambient_brightness = float(image.mean())
-    # Frost stays brighter than the scene by 2.3x or +90, whichever is larger,
-    # so it remains visible on a dark frame.
-    frost_tone = float(np.clip(max(ambient_brightness * 2.3, ambient_brightness + 90), 80, 250))
-    tone_rgb = np.array(
-        [frost_tone - 4, frost_tone - 1, min(frost_tone + 10, 255)], dtype=np.float32
-    )
-
-    opacity = float(np.clip(temperature_delta, 0, 1) * 0.95)
-    alpha = (combined_alpha * opacity)[..., None]
-    shade = 0.75 + 0.4 * texture
-    frost_color = np.broadcast_to(tone_rgb, image.shape).astype(np.float32) * shade[..., None]
-
-    out = image.astype(np.float32) * (1 - alpha) + frost_color * alpha
-    return np.clip(out, 0, 255).astype(np.uint8)
-
-
-def synthesize_night_frost_textured(image, exposure_ratio, coverage_ratio, temperature_delta,
-                                     gamma=None, blur_strength=0.0, blur_fn=None,
-                                     a=0.02, b=0.01, seed=None):
-    """Low light plus textured frost: blur -> darken -> frost -> noise."""
-    blur_fn = blur_fn or random_blur
-    if gamma is None:
-        gamma = np.random.uniform(0.8, 1.3)
-    out = image
-    if blur_strength > 0:
-        out = blur_fn(out, strength_range=(blur_strength, blur_strength)) if blur_fn is random_blur else blur_fn(out, strength=blur_strength)
-    dark = gamma_brightness(out, factor=exposure_ratio, gamma=gamma)
-    frosted = generate_frost_overlay_textured(
-        dark, coverage_ratio, temperature_delta,
-        seed=seed, ambient_brightness=float(dark.mean())
-    )
-    noisy = poisson_gaussian_noise(frosted, a=a, b=b, seed=seed)
-    return noisy
-
 
 
 # Effects the S1-S5 recipes in scenarios.py call directly. Each takes its

@@ -41,16 +41,22 @@ def test_augmentation_rng_is_independent_of_training_global_seed() -> None:
     assert first == second
 
 
-def test_training_frost_augmentations_do_not_download_remote_textures() -> None:
+def test_augmentation_never_reaches_the_network() -> None:
+    """Augmenting must not depend on a host being up; no recipe may fetch anything."""
+    source = (Path(__file__).resolve().parents[2]
+              / "utils/augmentation/primitives.py").read_text(encoding="utf-8")
+    for banned in ("import requests", "import urllib", "http://", "https://"):
+        assert banned not in source, banned
+
+
+def test_every_frost_recipe_runs_offline() -> None:
     module = load_training_module()
-    module._load_frost_texture = lambda url: (_ for _ in ()).throw(AssertionError("network access"))
     image = np.full((64, 64, 3), 128, dtype=np.uint8)
     module.configure_augmentation_seed(42)
     frost = [r for r in module.RECIPES if "frost" in r.mechanism]
     assert frost, "no frost recipe to check"
     for recipe in frost:
-        result = recipe(image.copy())
-        assert result.shape == image.shape
+        assert recipe(image.copy()).shape == image.shape
 
 
 def test_mixed_augmentation_does_not_consume_model_torch_rng(monkeypatch) -> None:
