@@ -59,19 +59,26 @@ def _resolve(root: Path, value: str | None) -> Path | None:
 # different depth, and that shows up as "no data" rather than an error.
 # vision_ai/utils/config_loader.py -> parents[4] is the repo root.
 # Pass `project_root` explicitly for a config kept outside the repo.
-REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
+# vision_ai/utils/config_loader.py -> vision_ai/utils -> vision_ai -> repository.
+# Relative paths in an experiment config resolve against this, and pipeline.py
+# builds the default config path from it, so counting the levels wrong sends
+# both outside the checkout. Holds in the container too: WORKDIR /opt/trihouse
+# with vision_ai copied under it.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_experiment_config(
     path: Path | str,
     project_root: Path | str | None = None,
     data_override: Path | str | None = None,
+    posture_manifest_override: Path | str | None = None,
 ) -> ExperimentConfig:
-    """Load a config; `data_override` beats the config's dataset.data_yaml.
+    """Load a config; the overrides beat the config's dataset section.
 
     The dataset path changes per experiment, so it must be passable as an
     argument instead of by editing the file. Priority: argument > config, with
-    no default.
+    no default. The posture manifest belongs to the dataset, so overriding one
+    without the other would audit a dataset against another's manifest.
     """
     path = Path(path).expanduser().resolve()
     if not path.is_file():
@@ -106,10 +113,12 @@ def load_experiment_config(
         augmentation=bool(training.get("augmentation", True)), epochs=int(training.get("epochs", 200)),
         augmentation_seed=int(training.get("augmentation_seed", 42)),
         imgsz=int(model.get("image_size", 640)), patience=int(training.get("patience", 20)),
-        batch=int(training.get("batch", -1)), device=str(training.get("device", "auto")),
+        batch=int(training.get("batch", 16)), device=str(training.get("device", "auto")),
         workers=int(training.get("workers", 8)), seed=seeds[0],
         deterministic=bool(training.get("deterministic", True)),
-        posture_manifest=_resolve(root, dataset.get("posture_manifest")),
+        posture_manifest=_resolve(root, str(posture_manifest_override)
+                                  if posture_manifest_override is not None
+                                  else dataset.get("posture_manifest")),
         augmentation_source=_resolve(root, training.get("augmentation_source")),
         allow_posture_gap=bool(dataset.get("allow_posture_gap", False)),
         min_fallen_per_eval_split=int(dataset.get("min_fallen_per_eval_split", 10)),

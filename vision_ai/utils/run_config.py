@@ -17,7 +17,10 @@ class TrainingConfig:
     epochs: int = 200
     imgsz: int = 640
     patience: int = 20
-    batch: int = -1
+    # A positive size, not ultralytics' -1 AutoBatch: AutoBatch runs in the
+    # trainer only, so -1 reaches validation as a literal DataLoader batch size
+    # and raises. 16 is what AutoBatch measured for imgsz=640 seg on a 24G card.
+    batch: int = 16
     device: str = "auto"
     workers: int = 8
     seed: int = 42

@@ -110,8 +110,14 @@ def run_pipeline(config: TrainingConfig, backend: TrainingBackend) -> Path:
         _write_json(run_dir / "status.json", {"state": "RUNNING", "stage": stage, "started_at": started})
         logger.info("TRAIN start | model=%s | epochs=%s | imgsz=%s | batch=%s",
                     config.model, config.epochs, config.imgsz, config.batch)
+        # ultralytics' wandb callback closes the run when training ends, which
+        # would drop the validation and test metrics logged further down.
+        tracker.hold_open()
         weights = backend.train(config, run_dir).resolve()
         logger.info("TRAIN done | weights=%s", weights)
+        # No-op unless the run was closed anyway, by a wandb that did not allow
+        # hold_open() to shadow finish.
+        tracker.reattach()
         if not weights.is_file():
             raise PipelineError(f"the training backend produced no best.pt: {weights}")
 

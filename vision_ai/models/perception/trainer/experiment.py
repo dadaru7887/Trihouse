@@ -18,15 +18,21 @@ class MultiSeedExperiment:
     config: ExperimentConfig
     experiment_dir: Path
     # Pass the --data override down, so every seed trains on the same dataset.
+    # The manifest travels with it: it describes that dataset, not the config's.
     data_override: Path | None = None
+    posture_manifest_override: Path | None = None
 
     @classmethod
     def from_config(cls, config_path: Path, experiment_dir: Path | None = None,
-                    data_override: Path | None = None):
-        config = load_experiment_config(config_path, data_override=data_override)
+                    data_override: Path | None = None,
+                    posture_manifest_override: Path | None = None):
+        config = load_experiment_config(config_path, data_override=data_override,
+                                        posture_manifest_override=posture_manifest_override)
         run_dir = experiment_dir or config.training.run_root / datetime.now().strftime("%Y%m%d_%H%M%S")
         return cls(config=config, experiment_dir=Path(run_dir).resolve(),
-                   data_override=Path(data_override).resolve() if data_override else None)
+                   data_override=Path(data_override).resolve() if data_override else None,
+                   posture_manifest_override=(Path(posture_manifest_override).resolve()
+                                              if posture_manifest_override else None))
 
     def _write_metadata(self) -> None:
         metadata = {
@@ -56,6 +62,7 @@ class MultiSeedExperiment:
             command, environment = build_seed_command(
                 Path(sys.executable), self.config.config_path, seed, self.experiment_dir,
                 os.environ, data_override=self.data_override,
+                posture_manifest_override=self.posture_manifest_override,
             )
             result = subprocess.run(command, env=environment, check=False)
             if result.returncode:

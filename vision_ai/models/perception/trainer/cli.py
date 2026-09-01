@@ -38,7 +38,9 @@ def add_training_arguments(parser: argparse.ArgumentParser, *, include_run: bool
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--patience", type=int, default=20)
-    parser.add_argument("--batch", type=int, default=-1)
+    parser.add_argument("--batch", type=int, default=16,
+                        help="Images per batch. -1 asks ultralytics to size the "
+                             "training batch to the GPU; evaluation still uses 16")
     parser.add_argument("--device", default="auto",
                         help="auto (cuda > mps > cpu), cpu, mps, gpu/cuda or a GPU index")
     parser.add_argument("--workers", type=int, default=8)
@@ -59,6 +61,14 @@ def add_training_arguments(parser: argparse.ArgumentParser, *, include_run: bool
     parser.add_argument("--min-fallen-per-eval-split", type=int, default=10)
     parser.add_argument("--min-mask-recall", type=float, default=0.90)
     parser.add_argument("--min-mask-map50", type=float, default=0.80)
+    parser.add_argument(
+        "--test-all-seeds", action="store_true",
+        help="Score the test split even when the validation gate fails, so a "
+             "multi-seed sweep reports every seed instead of stopping at the "
+             "gate. The verdict is still recorded as validation_gate_passed, "
+             "and only a passing run is a deployment candidate. Same meaning as "
+             "evaluation.test_all_seeds in the experiment config",
+    )
     if include_run:
         parser.add_argument("--run-root", type=Path, default=Path("runs/lego_worker"))
         parser.add_argument("--name")
@@ -81,6 +91,7 @@ def config_from_args(args: argparse.Namespace, **overrides) -> TrainingConfig:
         "preflight_only": getattr(args, "preflight_only", False),
         "min_fallen_per_eval_split": args.min_fallen_per_eval_split,
         "min_mask_recall": args.min_mask_recall, "min_mask_map50": args.min_mask_map50,
+        "test_on_validation_gate_failure": bool(getattr(args, "test_all_seeds", False)),
         "wandb": bool(getattr(args, "wandb", False)),
         "wandb_project": getattr(args, "wandb_project", "trihouse-vision"),
     }

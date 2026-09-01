@@ -88,6 +88,11 @@ class Tracker:
         self._metrics = self.run_dir / METRICS_FILE
         self._wandb = None
         self.active = False
+        # Set here too: __init__ returns early on every wandb failure below, and
+        # reattach() must find these attributes whichever path was taken.
+        self._project = project
+        self._run_id = None
+        self._real_finish = None
         logger = logging.getLogger(LOGGER_NAME)
 
         if not enabled:
@@ -105,15 +110,69 @@ class Tracker:
             return
         self._wandb = wandb
         self.active = True
+        # Kept so reattach() can resume this same run rather than open a second.
+        self._run_id = getattr(getattr(wandb, "run", None), "id", None)
         logger.info("wandb tracking run %s in project %s", name, project)
+
+    def hold_open(self) -> None:
+        """Stop another library from closing this run before the pipeline is done.
+
+        ultralytics' wandb callback ends `on_train_end` with `wb.run.finish()`
+        (ultralytics/utils/callbacks/wb.py), which would close the run while the
+        pipeline still has its validation and test metrics to log. Shadowing
+        finish on the run object neutralises only that one call: the rest of
+        that callback -- final plots, the best.pt artifact, the PR/F1 curve
+        tables -- still runs. The real close happens in finish() below.
+        """
+        run = getattr(self._wandb, "run", None) if self._wandb is not None else None
+        if run is None or self._real_finish is not None:
+            return
+        try:
+            self._real_finish = run.finish
+            run.finish = lambda *args, **kwargs: None
+        except Exception as error:              # a future wandb may forbid the assignment
+            self._real_finish = None
+            logging.getLogger(LOGGER_NAME).warning(
+                "could not hold the wandb run open (%s); reattach() has to recover it", error)
+
+    def reattach(self) -> None:
+        """Reopen the wandb run when something else closed it.
+
+        ultralytics' own wandb callback calls finish() at on_train_end, so the
+        run is already gone by the time the pipeline logs its validation and
+        test metrics. Resuming by id puts those rows on the original run
+        instead of losing them or starting a second run for the same training.
+        """
+        if self._wandb is None or self._run_id is None:
+            return
+        if getattr(self._wandb, "run", None) is not None:
+            return
+        logger = logging.getLogger(LOGGER_NAME)
+        try:
+            self._wandb.init(project=self._project, id=self._run_id,
+                             resume="allow", dir=str(self.run_dir))
+        except Exception as error:                       # offline, expired key, ...
+            logger.warning("wandb could not resume run %s (%s); metrics go to %s only",
+                           self._run_id, error, self._metrics)
+            return
+        logger.info("wandb resumed run %s for post-training metrics", self._run_id)
 
     def log(self, values: dict[str, Any], step: int | None = None) -> None:
         """Record one row of metrics."""
         with self._metrics.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps({**values, **({"step": step} if step is not None else {})},
                                     ensure_ascii=False) + "\n")
-        if self._wandb is not None:
-            self._wandb.log(values, step=step)
+        # ultralytics' callback closes the wandb run at on_train_end, so by the
+        # time the pipeline logs its own validation and test metrics the run can
+        # already be gone. Tracking must not take the pipeline down: the JSONL
+        # written above is the record that matters. finish() guards the same way.
+        run = getattr(self._wandb, "run", None) if self._wandb is not None else None
+        if run is not None:
+            try:
+                self._wandb.log(values, step=step)
+            except Exception as error:
+                logging.getLogger(LOGGER_NAME).warning(
+                    "wandb.log failed (%s); metrics go to %s only", error, self._metrics)
 
     def summary(self, values: dict[str, Any]) -> None:
         """Record final numbers, the ones a run is compared on."""
@@ -125,8 +184,14 @@ class Tracker:
 
     def finish(self) -> None:
         """Close the wandb run so the dashboard stops showing it as live."""
-        if self._wandb is not None:
-            try:
+        if self._wandb is None:
+            return
+        try:
+            # The real finish when hold_open() shadowed it, so the run that was
+            # kept open through training is the one that gets closed here.
+            if self._real_finish is not None:
+                self._real_finish()
+            else:
                 self._wandb.finish()
-            except Exception:                            # already closed by ultralytics
-                pass
+        except Exception:                                # already closed by ultralytics
+            pass

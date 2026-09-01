@@ -177,8 +177,11 @@ class YOLOEBackend:
         if not weights.is_file():
             raise FileNotFoundError(f"evaluation weights not found: {weights}")
         model = self.model_factory(str(weights))
+        # AutoBatch (-1) is a trainer-only feature; the validator hands the size
+        # straight to DataLoader, which rejects anything below 1.
+        batch = config.batch if config.batch > 0 else 16
         result = model.val(
-            data=str(config.data), split=split, imgsz=config.imgsz, batch=config.batch,
+            data=str(config.data), split=split, imgsz=config.imgsz, batch=batch,
             device=config.device, workers=config.workers,
             project=str(run_dir / "evaluation"), name=split, exist_ok=True, plots=True,
         )

@@ -20,6 +20,7 @@ def build_seed_command(
     base_environment: Mapping[str, str],
     runner_module: str = SEED_RUNNER_MODULE,
     data_override: Path | None = None,
+    posture_manifest_override: Path | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """Build the child-process command that runs one seed.
 
@@ -33,6 +34,8 @@ def build_seed_command(
     ]
     if data_override is not None:
         command += ["--data", str(data_override)]
+    if posture_manifest_override is not None:
+        command += ["--posture-manifest", str(posture_manifest_override)]
     environment = dict(base_environment)
     environment["PYTHONHASHSEED"] = str(seed)
     environment["NO_ALBUMENTATIONS_UPDATE"] = "1"

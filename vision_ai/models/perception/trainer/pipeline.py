@@ -56,6 +56,9 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--config", type=Path, default=_default_config())
     train.add_argument("--experiment-dir", type=Path)
     train.add_argument("--data", type=Path, help="Overrides dataset.data_yaml from the config")
+    train.add_argument("--posture-manifest", type=Path,
+                       help="Overrides dataset.posture_manifest. Pass it with --data: "
+                            "the manifest describes that dataset, not the config's")
 
     evaluate = stages.add_parser("evaluate", help="Score trained weights")
     evaluate.add_argument("--run-dir", type=Path, required=True)
@@ -136,7 +139,8 @@ def _train(args: argparse.Namespace) -> int:
     from vision_ai.models.perception.trainer.experiment import MultiSeedExperiment
 
     selected = MultiSeedExperiment.from_config(
-        args.config, args.experiment_dir, data_override=args.data
+        args.config, args.experiment_dir, data_override=args.data,
+        posture_manifest_override=args.posture_manifest,
     ).run()
     print(f"[TRAIN OK] {selected}")
     return 0

@@ -28,12 +28,14 @@ def build_parser() -> argparse.ArgumentParser:
     # When the parent experiment overrode the config with --data, that value
     # has to reach here; otherwise this child quietly trains on the config path.
     parser.add_argument("--data", type=Path)
+    parser.add_argument("--posture-manifest", type=Path)
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    experiment = load_experiment_config(args.config, data_override=args.data)
+    experiment = load_experiment_config(args.config, data_override=args.data,
+                                        posture_manifest_override=args.posture_manifest)
     config = config_for_seed(experiment, args.seed)
     config = dataclasses.replace(config, run_root=args.experiment_dir.resolve())
     run_pipeline(config, YOLOEBackend())

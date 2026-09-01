@@ -7,6 +7,7 @@ dataset:
   # PLACEHOLDER — 실재하는 경로가 아니다. 반드시 --data 로 넘기거나
   # 이 값을 자기 데이터셋 경로로 바꾼다. 상대 경로는 저장소 루트 기준.
   data_yaml: PLACEHOLDER/replace_with_your_dataset/data.yaml
+  # --data 를 넘길 때는 --posture-manifest 도 같은 데이터셋의 것으로 함께 넘긴다.
   posture_manifest: null
   # 현재 raw_examples에는 자세 GT가 없으므로 탐지 학습은 허용하되 낙상 성능은 별도 GT 전까지 평가 불가로 표시한다.
   allow_posture_gap: true
@@ -18,14 +19,16 @@ model:
 training:
   epochs: 200
   patience: 20
-  batch: -1
+  # 양수로 적는다. -1(AutoBatch)은 학습에서만 풀리고 검증 단계까지 그대로
+  # 흘러가 DataLoader 에러가 난다. 16은 24G 카드에서 AutoBatch가 고른 값이다.
+  batch: 16
   workers: 8
   device: auto
   augmentation: true
   augmentation_seed: 42
   deterministic: true
 evaluation:
-  min_mask_recall: 0.70
+  min_mask_recall: 0.80
   min_mask_map50: 0.60
   # 통계 보고를 위해 gate 실패 seed도 test하되 대표 모델 후보는 validation gate 통과 모델만 허용한다.
   test_all_seeds: true

@@ -27,6 +27,7 @@ docs/agent_plans/
 # files
 *.DS_Store
 *.png
+*.jpg
 # local secrets and generated database artifacts
 .env
 .env.*
@@ -71,3 +72,16 @@ log/
 # Roboflow 다운로드본과 병합 결과. 재생성 가능하므로 추적하지 않는다.
 data/pinky_camera/
 runs/
+
+# 학습 산출물. 재생성 가능하고 가중치까지 들어 있어 용량이 크다.
+# s<seed>/ 는 seed 를 셸에서 돌리던 시절의 레이아웃이고, 지금은
+# pipeline train 이 experiments/ 아래에 seed_<n>/ 로 쓴다.
+/s[0-9]*/
+/experiments/
+slurm-*.out
+
+# 저장소 루트에 내려받은 사전학습 가중치 (yoloe-26s-seg.pt, mobileclip2_b.ts).
+# 루트만 지정한다: vision_ai/upstream/.../weights/ 의 추적 중인 .pt 는 건드리지 않는다.
+/*.pt
+/*.ts
+/weights/
