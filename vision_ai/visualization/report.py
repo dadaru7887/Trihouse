@@ -33,7 +33,7 @@ def analyze_experiment(experiment_dir: Path, output_dir: Path | None = None) -> 
     _add_f1(table, "validation"); _add_f1(table, "test")
     table.to_csv(output_dir / "seed_performance.csv", index=False)
     diagnoses = {}
-    for run in sorted(experiment_dir.glob("seed_*")):
+    for run in sorted(path for path in experiment_dir.glob("seed_*") if path.is_dir()):
         results = run / "train/results.csv"
         if results.is_file(): diagnoses[run.name] = diagnose_training_run(pd.read_csv(results))
     numeric = [name for name in table if name != "seed" and pd.api.types.is_numeric_dtype(table[name])]

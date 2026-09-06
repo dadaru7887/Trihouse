@@ -46,7 +46,7 @@ def save_seed_dashboard(table: pd.DataFrame, output: Path) -> None:
 def save_training_curves(experiment_dir: Path, output: Path) -> None:
     fig, axes = plt.subplots(2, 1, figsize=(13, 9), constrained_layout=True)
     found = False
-    for run in sorted(Path(experiment_dir).glob("seed_*")):
+    for run in sorted(path for path in Path(experiment_dir).glob("seed_*") if path.is_dir()):
         path = run / "train/results.csv"
         if not path.is_file(): continue
         frame = pd.read_csv(path); frame.columns = [column.strip() for column in frame]

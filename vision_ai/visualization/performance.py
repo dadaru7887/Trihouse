@@ -28,7 +28,10 @@ def _last_training_metrics(path: Path) -> dict:
 
 def build_seed_performance_table(experiment_dir: Path) -> pd.DataFrame:
     rows = []
-    for run in sorted(Path(experiment_dir).glob("seed_*"), key=lambda path: int(path.name.split("_")[-1])):
+    # Directories only: write_experiment_reports leaves seed_results.csv beside
+    # the seed runs, and it matches "seed_*" too.
+    runs = (path for path in Path(experiment_dir).glob("seed_*") if path.is_dir())
+    for run in sorted(runs, key=lambda path: int(path.name.split("_")[-1])):
         seed = int(run.name.split("_")[-1])
         rows.append({"seed": seed, **_metrics(run / "evaluation/validation_metrics.json", "validation"), **_metrics(run / "evaluation/test_metrics.json", "test"), **_last_training_metrics(run / "train/results.csv")})
     return pd.DataFrame(rows)
