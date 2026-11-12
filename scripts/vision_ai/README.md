@@ -169,14 +169,40 @@ then scores on group S4. One run per mechanism you want to report on.
 
 ## 9. Fall classifier
 
-**Not runnable yet**: it needs a feature JSONL, and no adapter turns the
-merged dataset's polygons into one. Once that exists:
+Build the feature JSONL from the fallen export, then train. Pass the merged
+dataset the YOLOE weights were trained on, so the split matches.
 
 ```bash
+python -m vision_ai.data_loader.fall.build_features \
+    --export data/pinky_camera/fallen --merged data/pinky_camera/merged_export_split \
+    --out runs/fall/features_predicted.jsonl \
+    --masks predicted --weights experiments/<stamp>/selected_model.json
+
 python -m vision_ai.models.perception.trainer.fall_trainer \
-    --dataset runs/fall/features.jsonl --out runs/fall \
+    --dataset runs/fall/features_predicted.jsonl --out runs/fall \
     --seed 42 --min-recall 0.85 --wandb
 ```
+
+## 10. Fall-feature comparison A/B/C (one job)
+
+Compares the upstream five features (A), r alone (B) and r + h (C) on the same
+people and the same session split. Uses `data/pinky_camera/merged_export_split`,
+whose sessions sit where the fallen export put them (test: 162744, 171506).
+
+```bash
+# merge -> preflight -> YOLOE multi-seed (augmented) -> compare gt -> compare predicted
+sbatch --time=2-12:00:00 --gres=gpu:1 scripts/vision_ai/fall_feature_compare.sh
+
+# YOLOE already trained: compare only
+sbatch --time=02:00:00 --gres=gpu:1 scripts/vision_ai/fall_feature_compare.sh \
+    experiments/<stamp>/selected_model.json
+
+squeue -u $USER                      # job state
+tail -f slurm-<jobid>.out            # live log
+```
+
+Results: `runs/fall_compare/<stamp>/{gt,predicted}/report.md`, plus
+`report.json`, `rows.jsonl` and `cases/*.png`.
 
 ## What a finished run leaves behind
 
