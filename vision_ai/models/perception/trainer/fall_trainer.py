@@ -7,19 +7,21 @@
 Every path is an argument; no dataset location is written into the code or a
 default, so another checkout or dataset needs no edit.
 
-Input is one instance per JSONL line, with the features already extracted --
-`models/perception/features.py` does that. Building the JSONL from images and
-masks is dataset-specific, so no adapter is imposed here.
+Input is one instance per JSONL line, as `data_loader/fall/build_features.py`
+writes it; FEATURE_NAMES from `models/perception/features.py` are read by name:
 
-    {"features": [aspect_ratio, pca_angle, centroid_y,
-                  contact_person_iou, contact_obstacle_iou],
-     "fallen": true, "split": "train"}
+    {"features": {"aspect_ratio": 1.3, "axis_horizontality": 0.8},
+     "fallen": true, "split": "train", "episode": "20260822_162137"}
 
 Flow, and the split each stage may look at:
 
-    train   fit the scaler and the logistic regression
+    train   fit OR and SUM (fall_model.py), keep the one with the higher
+            leave-one-episode-out AUC across train episodes
     valid   choose the decision threshold -- the model is decided here
     test    measured once at the end, feeding no choice
+
+The bundle holds {"model", "kind", "feature_names", "threshold"}, the shape
+`models/perception/fall_classifier.py` loads.
 
 The threshold is the most precise one that still meets the recall floor.
 Recall wins because this is a safety alarm: a false alarm costs a second look,
@@ -37,6 +39,13 @@ from typing import Any
 
 from vision_ai.models.perception.features import FEATURE_NAMES
 from vision_ai.data_loader.fall.dataset import SPLITS, DatasetError, load_dataset
+from vision_ai.models.perception.trainer.fall_model import (
+    SumModel, cross_validate, fit_candidates,
+)
+
+# Formula kept when cross-validation cannot decide: OR held fewer false
+# positives than SUM at equal recall on ground-truth masks (fall_model.py).
+DEFAULT_KIND = "or"
 
 # The same candidate grid the delivered bundle used.
 THRESHOLD_CANDIDATES = [round(0.05 + 0.05 * step, 2) for step in range(19)]
@@ -72,57 +81,102 @@ def _select_threshold(labels: list[int], probabilities: list[float],
     return threshold, scored, False
 
 
+def _named_rows(dataset_path: Path) -> list[dict[str, Any]]:
+    """JSONL rows with features keyed by name and an episode for cross-validation.
+
+    `load_dataset` has already refused malformed lines, so this only reshapes.
+    A row without an episode gets its own, which makes leave-one-episode-out
+    impossible and falls back to the default formula.
+    """
+    rows = []
+    text = Path(dataset_path).read_text(encoding="utf-8")
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        values = record["features"]
+        if not isinstance(values, dict):
+            values = dict(zip(FEATURE_NAMES, values))
+        rows.append({"features": {name: float(values[name]) for name in FEATURE_NAMES},
+                     "fallen": bool(record.get("fallen")), "split": record["split"],
+                     "episode": str(record.get("episode", f"row{number}"))})
+    return rows
+
+
+def _parameters(model: Any) -> list[float]:
+    """Fitted coefficients of either formula, for reproducibility checks."""
+    if isinstance(model, SumModel):
+        return [round(float(v), 8) for v in (*model.weights, model.bias)]
+    return [round(float(v), 8) for mode in model.modes.values() for v in (mode.weight, mode.bias)]
+
+
+def _choose_kind(train: list[dict[str, Any]]) -> tuple[str, dict]:
+    """Pick OR or SUM by leave-one-episode-out AUC on train alone.
+
+    Falls back to DEFAULT_KIND when fewer than two train episodes hold both
+    classes, since a held-out episode needs both for an AUC.
+    """
+    report = cross_validate(train)
+    scored = {name: entry for name, entry in report.items() if entry["per_episode"]}
+    if len(scored) < 2 or min(len(e["per_episode"]) for e in scored.values()) < 2:
+        return DEFAULT_KIND, {"method": "default", "reason": "too few mixed-class episodes",
+                              "cv": report}
+    # Higher mean AUC wins; on a tie the default formula is kept.
+    best = max(scored, key=lambda name: (scored[name]["mean_auc"], name == DEFAULT_KIND))
+    return best, {"method": "leave_one_episode_out", "cv": report}
+
+
 def train_classifier(dataset_path: Path, out_dir: Path, *, seed: int = 42,
                      min_recall: float = 0.85) -> dict[str, Any]:
+    """Fit both formulas on train, keep one, threshold on valid, score test once."""
     import joblib
-    import numpy as np
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.preprocessing import StandardScaler
 
-    splits = load_dataset(Path(dataset_path))
+    load_dataset(Path(dataset_path))          # refuses an unscoreable dataset
+    rows = _named_rows(Path(dataset_path))
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    by_split = {split: [r for r in rows if r["split"] == split] for split in SPLITS}
 
-    train_x = np.asarray(splits["train"][0], dtype=np.float64)
-    train_y = np.asarray(splits["train"][1], dtype=np.int64)
+    # Both formulas see train only; the choice between them too.
+    candidates = fit_candidates(by_split["train"])
+    kind, selection = _choose_kind(by_split["train"])
+    model = candidates[kind]
 
-    scaler = StandardScaler().fit(train_x)
-    model = LogisticRegression(max_iter=1000, random_state=seed)
-    model.fit(scaler.transform(train_x), train_y)
+    def labels(split: str) -> list[int]:
+        return [int(r["fallen"]) for r in by_split[split]]
 
     def probabilities(split: str) -> list[float]:
-        features = np.asarray(splits[split][0], dtype=np.float64)
-        return [float(p) for p in model.predict_proba(scaler.transform(features))[:, 1]]
+        return [model.score(r["features"]) for r in by_split[split]]
 
     # The threshold is chosen on valid alone; deciding the model ends here.
     threshold, validation, floor_met = _select_threshold(
-        splits["valid"][1], probabilities("valid"), min_recall
+        labels("valid"), probabilities("valid"), min_recall
     )
     # test is measured once and feeds back into no choice.
-    test_probabilities = probabilities("test")
-    test = _scores(splits["test"][1], [1 if p >= threshold else 0 for p in test_probabilities])
+    test = _scores(labels("test"), [1 if p >= threshold else 0 for p in probabilities("test")])
 
     bundle_path = out_dir / "fallen_classifier.joblib"
-    joblib.dump({
-        "scaler": scaler, "clf": model, "threshold": threshold,
-        "config": {"use_geometric_features": True, "use_prompt_features": False,
-                   "use_contact_features": True, "feature_names": list(FEATURE_NAMES)},
-    }, bundle_path)
+    # The shape FallenClassifier.load reads: a model scored by feature name.
+    joblib.dump({"model": model, "kind": kind, "feature_names": list(FEATURE_NAMES),
+                 "threshold": threshold, "seed": seed}, bundle_path)
 
     result = {
         "bundle": str(bundle_path),
+        "kind": kind,
+        "selection": selection,
         "threshold": threshold,
         "recall_floor": min_recall,
         "recall_floor_met": floor_met,
         "seed": seed,
-        "coefficients": [round(float(value), 8) for value in model.coef_[0]],
+        "coefficients": _parameters(model),
+        "dropped_features": list(model.dropped),
         "feature_names": list(FEATURE_NAMES),
         "validation": validation,
         "test": test,
         "dataset": {
             "path": str(Path(dataset_path).resolve()),
-            "counts": {split: len(splits[split][1]) for split in SPLITS},
-            "fallen": {split: int(sum(splits[split][1])) for split in SPLITS},
+            "counts": {split: len(by_split[split]) for split in SPLITS},
+            "fallen": {split: sum(labels(split)) for split in SPLITS},
         },
     }
     (out_dir / "metrics.json").write_text(

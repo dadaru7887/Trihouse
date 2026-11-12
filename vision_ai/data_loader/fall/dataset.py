@@ -8,11 +8,13 @@ passing the format check is not enough. A split with no fallen examples, or no
 upright ones, cannot produce a metric, so training stops rather than building
 a model whose numbers mean nothing.
 
-One instance per JSONL line, split being one of train, valid or test:
+One instance per JSONL line, split being one of train, valid or test.
+`features` is either named (what `build_features.py` writes; extra keys such
+as diagnostics are ignored) or a list in FEATURE_NAMES order:
 
-    {"features": [aspect_ratio, pca_angle, centroid_y,
-                  contact_person_iou, contact_obstacle_iou],
+    {"features": {"aspect_ratio": 1.3, "axis_horizontality": 0.8},
      "fallen": true, "split": "train"}
+    {"features": [1.3, 0.8], "fallen": true, "split": "train"}
 """
 
 from __future__ import annotations
@@ -43,6 +45,12 @@ def load_dataset(path: Path) -> dict[str, tuple[list[list[float]], list[int]]]:
         if split not in rows:
             raise DatasetError(f"{path}:{number} split must be train, valid or test: {split!r}")
         features = record.get("features")
+        if isinstance(features, dict):
+            missing = [name for name in FEATURE_NAMES if name not in features]
+            if missing:
+                raise DatasetError(f"{path}:{number} features lack {missing}")
+            # Read by name in contract order; extra diagnostic keys are ignored.
+            features = [features[name] for name in FEATURE_NAMES]
         if not isinstance(features, list) or len(features) != len(FEATURE_NAMES):
             raise DatasetError(
                 f"{path}:{number} features must be the {len(FEATURE_NAMES)} contracted values: {FEATURE_NAMES}"

@@ -12,6 +12,7 @@ track 별 상태 자체는 `policy.PersonPolicy` 가 이미 갖고 있었다. �
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 import math
 from typing import Any, Sequence
@@ -21,11 +22,16 @@ from vision_ai.robot.perception.fall_monitor import FallState, MonitorConfig
 from vision_ai.robot.perception.policy import (
     BoundingBox, FallSuspectedEvent, PersonObservation, PersonPolicy,
 )
-from vision_ai.models.perception.features import fallen_features
+from vision_ai.models.perception.features import FEATURE_NAMES, geometric_features
 from vision_ai.robot.perception.posture import PostureConfig, TrackedPostureEstimator
 
 
 NO_DETECTION = "NO_DETECTION"
+
+# Frames of classifier evidence kept per track. The median of these decides,
+# so one dropped or broken mask cannot, and a pose held only briefly cannot
+# either. How long a fall must last is the state machine's job, not this.
+WINDOW = 5
 
 # 로봇이 반응해야 하는 것은 그 화면에서 가장 나쁜 상태다. 서 있는 행인이
 # 바닥에 누운 사람을 가려서는 안 된다.
@@ -59,6 +65,8 @@ class PersonFrameEvaluator:
         # 움직임은 어느 쪽이든 `posture` 가 잰다 — 분류기는 한 프레임만 본다.
         self.classifier = classifier
         self._posture = TrackedPostureEstimator(posture)
+        # Recent classifier evidence per track, for the window decision.
+        self._evidence: dict[str, deque] = {}
         self._policy = PersonPolicy(
             required_consecutive_frames=required_consecutive_frames,
             monitor=monitor,
@@ -87,13 +95,17 @@ class PersonFrameEvaluator:
             seen.add(person.track_id)
             fallen = measurement.low_posture
             if self.classifier is not None:
-                # 접촉 피처는 다른 사람과 장애물까지 봐야 나온다. 사람만 걸러
-                # 넘기면 "선반에 기대어 쓰러진" 경우의 신호가 사라진다.
-                features = fallen_features(
-                    person, detections, frame_shape, person_class_id=person_class_id
-                )
-                if features is not None:
-                    fallen = bool(self.classifier.is_fallen(features))
+                values = geometric_features(person.mask, frame_shape)
+                if values is not None:
+                    features = dict(zip(FEATURE_NAMES, values))
+                    history = self._evidence.setdefault(person.track_id, deque(maxlen=WINDOW))
+                    history.append(self.classifier.probability(features))
+                    # Decide on the window, not the frame: one dropped mask must
+                    # not flip the call, and the state machine below still owns
+                    # how long a fall has to last.
+                    decided = self.classifier.is_fallen_window(history)
+                    if decided is not None:
+                        fallen = decided
             observation = PersonObservation(
                 camera_id=self.camera_id,
                 track_id=person.track_id,
@@ -114,6 +126,11 @@ class PersonFrameEvaluator:
                 best_confidence = float(person.confidence)
                 best_track = person.track_id
 
+        # Drop evidence for tracks that left, so a returning id does not
+        # inherit the window of whoever held it before.
+        for track_id in list(self._evidence):
+            if track_id not in seen:
+                del self._evidence[track_id]
         self._posture.forget_missing(seen)
         self._policy.note_present_tracks(self.camera_id, seen, timestamp_s)
         return FrameVerdict(best_state, best_confidence, best_track, tuple(events))

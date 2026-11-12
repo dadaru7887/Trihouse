@@ -108,15 +108,18 @@ def test_untracked_detections_fall_back_to_the_single_best_person() -> None:
 
 
 class RecordingClassifier:
-    """Records the feature vectors it is asked to score."""
+    """Records the named features it is asked to score; decides by `verdict`."""
 
     def __init__(self, verdict: bool = False):
         self.seen = []
         self.verdict = verdict
 
-    def is_fallen(self, features):
-        self.seen.append(tuple(features))
-        return self.verdict
+    def probability(self, features):
+        self.seen.append(dict(features))
+        return 1.0 if self.verdict else 0.0
+
+    def is_fallen_window(self, evidence):
+        return None if not evidence else self.verdict
 
 
 def obstacle(track_id: str, *, x: int, y: int = 0, width: int = 60, height: int = 60) -> Detection:
@@ -144,17 +147,17 @@ def test_the_classifier_can_see_a_fall_the_aspect_ratio_rule_misses() -> None:
     assert verdict.state == FallState.FALL_SUSPECTED.value
 
 
-def test_the_classifier_is_shown_obstacles_for_the_contact_feature() -> None:
-    """A person leaning on a shelf is the case aspect ratio cannot see."""
+def test_the_classifier_is_scored_on_the_contract_features_by_name() -> None:
+    """Features are passed by name, so a reordered contract cannot misalign them."""
+    from vision_ai.models.perception.features import FEATURE_NAMES
+
     classifier = RecordingClassifier()
     instance = evaluator(classifier=classifier)
 
     instance.evaluate([standing("a", x=100), obstacle("shelf", x=110)], SHAPE, 0.0)
 
     assert len(classifier.seen) == 1
-    features = classifier.seen[0]
-    assert len(features) == 5
-    assert features[4] > 0.0  # contact_obstacle_iou
+    assert tuple(classifier.seen[0]) == FEATURE_NAMES
 
 
 def test_obstacles_are_never_scored_as_people() -> None:

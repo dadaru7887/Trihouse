@@ -10,20 +10,27 @@ pytest.importorskip("sklearn")
 pytest.importorskip("joblib")
 
 
-def _row(fallen: bool, split: str, jitter: float = 0.0) -> dict:
-    """분리 가능한 두 덩어리. aspect_ratio 가 신호를 다 갖고 있다."""
-    if fallen:
-        features = [2.6 + jitter, 8.0 + jitter, 0.78, 0.04, 0.0]
-    else:
-        features = [0.35 + jitter, 88.0 + jitter, 0.34, 0.0, 0.0]
-    return {"features": features, "fallen": fallen, "split": split}
+LYING = {"aspect_ratio": 1.4, "axis_horizontality": 0.9}
+STANDING = {"aspect_ratio": 0.4, "axis_horizontality": 0.1}
 
 
-def dataset(tmp_path: Path, name: str = "features.jsonl") -> Path:
+def _row(fallen: bool, split: str, jitter: float = 0.0, episode: str | None = None) -> dict:
+    """분리 가능한 두 덩어리, build_features.py 가 쓰는 이름 붙은 형식."""
+    base = LYING if fallen else STANDING
+    row = {"features": {k: v + jitter for k, v in base.items()}, "fallen": fallen, "split": split}
+    if episode is not None:
+        row["episode"] = episode
+    return row
+
+
+def dataset(tmp_path: Path, name: str = "features.jsonl", episodes: bool = False) -> Path:
     rows = []
     for split, count in (("train", 24), ("valid", 12), ("test", 12)):
         for index in range(count):
-            rows.append(_row(index % 2 == 0, split, jitter=index * 0.01))
+            # Noise that overlaps the classes a little, so AUC is not trivially 1.
+            jitter = ((index * 7) % 5 - 2) * 0.12
+            episode = f"{split}{index % 3}" if episodes else None
+            rows.append(_row(index % 2 == 0, split, jitter=jitter, episode=episode))
     path = tmp_path / name
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
     return path
@@ -42,8 +49,9 @@ def test_training_writes_a_bundle_the_runtime_can_load(tmp_path) -> None:
     loaded = FallenClassifier(bundle, hashlib.sha256(bundle.read_bytes()).hexdigest())
     loaded.load()
     assert loaded.threshold == pytest.approx(result["threshold"])
-    assert loaded.is_fallen([2.6, 8.0, 0.78, 0.04, 0.0])
-    assert not loaded.is_fallen([0.35, 88.0, 0.34, 0.0, 0.0])
+    assert loaded.is_fallen(LYING)
+    assert not loaded.is_fallen(STANDING)
+    assert loaded.kind == result["kind"]
 
 
 def test_the_test_split_never_touches_fitting_or_threshold_choice(tmp_path) -> None:
@@ -130,7 +138,7 @@ def test_a_wrong_length_feature_vector_is_refused(tmp_path) -> None:
     from vision_ai.models.perception.trainer.fall_trainer import DatasetError, train_classifier
 
     rows = [_row(i % 2 == 0, s) for s in ("train", "valid", "test") for i in range(10)]
-    rows[0]["features"] = [1.0, 2.0]
+    rows[0]["features"] = [1.0]
     path = tmp_path / "bad.jsonl"
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
 
@@ -149,3 +157,39 @@ def test_the_cli_takes_every_path_as_an_argument() -> None:
     assert str(args.dataset) == "/some/where/features.jsonl"
     assert str(args.out) == "/runs/fallen"
     assert args.seed == 7
+
+
+def test_without_episodes_the_default_formula_is_kept(tmp_path) -> None:
+    """Leave-one-episode-out needs episodes; with none the documented default stays."""
+    from vision_ai.models.perception.trainer.fall_trainer import DEFAULT_KIND, train_classifier
+
+    result = train_classifier(dataset(tmp_path), tmp_path / "run", seed=42)
+
+    assert result["kind"] == DEFAULT_KIND
+    assert result["selection"]["method"] == "default"
+
+
+def test_with_episodes_the_formula_is_chosen_by_cross_validation_on_train(tmp_path) -> None:
+    from vision_ai.models.perception.trainer.fall_trainer import train_classifier
+
+    result = train_classifier(dataset(tmp_path, episodes=True), tmp_path / "run", seed=42)
+
+    assert result["selection"]["method"] == "leave_one_episode_out"
+    held_out = set(result["selection"]["cv"]["or"]["per_episode"])
+    assert held_out and all(name.startswith("train") for name in held_out)
+    assert result["kind"] in ("or", "sum")
+
+
+def test_named_features_may_carry_extra_diagnostic_keys(tmp_path) -> None:
+    """build_features.py writes elongation and centroid_y alongside the contract."""
+    from vision_ai.models.perception.trainer.fall_trainer import train_classifier
+
+    path = dataset(tmp_path)
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    for row in rows:
+        row["features"]["centroid_y"] = 0.5
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    result = train_classifier(path, tmp_path / "run", seed=42)
+
+    assert result["feature_names"] == ["aspect_ratio", "axis_horizontality"]
