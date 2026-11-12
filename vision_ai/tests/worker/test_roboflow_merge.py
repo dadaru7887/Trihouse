@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from vision_ai.data_loader.perception.roboflow_merge import (
-    MERGED_CLASSES, episode_of, plan_splits, remap_label_text, merge_exports,
+    MERGED_CLASSES, episode_of, plan_from_export, plan_splits, remap_label_text, merge_exports,
 )
 
 
@@ -196,3 +196,57 @@ def test_frame_counts_stay_near_the_target_ratio() -> None:
     assert frames["train"] / total > 0.45
     assert frames["valid"] / total < 0.35
     assert frames["test"] / total < 0.35
+
+
+# ---------------------------------------------- export 분할 그대로 쓰기
+
+
+def _video(stamp: str, t: int) -> str:
+    return f"dataset_video_20260822_{stamp}_t{t:04d}-00s_jpg.rf.x{stamp}{t}.jpg"
+
+
+def test_the_export_split_is_copied_episode_by_episode(tmp_path: Path) -> None:
+    fallen = _export(tmp_path, "fallen", ["Fallen", "Obstacle", "Standing"], {
+        "train": [_video("100000", 0), _video("100000", 1)],
+        "valid": [_video("200000", 0)],
+        "test": [_video("300000", 0)],
+    })
+
+    plan = plan_from_export(fallen)
+
+    assert plan == {"train": ["20260822_100000", "legacy_frames"],
+                    "valid": ["20260822_200000"], "test": ["20260822_300000"]}
+
+
+def test_an_export_that_splits_one_episode_cannot_be_copied(tmp_path: Path) -> None:
+    fallen = _export(tmp_path, "fallen", ["Fallen", "Obstacle", "Standing"], {
+        "train": [_video("100000", 0)], "test": [_video("100000", 1)]})
+
+    with pytest.raises(ValueError, match="20260822_100000"):
+        plan_from_export(fallen)
+
+
+def test_a_fixed_plan_places_legacy_frames_in_train(tmp_path: Path) -> None:
+    fallen = _export(tmp_path, "fallen", ["Fallen", "Obstacle", "Standing"], {
+        "train": [_video("100000", 0)], "valid": [_video("200000", 0)],
+        "test": [_video("300000", 0)]})
+    seg = _export(tmp_path, "seg", ["obstacle", "person"],
+                  {"train": ["frame_0001-00s_jpg.rf.b1.jpg"]})
+    out = tmp_path / "merged"
+
+    report = merge_exports({"fallen": fallen, "segmentation": seg}, out,
+                           plan=plan_from_export(fallen))
+
+    assert report["split_source"] == "fixed"
+    assert report["per_split"] == {"train": 2, "valid": 1, "test": 1}
+    assert (out / "train" / "images" / "frame_0001-00s_jpg.rf.b1.jpg").is_file()
+    assert (out / "test" / "images" / _video("300000", 0)).is_file()
+
+
+def test_a_fixed_plan_missing_an_episode_is_refused(tmp_path: Path) -> None:
+    fallen = _export(tmp_path, "fallen", ["Fallen", "Obstacle", "Standing"], {
+        "train": [_video("100000", 0)], "test": [_video("300000", 0)]})
+
+    with pytest.raises(ValueError, match="no split"):
+        merge_exports({"fallen": fallen}, tmp_path / "merged",
+                      plan={"train": ["20260822_100000"], "valid": [], "test": []})

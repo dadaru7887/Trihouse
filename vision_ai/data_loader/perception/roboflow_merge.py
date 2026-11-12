@@ -8,9 +8,15 @@ posture distinction is carried in a side manifest for the fall classifier.
     python -m vision_ai.data_loader.perception.roboflow_merge \
         --api-key <key> --out data/pinky_camera --seed 42
 
+    # keep the fallen export's own session split instead of planning one
+    python -m vision_ai.data_loader.perception.roboflow_merge \
+        --out data/pinky_camera --split-from-export fallen \
+        --merged-name merged_export_split
+
 Flow: download each export -> remap classes to [obstacle, person] -> group
-frames by episode -> assign whole episodes to train/valid/test -> write the
-merged dataset plus posture_manifest.csv.
+frames by episode -> assign whole episodes to train/valid/test (planned by
+seed, or copied from one export's folders) -> write the merged dataset plus
+posture_manifest.csv.
 
 Splits are by episode, never by frame: adjacent frames of one video are near
 identical, so a frame-level split measures memorisation.
@@ -147,6 +153,33 @@ def plan_splits(episode_stats: dict[str, dict[str, int]], seed: int = 42,
     return {split: sorted(episodes) for split, episodes in plan.items()}
 
 
+def plan_from_export(export_root: Path) -> dict[str, list[str]]:
+    """Episode split read from one export's own train/valid/test folders.
+
+    Raises when an episode appears in two folders, since copying that split
+    would put one recording on both sides. LEGACY_EPISODE is pinned to train.
+    """
+    placed: dict[str, str] = {}
+    for split in ("train", "valid", "test"):
+        images = Path(export_root) / split / "images"
+        if not images.is_dir():
+            continue
+        for image in images.iterdir():
+            episode = episode_of(image.name)
+            if episode == LEGACY_EPISODE:
+                continue
+            if placed.setdefault(episode, split) != split:
+                raise ValueError(
+                    f"episode {episode} is in both {placed[episode]} and {split} "
+                    f"of {export_root}; its split cannot be copied")
+    if not placed:
+        raise ValueError(f"no episode-named frames under {export_root}")
+    plan: dict[str, list[str]] = {"train": [LEGACY_EPISODE], "valid": [], "test": []}
+    for episode, split in placed.items():
+        plan[split].append(episode)
+    return {split: sorted(episodes) for split, episodes in plan.items()}
+
+
 def _class_names(export_root: Path) -> list[str]:
     """Read the class list from an export's data.yaml."""
     meta = yaml.safe_load((export_root / "data.yaml").read_text(encoding="utf-8"))
@@ -186,8 +219,12 @@ def _posture_of(label_text: str, names: list[str]) -> str:
 
 
 def merge_exports(exports: dict[str, Path], out_dir: Path, seed: int = 42,
-                  min_fallen: int = 10) -> dict:
-    """Merge exports into one dataset at `out_dir` and return a summary."""
+                  min_fallen: int = 10,
+                  plan: dict[str, list[str]] | None = None) -> dict:
+    """Merge exports into one dataset at `out_dir` and return a summary.
+
+    `plan` fixes the episode split; without it `plan_splits` chooses one.
+    """
     out_dir = Path(out_dir)
     if out_dir.exists() and any(out_dir.iterdir()):
         raise FileExistsError(f"output directory is not empty: {out_dir}")
@@ -204,8 +241,16 @@ def merge_exports(exports: dict[str, Path], out_dir: Path, seed: int = 42,
         episode["frames"] += 1
         if _posture_of(label.read_text(encoding="utf-8"), names) == "fallen":
             episode["fallen"] += 1
-    plan = plan_splits(stats, seed=seed, min_fallen=min_fallen)
+    split_source = "fixed" if plan is not None else "planned"
+    if plan is None:
+        plan = plan_splits(stats, seed=seed, min_fallen=min_fallen)
     split_of = {episode: split for split, episodes in plan.items() for episode in episodes}
+    # A fixed plan must cover every episode found; a gap would drop frames.
+    unplaced = sorted(set(stats) - set(split_of))
+    if unplaced:
+        raise ValueError(f"episodes with no split in the given plan: {unplaced}")
+    # Keep only episodes that actually have frames, so the report is exact.
+    plan = {split: [e for e in episodes if e in stats] for split, episodes in plan.items()}
 
     for split in ("train", "valid", "test"):
         (out_dir / split / "images").mkdir(parents=True, exist_ok=True)
@@ -243,6 +288,7 @@ def merge_exports(exports: dict[str, Path], out_dir: Path, seed: int = 42,
 
     report = {
         "images": len(frames), "per_split": counts, "episodes": plan, "seed": seed,
+        "split_source": split_source,
         "sources": {name: str(Path(root).resolve()) for name, root in exports.items()},
         "classes": MERGED_CLASSES,
         "postures": {p: sum(r["posture"] == p for r in manifest_rows)
@@ -280,6 +326,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42, help="Seed for the episode split")
     parser.add_argument("--min-fallen", type=int, default=10,
                         help="Fallen frames each of valid and test must hold")
+    parser.add_argument("--split-from-export", choices=("fallen", "segmentation"),
+                        help="Copy this export's own episode split instead of planning "
+                             "one with --seed; frames with no episode id go to train")
+    parser.add_argument("--merged-name", default="merged",
+                        help="Name of the output directory under --out")
     return parser
 
 
@@ -294,8 +345,14 @@ def main(argv: list[str] | None = None) -> int:
         if not roots:
             print(f"no existing export under {out}; pass --api-key to download", flush=True)
             return 2
-    report = merge_exports(roots, out / "merged", seed=args.seed,
-                           min_fallen=args.min_fallen)
+    plan = None
+    if args.split_from_export:
+        if args.split_from_export not in roots:
+            print(f"--split-from-export {args.split_from_export}: export not found", flush=True)
+            return 2
+        plan = plan_from_export(roots[args.split_from_export])
+    report = merge_exports(roots, out / args.merged_name, seed=args.seed,
+                           min_fallen=args.min_fallen, plan=plan)
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0
 
