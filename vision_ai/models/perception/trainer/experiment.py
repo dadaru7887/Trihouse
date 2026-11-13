@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from vision_ai.data_loader.perception.dataset import DatasetLoader
+from vision_ai.data_loader.perception.audit import audit_dataset
 from vision_ai.utils.config_loader import ExperimentConfig, load_experiment_config
 from vision_ai.utils.device import resolve_device
 from vision_ai.utils.environment import capture_environment, validate_training_environment, write_environment
@@ -43,12 +43,13 @@ class MultiSeedExperiment:
         (self.experiment_dir / "experiment.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
     def _preflight(self) -> None:
-        report = DatasetLoader(
-            data_yaml=self.config.training.data,
-            allow_posture_gap=self.config.training.allow_posture_gap,
-            posture_manifest=self.config.training.posture_manifest,
-            min_fallen_per_eval_split=self.config.training.min_fallen_per_eval_split,
-        ).validate(self.experiment_dir / "preflight")
+        training = self.config.training
+        report = audit_dataset(
+            training.data, self.experiment_dir / "preflight",
+            posture_manifest=training.posture_manifest,
+            allow_posture_gap=training.allow_posture_gap,
+            min_fallen_per_eval_split=training.min_fallen_per_eval_split,
+        )
         device = resolve_device(self.config.training.device)
         gpu_index = int(device.resolved) if device.requires_cuda else 0
         environment = capture_environment(report.fingerprint, gpu_index=gpu_index)

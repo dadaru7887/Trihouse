@@ -17,7 +17,7 @@ data_loader/
     fall/            낙상 피처 JSONL
     recovery/        복구 전이 · risk-stratified replay buffer
 models/
-    perception/      detector · 기하 피처 · 낙상 분류기 · yoloe_backend
+    perception/      detector · 기하 피처 · 낙상 분류기
         trainer/     preflight → 학습 → val → gate → test · multi-seed · 증강 recipe
     recovery/        TGRPO/SAC 망 · distilled selector · VLM interpreter · checkpoint
         trainer/     off-policy TGRPO 근사 + SAC 오프라인 업데이트

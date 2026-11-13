@@ -30,8 +30,6 @@ seed 하나는 별도 프로세스다 — `python -m vision_ai.models.perception
 상태도 프로세스에 남아, 같은 프로세스에서 seed 를 바꾸면 앞 seed 가 새어 든다.
 ```
 
-`pipeline/dataset_audit.py`와 `pipeline/yoloe_backend.py`는 이전 import 사용자를 위한 호환 shim이다. 실제 구현은 각각 `dataloader/audit.py`, `trainer/yoloe_trainer.py`에 있다.
-
 라벨 분석:
 
 ```bash

@@ -52,45 +52,43 @@ prints `False`, training will silently fall back to CPU.
 wandb login          # paste the key from wandb.ai/authorize
 ```
 
-Skip it if you do not want tracking, and drop `--wandb` below. Metrics are
-written to `metrics.jsonl` in the run directory either way.
+Skip it if you do not want tracking. Metrics are written to `metrics.jsonl`
+in the run directory either way.
 
 ## 3. Download and merge the dataset
 
 Both Roboflow projects are pulled and merged by one command. It needs the
-Roboflow API key.
+Roboflow API key the first time; drop `--api-key` to re-merge an existing
+download.
 
 ```bash
 python -m vision_ai.data_loader.perception.roboflow_merge \
     --api-key <ROBOFLOW_API_KEY> \
     --out data/pinky_camera \
-    --seed 42
+    --split-from-export fallen --merged-name merged_export_split
 ```
 
 What it does:
 
 | | |
 |---|---|
-| downloads | `trihouse` v7 (obstacle/person) and `trihouse_detect_fallen` v2 (Fallen/Obstacle/Standing) |
+| downloads | `trihouse` v7 (obstacle/person) and `trihouse_detect_fallen` v2 (Fallen/Obstacle/Standing) into `data/pinky_camera/{segmentation,fallen}` |
 | remaps | Fallen and Standing both become `person`; segmentation only needs obstacle vs person |
-| splits | by **episode**, never by frame -- adjacent frames of one video are near identical, so a frame split measures memorisation |
-| writes | `data/pinky_camera/merged/` with `data.yaml`, train/valid/test, `posture_manifest.csv`, `merge_report.json` |
+| splits | by **episode**, copied from the fallen export, so YOLOE and the fall classifier share one split (test: 162744, 171506) |
+| writes | `data/pinky_camera/merged_export_split/` with `data.yaml`, train/valid/test, `posture_manifest.csv`, `merge_report.json` |
 
-The posture manifest carries fallen/standing per frame. Preflight counts the
-fallen samples in each eval split from it, and the fall classifier needs it.
+Expected result: 672 images, train 462 / valid 92 / test 118.
 
-Expected result with seed 42: 672 images, train 440 / valid 109 / test 123,
-163 fallen frames, two episodes in each of valid and test.
-
-Re-running with the same seed reproduces the same split. A different seed
-gives a different one, so record which seed produced the weights.
+Without `--split-from-export` the episodes are drawn with `--seed` into
+`merged/`. That split puts 162744 in train, so weights trained on it must not
+be scored on the fallen export's test.
 
 ## 4. Check the dataset before spending GPU hours
 
 ```bash
 python -m vision_ai.models.perception.trainer.pipeline preflight \
-    --data data/pinky_camera/merged/data.yaml \
-    --posture-manifest data/pinky_camera/merged/posture_manifest.csv \
+    --data data/pinky_camera/merged_export_split/data.yaml \
+    --posture-manifest data/pinky_camera/merged_export_split/posture_manifest.csv \
     --output runs/preflight_check
 ```
 
@@ -99,98 +97,31 @@ polygons outside 0..1, duplicate images across splits, or fewer than 10
 confirmed fallen frames in valid or test. It prints a fingerprint that
 identifies the exact dataset a run trained on.
 
-## 5. Look at the augmentation you are about to train with
+## 5. Base weights (login node, once)
+
+Compute nodes may have no internet. Training loads `yoloe-26s-seg.pt` and the
+text encoder `mobileclip2_b.ts` from the repo root, so fetch both there first:
+
+```bash
+python - <<'PY'
+from ultralytics import YOLOE
+model = YOLOE("yoloe-26s-seg.pt")
+model.set_classes(["obstacle", "person"], model.get_text_pe(["obstacle", "person"]))
+PY
+ls yoloe-26s-seg.pt mobileclip2_b.ts
+```
+
+Optional: look at the augmentation you are about to train with.
 
 ```bash
 python -m vision_ai.tooling.augmentation_preview.preview \
-    --dataset data/pinky_camera/merged --out runs/augmentation_preview --all-groups
-
-python -m vision_ai.tooling.augmentation_preview.preview \
-    --dataset data/pinky_camera/merged --out runs/augmentation_preview --severity
+    --dataset data/pinky_camera/merged_export_split --out runs/augmentation_preview --all-groups
 ```
 
-Training draws uniformly from 16 single-mechanism recipes; the eval tiers are
-never drawn during training. See
-`vision_ai/tooling/augmentation_preview/README.md` for what to look for.
-
-## 6. Train
+## 6. Train YOLOE and compare fall features A/B/C (one job)
 
 ```bash
-sh scripts/vision_ai/perception_model.sh data/pinky_camera/merged/data.yaml 42
-```
-
-Or directly, which is what the script runs:
-
-```bash
-python -m vision_ai.models.perception.trainer.pipeline run \
-    --data data/pinky_camera/merged/data.yaml \
-    --posture-manifest data/pinky_camera/merged/posture_manifest.csv \
-    --run-root runs/perception \
-    --seed 42 --epochs 200 --device auto \
-    --augmentation --wandb --wandb-project trihouse-vision
-```
-
-Stages, in order: preflight -> train -> validation -> **validation gate** ->
-test. The gate stops the run before test when person mask recall or mAP50 is
-below the floor, so test stays unopened on a model that was not going to be
-used. Defaults are recall 0.90 and mAP50 0.80; lower them with
-`--min-mask-recall` / `--min-mask-map50` if the run should proceed anyway.
-
-Watch it with:
-
-```bash
-tail -f runs/perception/*/run.log
-```
-
-## 7. Score the trained model under degradation
-
-```bash
-# every group plus clean
-python -m vision_ai.models.perception.trainer.corruption_eval \
-    --run-dir runs/perception/<run> --split test --all
-
-# every recipe, for severity curves
-python -m vision_ai.models.perception.trainer.corruption_eval \
-    --run-dir runs/perception/<run> --split test --per-recipe
-```
-
-Read the tiers weakest first: S1-S4 are in-distribution, `seen_compound` is
-trained effects in a new combination, `unseen` and `unseen_compound` are
-implementations training never ran. Report clean alongside all of them.
-
-## 8. Leave-one-out, to show a mechanism is doing work
-
-```bash
-sh scripts/vision_ai/perception_model.sh data/pinky_camera/merged/data.yaml 42 200 frost
-```
-
-Trains with every recipe that can produce frost removed, compounds included,
-then scores on group S4. One run per mechanism you want to report on.
-
-## 9. Fall classifier
-
-Build the feature JSONL from the fallen export, then train. Pass the merged
-dataset the YOLOE weights were trained on, so the split matches.
-
-```bash
-python -m vision_ai.data_loader.fall.build_features \
-    --export data/pinky_camera/fallen --merged data/pinky_camera/merged_export_split \
-    --out runs/fall/features_predicted.jsonl \
-    --masks predicted --weights experiments/<stamp>/selected_model.json
-
-python -m vision_ai.models.perception.trainer.fall_trainer \
-    --dataset runs/fall/features_predicted.jsonl --out runs/fall \
-    --seed 42 --min-recall 0.85 --wandb
-```
-
-## 10. Fall-feature comparison A/B/C (one job)
-
-Compares the upstream five features (A), r alone (B) and r + h (C) on the same
-people and the same session split. Uses `data/pinky_camera/merged_export_split`,
-whose sessions sit where the fallen export put them (test: 162744, 171506).
-
-```bash
-# merge -> preflight -> YOLOE multi-seed (augmented) -> compare gt -> compare predicted
+# merge if missing -> preflight -> YOLOE multi-seed (augmented) -> compare gt -> compare predicted
 sbatch --time=2-12:00:00 --gres=gpu:1 scripts/vision_ai/fall_feature_compare.sh
 
 # YOLOE already trained: compare only
@@ -201,24 +132,65 @@ squeue -u $USER                      # job state
 tail -f slurm-<jobid>.out            # live log
 ```
 
-Results: `runs/fall_compare/<stamp>/{gt,predicted}/report.md`, plus
-`report.json`, `rows.jsonl` and `cases/*.png`.
+The YOLOE run is configured by
+`vision_ai/models/perception/trainer/configs/config.yaml`: seeds
+17/42/101/2026/3407, 200 epochs, augmentation on, validation gate mask recall
+0.80 / mAP50 0.60, selection on person mask mAP50-95. Change the experiment
+there, not in the script.
 
-## What a finished run leaves behind
+Results:
 
 ```
-runs/perception/<timestamp>_<model>_aug/
-    run.log                          every stage, the device, the gate decision
-    metrics.jsonl                    all metrics, with or without wandb
-    status.json                      RUNNING / COMPLETED / FAILED and where
-    config/resolved.json             the exact config, device already resolved
-    environment.json                 torch, CUDA, GPU, dataset fingerprint
-    preflight/dataset_report.json    label counts and split composition
-    train/weights/best.pt            <- the weights
-    evaluation/validation_metrics.json
-    evaluation/test_metrics.json
-    artifact_manifest.json           weights + fingerprint + gate result
+experiments/<stamp>/
+    selected_model.json              chosen weights and why
+    aggregate.json, seed_results.csv per-seed and mean/std
+    seed_<n>/                        each seed's run, log, weights, metrics
+    analysis/                        plots across seeds
+runs/fall_compare/<stamp>/{gt,predicted}/
+    report.md                        tables
+    report.json, rows.jsonl          every number and every row
+    cases/*.png                      representative cases
 ```
 
-Keep `best.pt`, `artifact_manifest.json` and `merge_report.json` together: the
-first is useless later without knowing which dataset split produced it.
+Keep `selected_model.json`, the seed's `best.pt` and `merge_report.json`
+together: weights are useless later without knowing which split produced them.
+
+## 7. Score the trained model under degradation
+
+```bash
+python -m vision_ai.models.perception.trainer.corruption_eval \
+    --run-dir experiments/<stamp>/seed_<n> --split test --all
+python -m vision_ai.models.perception.trainer.corruption_eval \
+    --run-dir experiments/<stamp>/seed_<n> --split test --per-recipe
+```
+
+Read the tiers weakest first: S1-S4 are in-distribution, `seen_compound` is
+trained effects in a new combination, `unseen` and `unseen_compound` are
+implementations training never ran. Report clean alongside all of them.
+
+## 8. Leave-one-out, to show a mechanism is doing work
+
+One seed, with every recipe that can produce the mechanism removed:
+
+```bash
+python -m vision_ai.models.perception.trainer.pipeline run \
+    --data data/pinky_camera/merged_export_split/data.yaml \
+    --posture-manifest data/pinky_camera/merged_export_split/posture_manifest.csv \
+    --seed 42 --augmentation --holdout frost
+```
+
+## 9. Fall classifier for deployment
+
+Build the feature JSONL from the selected YOLOE's masks, then train the bundle
+the robot loads (`FALLEN_CLASSIFIER_BUNDLE` / `FALLEN_CLASSIFIER_SHA256`).
+
+```bash
+python -m vision_ai.data_loader.fall.build_features \
+    --export data/pinky_camera/fallen --merged data/pinky_camera/merged_export_split \
+    --out runs/fall/features_predicted.jsonl \
+    --masks predicted --weights experiments/<stamp>/selected_model.json
+
+python -m vision_ai.models.perception.trainer.fall_trainer \
+    --dataset runs/fall/features_predicted.jsonl --out runs/fall \
+    --seed 42 --min-recall 0.85
+```

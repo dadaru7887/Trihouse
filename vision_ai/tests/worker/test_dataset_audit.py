@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import yaml
 
-from vision_ai.data_loader.perception.audit_cli import DatasetAuditError, audit_dataset
+from vision_ai.data_loader.perception.audit import DatasetAuditError, audit_dataset
 
 
 def make_dataset(root: Path, *, duplicate: bool = False) -> Path:
