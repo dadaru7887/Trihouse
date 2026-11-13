@@ -149,7 +149,8 @@ experiments/<stamp>/
                                      original | augmented, named by recipe id
     analysis/                        plots across seeds
 runs/fall_compare/<stamp>/{gt,predicted}/
-    report.md                        tables
+    report.md                        tables; E3 (1 s confirm) and E4 (5 s
+                                     escalation, gt only) at the end
     report.json, rows.jsonl          every number and every row
     cases/*.png                      representative cases
 ```

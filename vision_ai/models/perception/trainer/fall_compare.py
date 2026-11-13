@@ -22,10 +22,14 @@ Groups (see data_loader/fall/compare_rows.py):
 Flow: build rows -> fit each group with `fall_model.fit_candidates` (one
 LogisticRegression, scaler from train only, wrapped in SumModel) -> pick two
 thresholds on valid (recall floor then best precision; best F1) -> score test
-once at those fixed thresholds -> compare A vs C and B vs C -> write
-rows.jsonl, report.json, report.md and case sheets under --out.
+once at those fixed thresholds -> compare A vs C and B vs C -> time-axis
+checks (fall_sequence.py) -> write rows.jsonl, report.json, report.md and
+case sheets under --out.
 
-Scope: single-image posture classification. No temporal smoothing.
+Scope: the R/P/F1 tables are single-image posture classification. The
+time axis is approximated on the 1-second labelled frames through the
+runtime FallMonitor: E3, the 1 s confirm on test; E4, the 5 s escalation
+with each session held out in turn (ground-truth masks only).
 """
 
 from __future__ import annotations
@@ -37,6 +41,7 @@ from typing import Any, Sequence
 
 from vision_ai.data_loader.fall.compare_rows import GROUPS, build_rows, context_audit
 from vision_ai.models.perception.trainer.fall_model import fit_candidates
+from vision_ai.models.perception.trainer.fall_sequence import confirm_table, emergency_loso
 from vision_ai.models.perception.trainer.fall_trainer import (
     THRESHOLD_CANDIDATES, _scores, _select_threshold,
 )
@@ -289,7 +294,8 @@ def _fmt(m: dict) -> str:
 def write_markdown(report: dict, path: Path) -> None:
     """Human-readable summary of report.json, in Korean."""
     lines = [f"# 쓰러짐 자세 분류 특징 비교 — {report['masks']} 마스크", "",
-             "검증 범위: 이미지 단위(단일 프레임) 자세 분류. 시간축 판단은 포함하지 않는다.", "",
+             "검증 범위: 표의 Recall/Precision은 이미지 단위(단일 프레임) 자세 분류. "
+             "시간축은 맨 아래 E3/E4에서 1초 간격 라벨로 근사한다.", "",
              "## 데이터 분할 (세션 단위)", ""]
     for split, episodes in report["build"]["sessions"].items():
         n = report["counts"][split]
@@ -343,8 +349,43 @@ def write_markdown(report: dict, path: Path) -> None:
     for ep, a in report["context_audit"].items():
         lines.append(f"| {ep} | {a['split']} | {a['persons']} | {a['fallen']} | "
                      f"{a['person_contact_nonzero']} | {a['obstacle_contact_nonzero']} |")
+    lines += _sequence_markdown(report)
     lines += ["", "## 대표 사례", ""] + [f"- {k}: `{v}`" for k, v in report["case_sheets"].items()]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _sequence_markdown(report: dict) -> list[str]:
+    """E3 and E4 sections; both are approximations on 1 s labelled frames."""
+    lines = ["", "## 시간축 근사 (1초 간격 라벨 프레임)", "",
+             "라벨 프레임은 1초 간격이라 런타임 FallMonitor(realtime.yaml 시간값)를 그대로 돌리되, "
+             "5프레임 중앙값은 적용하지 않고(1초 간격에서는 5초 평활화가 됨) 1초보다 긴 공백에서 "
+             "트랙을 끊는다. 사람 연결은 정답 박스 겹침으로 한다.", "",
+             "### E3 — 쓰러짐 확인 1초 (test, Recall 기준 임계값)", "",
+             "| 모델 | 임계값 | 오탐 프레임 → 1초 확인 후 | 맞힌 쓰러짐 프레임 → 1초 확인 후 | "
+             "쓰러짐 라벨 없는 확인 구간 | 쓰러짐 구간 확인 / 전체 (1프레임 구간) |",
+             "|---|---|---|---|---|---|"]
+    for g, c in report["confirm_1s"].items():
+        lines.append(f"| {g} | {c['threshold']} | {c['frame_fp']} → {c['confirmed_fp']} | "
+                     f"{c['frame_tp']} → {c['confirmed_tp']} | {c['false_confirmations']} | "
+                     f"{c['fall_runs_confirmed']} / {c['fall_runs']} ({c['fall_runs_single_frame']}) |")
+    e = report.get("emergency_loso")
+    if not e:
+        return lines + ["", "E4(위험 확인 5초)는 정답 마스크 실행에서만 계산한다 "
+                        "(YOLOE가 train 세션을 학습해 세션별 교차검증이 공정하지 않음)."]
+    m = e["monitor"]
+    lines += ["", f"### E4 — 위험 확인 (세션 {len(e['sessions'])}개 교차검증, 정답 마스크)", "",
+              f"확인 {m['fall_confirm_seconds']:g}초 + 저움직임 {m['immobile_seconds']:g}초. "
+              "저움직임은 1초 간격에서 잴 수 없어 항상 충족으로 둔다 → 도달 수와 오경보 수는 상한. "
+              "대상 사건은 완벽한 분류기라면 위험 후보까지 갈 만큼 긴 쓰러짐 구간이다. "
+              "임계값은 매번 남은 세션 안의 교차검증 점수로만 정했다.", "",
+              "| 모델 | 대상 사건 | 위험 후보 도달 | 지연(초) | 오경보 | 서 있는 시간(초) | 짧은 쓰러짐 구간 |",
+              "|---|---|---|---|---|---|---|"]
+    for g in GROUPS:
+        t = e[g]["total"]
+        lat = ", ".join(f"{v:g}" for v in t["latency_seconds"]) or "-"
+        lines.append(f"| {g} | {t['eligible_events']} | {t['reached']} | {lat} | {t['false_alarms']} | "
+                     f"{t['standing_seconds']} | {t['short_fall_runs']} |")
+    return lines
 
 
 def run(export_root: Path, out_dir: Path, masks: str = "gt", weights: Path | None = None,
@@ -380,6 +421,13 @@ def run(export_root: Path, out_dir: Path, masks: str = "gt", weights: Path | Non
         "unmatched_alarms": (unmatched_alarms(unmatched, models, fitted)
                              if masks == "predicted" else None),
         "context_audit": context_audit(rows),
+        # E3: the runtime's 1 s confirm on test, per group at its fixed threshold.
+        "confirm_1s": confirm_table(rows, models, split="test"),
+        # E4: 5 s escalation with every session held out in turn. Ground-truth
+        # masks only: YOLOE trained on the train sessions, so its masks there
+        # are not what an unseen session would get.
+        "emergency_loso": (emergency_loso(rows, GROUPS, min_recall)
+                           if masks == "gt" else None),
     }
     report["case_sheets"] = render_cases(rows, Path(export_root), out_dir / "cases",
                                          _case_categories(rows, models, bc), models)
