@@ -15,15 +15,17 @@ writes it; FEATURE_NAMES from `models/perception/features.py` are read by name:
 
 Flow, and the split each stage may look at:
 
-    train   fit OR and SUM (fall_model.py), keep the one with the higher
-            leave-one-episode-out AUC across train episodes
+    train   fit SUM: one logistic regression over FEATURE_NAMES (fall_model.py).
+            OR is cross-validated alongside for the record, never deployed
     valid   choose the decision threshold -- the model is decided here
     test    measured once at the end, feeding no choice
 
 The bundle holds {"model", "kind", "feature_names", "threshold"}, the shape
 `models/perception/fall_classifier.py` loads.
 
-The threshold is the most precise one that still meets the recall floor.
+The threshold is the most precise one that still meets the recall floor,
+searched over every distinct valid score -- the same rule fall_compare.py
+reports, so the bundle's test numbers are the ones the comparison shows.
 Recall wins because this is a safety alarm: a false alarm costs a second look,
 a miss costs a fall nobody sees. If no candidate meets the floor, the
 highest-recall one is kept and `recall_floor_met` is False -- it is never
@@ -43,11 +45,13 @@ from vision_ai.models.perception.trainer.fall_model import (
     SumModel, cross_validate, fit_candidates,
 )
 
-# Formula kept when cross-validation cannot decide: OR held fewer false
-# positives than SUM at equal recall on ground-truth masks (fall_model.py).
-DEFAULT_KIND = "or"
+# Fixed, not chosen: the design is "r, h -> one logistic regression -> p", and
+# leave-one-episode-out AUC barely separated the two (OR 0.990, SUM 0.981 on
+# ground-truth masks, 2026-11-12), too little to deploy a model the design
+# does not describe.
+KIND = "sum"
 
-# The same candidate grid the delivered bundle used.
+# The 0.05 grid the delivered bundle used; fall_compare.py still reports it.
 THRESHOLD_CANDIDATES = [round(0.05 + 0.05 * step, 2) for step in range(19)]
 
 
@@ -64,10 +68,17 @@ def _scores(labels: list[int], predictions: list[int]) -> dict[str, float]:
     }
 
 
-def _select_threshold(labels: list[int], probabilities: list[float],
-                      min_recall: float) -> tuple[float, dict[str, float], bool]:
+def _select_threshold(labels: list[int], probabilities: list[float], min_recall: float,
+                      candidates: list[float] | None = None) -> tuple[float, dict[str, float], bool]:
+    """Most precise threshold meeting the recall floor; ties keep the lowest.
+
+    Candidates default to every distinct score, so no operating point the
+    model can reach is skipped because a grid line missed it.
+    """
+    if candidates is None:
+        candidates = sorted({round(float(p), 6) for p in probabilities})
     rows = []
-    for candidate in THRESHOLD_CANDIDATES:
+    for candidate in candidates:
         scored = _scores(labels, [1 if p >= candidate else 0 for p in probabilities])
         rows.append((candidate, scored))
     passing = [row for row in rows if row[1]["recall"] >= min_recall]
@@ -110,25 +121,9 @@ def _parameters(model: Any) -> list[float]:
     return [round(float(v), 8) for mode in model.modes.values() for v in (mode.weight, mode.bias)]
 
 
-def _choose_kind(train: list[dict[str, Any]]) -> tuple[str, dict]:
-    """Pick OR or SUM by leave-one-episode-out AUC on train alone.
-
-    Falls back to DEFAULT_KIND when fewer than two train episodes hold both
-    classes, since a held-out episode needs both for an AUC.
-    """
-    report = cross_validate(train)
-    scored = {name: entry for name, entry in report.items() if entry["per_episode"]}
-    if len(scored) < 2 or min(len(e["per_episode"]) for e in scored.values()) < 2:
-        return DEFAULT_KIND, {"method": "default", "reason": "too few mixed-class episodes",
-                              "cv": report}
-    # Higher mean AUC wins; on a tie the default formula is kept.
-    best = max(scored, key=lambda name: (scored[name]["mean_auc"], name == DEFAULT_KIND))
-    return best, {"method": "leave_one_episode_out", "cv": report}
-
-
 def train_classifier(dataset_path: Path, out_dir: Path, *, seed: int = 42,
                      min_recall: float = 0.85) -> dict[str, Any]:
-    """Fit both formulas on train, keep one, threshold on valid, score test once."""
+    """Fit SUM on train, threshold on valid, score test once."""
     import joblib
 
     load_dataset(Path(dataset_path))          # refuses an unscoreable dataset
@@ -137,10 +132,9 @@ def train_classifier(dataset_path: Path, out_dir: Path, *, seed: int = 42,
     out_dir.mkdir(parents=True, exist_ok=True)
     by_split = {split: [r for r in rows if r["split"] == split] for split in SPLITS}
 
-    # Both formulas see train only; the choice between them too.
-    candidates = fit_candidates(by_split["train"])
-    kind, selection = _choose_kind(by_split["train"])
-    model = candidates[kind]
+    # Train only. OR is fitted and cross-validated too, for the record.
+    model = fit_candidates(by_split["train"])[KIND]
+    cross_validation = cross_validate(by_split["train"])
 
     def labels(split: str) -> list[int]:
         return [int(r["fallen"]) for r in by_split[split]]
@@ -157,13 +151,13 @@ def train_classifier(dataset_path: Path, out_dir: Path, *, seed: int = 42,
 
     bundle_path = out_dir / "fallen_classifier.joblib"
     # The shape FallenClassifier.load reads: a model scored by feature name.
-    joblib.dump({"model": model, "kind": kind, "feature_names": list(FEATURE_NAMES),
+    joblib.dump({"model": model, "kind": KIND, "feature_names": list(FEATURE_NAMES),
                  "threshold": threshold, "seed": seed}, bundle_path)
 
     result = {
         "bundle": str(bundle_path),
-        "kind": kind,
-        "selection": selection,
+        "kind": KIND,
+        "cross_validation": cross_validation,
         "threshold": threshold,
         "recall_floor": min_recall,
         "recall_floor_met": floor_met,

@@ -73,7 +73,7 @@ def _candidates(probabilities) -> list[float]:
 def _floor_threshold(labels, probabilities, min_recall: float) -> tuple[float, dict, bool]:
     """Most precise candidate meeting the recall floor; ties keep the lowest.
 
-    Same rule as fall_trainer._select_threshold, over `_candidates`. With no
+    Same rule and candidates as fall_trainer._select_threshold. With no
     candidate meeting the floor, the highest-recall one is returned with False.
     """
     rows = [(t, _metrics(labels, [int(p >= t) for p in probabilities]))
@@ -132,7 +132,8 @@ def fit_and_score(rows: list[dict], min_recall: float) -> tuple[dict[str, Any], 
         threshold, at_floor, floor_met = _floor_threshold(labels, probabilities, min_recall)
         f1_threshold, at_f1 = _f1_threshold(labels, probabilities)
         # The existing trainer's 0.05 grid, kept for reference only.
-        grid_t, grid_scored, grid_met = _select_threshold(labels, probabilities, min_recall)
+        grid_t, grid_scored, grid_met = _select_threshold(
+            labels, probabilities, min_recall, THRESHOLD_CANDIDATES)
         out[group] = {
             "features": list(model.features), "dropped": list(model.dropped),
             "train_mean": [round(float(v), 6) for v in model.mean],

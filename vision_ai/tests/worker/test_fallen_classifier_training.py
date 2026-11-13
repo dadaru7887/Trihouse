@@ -159,25 +159,38 @@ def test_the_cli_takes_every_path_as_an_argument() -> None:
     assert args.seed == 7
 
 
-def test_without_episodes_the_default_formula_is_kept(tmp_path) -> None:
-    """Leave-one-episode-out needs episodes; with none the documented default stays."""
-    from vision_ai.models.perception.trainer.fall_trainer import DEFAULT_KIND, train_classifier
+def test_the_deployed_formula_is_always_sum(tmp_path) -> None:
+    """The design is one logistic regression over r and h; OR is only reported."""
+    import joblib
 
-    result = train_classifier(dataset(tmp_path), tmp_path / "run", seed=42)
-
-    assert result["kind"] == DEFAULT_KIND
-    assert result["selection"]["method"] == "default"
-
-
-def test_with_episodes_the_formula_is_chosen_by_cross_validation_on_train(tmp_path) -> None:
+    from vision_ai.models.perception.trainer.fall_model import SumModel
     from vision_ai.models.perception.trainer.fall_trainer import train_classifier
 
-    result = train_classifier(dataset(tmp_path, episodes=True), tmp_path / "run", seed=42)
+    for name, episodes in (("plain", False), ("episodes", True)):
+        (tmp_path / name).mkdir()
+        result = train_classifier(dataset(tmp_path / name, episodes=episodes),
+                                  tmp_path / name / "run", seed=42)
+        bundle = joblib.load(result["bundle"])
 
-    assert result["selection"]["method"] == "leave_one_episode_out"
-    held_out = set(result["selection"]["cv"]["or"]["per_episode"])
+        assert result["kind"] == bundle["kind"] == "sum"
+        assert isinstance(bundle["model"], SumModel)
+    held_out = set(result["cross_validation"]["or"]["per_episode"])
     assert held_out and all(name.startswith("train") for name in held_out)
-    assert result["kind"] in ("or", "sum")
+
+
+def test_the_threshold_is_one_of_the_valid_scores(tmp_path) -> None:
+    """Not a grid point: the same candidates fall_compare.py searches."""
+    import joblib
+
+    from vision_ai.models.perception.trainer.fall_trainer import train_classifier
+
+    path = dataset(tmp_path)
+    result = train_classifier(path, tmp_path / "run", seed=42)
+    model = joblib.load(result["bundle"])["model"]
+    valid = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines()]
+    scores = {round(model.score(r["features"]), 6) for r in valid if r["split"] == "valid"}
+
+    assert result["threshold"] in scores
 
 
 def test_named_features_may_carry_extra_diagnostic_keys(tmp_path) -> None:

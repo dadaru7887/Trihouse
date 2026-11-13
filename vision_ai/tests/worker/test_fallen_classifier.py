@@ -38,7 +38,7 @@ def _rows():
     return rows
 
 
-def _write_bundle(tmp_path, kind="or", **overrides):
+def _write_bundle(tmp_path, kind="sum", **overrides):
     """Fit both formulas, keep `kind`, and dump a trainer-shaped bundle."""
     from vision_ai.models.perception.features import FEATURE_NAMES
     from vision_ai.models.perception.trainer.fall_model import fit_candidates

@@ -19,7 +19,9 @@ equal recall, because catching the diagonal falls no longer required dropping
 the aspect threshold far enough to sweep in standing people. That measurement
 does not transfer automatically: the deployed model is fitted on the
 segmentation model's masks, whose edges are cut and smoothed, so both are
-fitted on every run and compared again.
+fitted on every run and compared again. The deployed bundle is SUM regardless
+(fall_trainer.KIND): it is the formula the design describes, and the measured
+gap was too small to justify deploying the other.
 
 Comparison is leave-one-episode-out, never a single split. Adjacent frames of
 one recording are near identical, and a 21-positive validation split ranked
