@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import re
 import sys
 from pathlib import Path
@@ -94,6 +95,54 @@ def _load_augmentation_module(source: Path | None = None):
     return module
 
 
+# Augmented training inputs kept on disk per recipe, so what the model was
+# actually shown can be checked after the run. Enough to see each effect,
+# few enough that saving costs nothing next to an epoch.
+SAMPLES_PER_RECIPE = 10
+
+
+class AugmentationSampler:
+    """Albumentations image function: apply one recipe, keep the first few results.
+
+    Runs inside the dataloader workers on the image ultralytics hands
+    albumentations (after mosaic and perspective, before HSV and flip), so a
+    saved file is the training input itself, not a re-rendering. Each file is
+    `<recipe id>_<pid>_<n>.jpg`, original on the left, augmented on the right.
+    Saving never interrupts training: a write error just stops sampling.
+    """
+
+    def __init__(self, draw_and_apply: Callable[[Any], tuple[Any, Any]], directory: Path,
+                 per_recipe: int = SAMPLES_PER_RECIPE) -> None:
+        self.draw_and_apply = draw_and_apply
+        self.directory = Path(directory)
+        self.per_recipe = per_recipe
+        self.full: set[str] = set()
+        self.count = 0
+
+    def __call__(self, image: Any, **kwargs: Any) -> Any:
+        recipe, augmented = self.draw_and_apply(image)
+        if recipe.id not in self.full:
+            self._save(recipe.id, image, augmented)
+        return augmented
+
+    def _save(self, recipe_id: str, original: Any, augmented: Any) -> None:
+        try:
+            import cv2
+            import numpy as np
+
+            self.directory.mkdir(parents=True, exist_ok=True)
+            kept = sum(1 for name in os.listdir(self.directory) if name.startswith(recipe_id + "_"))
+            if kept >= self.per_recipe:
+                self.full.add(recipe_id)
+                return
+            pair = np.concatenate([np.asarray(original), np.asarray(augmented)], axis=1)
+            self.count += 1
+            name = f"{recipe_id}_{os.getpid()}_{self.count:04d}.jpg"
+            cv2.imwrite(str(self.directory / name), np.ascontiguousarray(pair))
+        except (OSError, ValueError, ImportError):
+            self.full.add(recipe_id)
+
+
 def _default_components(
     augmentation_source: Path | None = None,
 ) -> tuple[Callable[[str], Any], Any, Callable[[bool, int], list[Any]]]:
@@ -103,13 +152,14 @@ def _default_components(
     training = _load_augmentation_module(augmentation_source)
 
     def augmentations(enabled: bool, augmentation_seed: int,
-                      holdout: tuple[str, ...] = ()) -> list[Any]:
+                      holdout: tuple[str, ...] = (), sample_dir: Path | None = None) -> list[Any]:
         training.configure_augmentation_seed(augmentation_seed)
         training.configure_pool(exclude=set(holdout))
         if not enabled:
             return []
-        return [training.A.Lambda(image=training.mixed_augmentation, p=1.0,
-                                  name="mixed_train_recipes")]
+        image = (AugmentationSampler(training.draw_and_apply, sample_dir)
+                 if sample_dir is not None else training.mixed_augmentation)
+        return [training.A.Lambda(image=image, p=1.0, name="mixed_train_recipes")]
 
     return YOLOE, YOLOEPESegTrainer, augmentations
 
@@ -130,6 +180,8 @@ class YOLOEBackend:
         if self.model_factory is not None and self.augmentation_factory is not None:
             return
         default_model, default_trainer, default_augmentations = _default_components(augmentation_source)
+        # Only the built-in factory knows how to keep samples.
+        self._samples = self.augmentation_factory is None
         self.model_factory = self.model_factory or default_model
         self.trainer_class = self.trainer_class or default_trainer
         self.augmentation_factory = self.augmentation_factory or default_augmentations
@@ -146,8 +198,10 @@ class YOLOEBackend:
         self._ensure_components(config.augmentation_source)
         assert self.model_factory is not None and self.augmentation_factory is not None
         model = self.model_factory(resolve_model(config.model))
+        extra = ({"sample_dir": Path(run_dir) / "augmented_samples"}
+                 if getattr(self, "_samples", False) else {})
         transforms = self.augmentation_factory(
-            config.augmentation, config.augmentation_seed, config.augmentation_holdout)
+            config.augmentation, config.augmentation_seed, config.augmentation_holdout, **extra)
 
         def set_augmentations(trainer: Any) -> None:
             trainer.args.augmentations = transforms

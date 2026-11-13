@@ -50,7 +50,7 @@ __all__ = ["A", "configure_augmentation_seed", "configure_pool", "mixed_augmenta
            "MIXED_POOL", "Recipe", "TRAIN_RECIPES", "EVAL_RECIPES", "RECIPES",
            "MECHANISMS", "ATOMS_OF_MECHANISM", "TRAIN_ATOMS", "EVAL_ONLY_ATOMS",
            "UNTRACKED_ATOMS", "SCENARIOS", "GROUPS", "STRICTLY_UNSEEN_GROUPS",
-           "apply_recipe", "apply_group", "recipes_in", "pool_for"]
+           "apply_recipe", "apply_group", "draw_and_apply", "recipes_in", "pool_for"]
 
 # Importing this module must not seed any global RNG. The training seed is
 # owned by utils/reproducibility.seed_everything, the augmentation seed by
@@ -335,14 +335,20 @@ def configure_pool(exclude=frozenset()):
     return _active_pool
 
 
-def mixed_augmentation(image, **kwargs):
-    """Draw one training recipe uniformly and apply it, on the augmentation RNG.
+def draw_and_apply(image):
+    """Draw one training recipe uniformly, apply it, and return (recipe, image).
 
     Uniform over recipes, not over scenarios, so every recipe gets the same
     exposure and no effect is under-sampled by how the scenarios are grouped.
     """
     with isolated_augmentation_random_state():
-        return random.choice(_active_pool or list(TRAIN_RECIPES))(image)
+        recipe = random.choice(_active_pool or list(TRAIN_RECIPES))
+        return recipe, recipe(image)
+
+
+def mixed_augmentation(image, **kwargs):
+    """Apply one uniformly drawn training recipe, on the augmentation RNG."""
+    return draw_and_apply(image)[1]
 
 
 def apply_recipe(image, recipe_id):

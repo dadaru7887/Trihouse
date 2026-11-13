@@ -145,6 +145,8 @@ experiments/<stamp>/
     selected_model.json              chosen weights and why
     aggregate.json, seed_results.csv per-seed and mean/std
     seed_<n>/                        each seed's run, log, weights, metrics
+    seed_<n>/augmented_samples/      10 actual training inputs per recipe,
+                                     original | augmented, named by recipe id
     analysis/                        plots across seeds
 runs/fall_compare/<stamp>/{gt,predicted}/
     report.md                        tables
