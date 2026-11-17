@@ -34,7 +34,7 @@ def proposal_payload() -> dict:
             "risk_bbox_center_x_norm": 0.4,
             "risk_bbox_center_y_norm": 0.5,
             "risk_confidence": 0.9,
-            "vlm_uncertainty": 0.1,
+            "scene_confidence": 0.1,
         },
         "perception_evidence": [
             {"class_name": "person", "confidence": 0.9, "bbox_xyxy_norm": [0.3, 0.2, 0.5, 0.8]},
@@ -123,3 +123,30 @@ def test_same_proposal_identity_cannot_be_reused_with_different_content() -> Non
 
     with pytest.raises(RecoveryProposalConflict):
         repo.create_proposal(changed, "proposal-message-2", "b" * 64)
+
+
+@pytest.mark.parametrize("mode, status", [(None, "pending"), ("operator_approved", "pending"),
+                                          ("auto_bounded", "approved")])
+def test_only_an_auto_bounded_runtime_gets_its_proposals_decided_by_the_policy(mode, status) -> None:
+    """operator_approved 는 전 건 사람이다. 모드를 밝히지 않은 제안도 사람에게 간다."""
+    from uuid import uuid4
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from fms_gateway.app.recovery_routes import recovery_router
+
+    payload = proposal_payload()
+    payload.update(selected_skill_id=3, selected_skill_name="WAIT_REOBSERVE",
+                   selected_coord=[0.0, 0.0, 0.0])
+    payload["state"]["scene_confidence"] = 0.9
+    if mode:
+        payload["policy_lineage"]["execution_mode"] = mode
+    app = FastAPI()
+    app.include_router(recovery_router(repository()))
+
+    response = TestClient(app).post("/internal/v1/recovery/proposals", json=payload,
+                                    headers={"Idempotency-Key": str(uuid4())})
+
+    assert response.status_code == 201, response.text
+    assert response.json()["status"] == status

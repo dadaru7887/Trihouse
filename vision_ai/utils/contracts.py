@@ -41,7 +41,7 @@ class RecoveryStateV1:
     risk_bbox_center_x_norm: float
     risk_bbox_center_y_norm: float
     risk_confidence: float
-    vlm_uncertainty: float
+    scene_confidence: float
     state_schema_id: str = field(default="trihouse.recovery-state.v1", init=False)
 
     def __post_init__(self) -> None:
@@ -67,7 +67,7 @@ class RecoveryStateV1:
             self.risk_bbox_center_x_norm,
             self.risk_bbox_center_y_norm,
             self.risk_confidence,
-            self.vlm_uncertainty,
+            self.scene_confidence,
         )
 
 

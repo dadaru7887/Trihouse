@@ -25,7 +25,7 @@ python -m pip install \
     --index-url https://download.pytorch.org/whl/cu128
 
 pip install ultralytics albumentations opencv-python pillow \
-            scikit-learn pandas pyyaml joblib roboflow wandb
+            scikit-learn pandas pyyaml joblib roboflow wandb lap
 ```
 
 Verify the GPU is visible before going further:
@@ -196,4 +196,41 @@ python -m vision_ai.data_loader.fall.build_features \
 python -m vision_ai.models.perception.trainer.fall_trainer \
     --dataset runs/fall/features_predicted.jsonl --out runs/fall \
     --seed 42 --min-recall 0.85
+```
+
+## 10. VLM prompt comparison (after step 6)
+
+Runs every prompt version in `vision_ai/models/recovery/prompts.yaml` on the
+same frames, the same YOLOE detections and the same Qwen settings. Needs a GPU
+with about 8 GB free and the VLM packages of the inference image:
+
+```bash
+pip install transformers==4.53.2 accelerate==1.8.1 bitsandbytes==0.46.1 qwen-vl-utils==0.0.11
+
+python -m vision_ai.tooling.vlm_prompt_compare \
+    --dataset data/pinky_camera/merged_export_split --split valid \
+    --weights experiments/<stamp>/selected_model.json \
+    --out runs/vlm_prompt_compare/valid                 # all versions; --versions v1 v2 for some
+```
+
+| file | what it is |
+|---|---|
+| `detections.jsonl` | per frame: YOLOE detections (region_id, ByteTrack track_id, box) and the labelled objects matched to them. Built once, reused |
+| `responses.jsonl` | per frame and version: raw answer, parsed answer, truncated, tokens, seconds. A rerun skips what is there |
+| `review.csv` | one row per labelled object: every version's risk/evidence and `risk_label` (pre-filled from `--draft-version`, v1 by default) to correct |
+| `overlays/` | each frame with labelled objects (green, g1..) and detections (orange, r1 #track) |
+| `summary.json` | per version: JSON valid rate, truncated, regions left unanswered |
+
+`risk_label` starts as v1's answer (v1 is the prompt written to the risk
+criteria); go through every row against `overlays/` and the image and correct
+it. A row left unchecked keeps v1's answer and scores in v1's favour, so write
+what you checked in `label_note`.
+
+Tune prompts on valid only. Decide the versions before opening test, then run
+test once with `--split test` and review it the same way.
+
+The robot picks the version with `--prompt-version` (or `VLM_PROMPT_VERSION`):
+
+```bash
+python -m vision_ai.robot.recovery.runtime --prompt-version current
 ```

@@ -10,6 +10,7 @@ import argparse
 import os
 from typing import Sequence
 
+from vision_ai.models.recovery.vlm_interpreter import load_prompts
 from vision_ai.robot.safety.config import parse_boolean, resolve_safety_gate
 from vision_ai.robot.recovery.live_runtime import run_live_inference
 
@@ -26,6 +27,13 @@ def parse_runtime_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=parse_boolean,
         default=None,
         metavar="true|false",
+    )
+    prompts = load_prompts()
+    parser.add_argument(
+        "--prompt-version",
+        choices=sorted(prompts["versions"]),
+        default=os.environ.get("VLM_PROMPT_VERSION") or prompts["runtime_version"],
+        help="VLM prompt in prompts.yaml (default: VLM_PROMPT_VERSION, else runtime_version)",
     )
     return parser.parse_args(argv)
 
@@ -50,7 +58,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     # EN: This metadata must travel with later proposals/transitions.
     # KO: 이 값은 이후 proposal/transition 메타데이터에 함께 기록해야 한다.
     os.environ["VLM_RL_EFFECTIVE_SAFETY_GATE_ENABLED"] = str(safety_gate_enabled).lower()
-    run_live_inference(safety_gate_enabled=safety_gate_enabled)
+    run_live_inference(safety_gate_enabled=safety_gate_enabled, prompt_version=args.prompt_version)
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ from .navigation_context import GatewayNavigationContextSource
 from .policy_runtime import ApprovedPolicyRuntime
 from .proposal_client import GatewayProposalClient
 from vision_ai.models.recovery.vlm_interpreter import QwenVlmInterpreter
-from .worker import DetectionEvidence, RecoveryInferenceWorker
+from .worker import RecoveryInferenceWorker, detection_evidence
 
 
 class PersonSafetyReporter:
@@ -85,36 +85,7 @@ class PersonSafetyReporter:
         self.last_report_at = now
 
 
-def detection_evidence(
-    detections: Sequence[Any],
-    frame_shape: tuple[int, ...],
-    *,
-    person_class_id: int,
-) -> list[DetectionEvidence]:
-    import numpy as np
-
-    height, width = frame_shape[:2]
-    evidence: list[DetectionEvidence] = []
-    for index, detection in enumerate(detections):
-        ys, xs = np.nonzero(detection.mask)
-        if len(xs) == 0:
-            continue
-        bbox = (
-            float(xs.min()) / width,
-            float(ys.min()) / height,
-            float(xs.max() + 1) / width,
-            float(ys.max() + 1) / height,
-        )
-        evidence.append(DetectionEvidence(
-            class_name="person" if detection.class_id == person_class_id else "obstacle",
-            confidence=float(detection.confidence),
-            bbox_xyxy_norm=bbox,
-            track_id=f"frame-{index}",
-        ))
-    return evidence
-
-
-def run_live_inference(*, safety_gate_enabled: bool) -> None:
+def run_live_inference(*, safety_gate_enabled: bool, prompt_version: str | None = None) -> None:
     import cv2
 
     gateway_url = os.environ["FMS_GATEWAY_URL"]
@@ -132,7 +103,13 @@ def run_live_inference(*, safety_gate_enabled: bool) -> None:
             tracking=True,
         ),
     )
-    vlm = QwenVlmInterpreter(os.environ.get("VLM_MODEL_REVISION", "main"))
+    vlm = QwenVlmInterpreter(
+        os.environ.get("VLM_MODEL_REVISION", "main"),
+        prompt_version=prompt_version,
+        # Every raw answer is kept, so a refused or odd proposal can be traced
+        # back to what the model actually wrote (proposal vlm_lineage.response_id).
+        response_log=Path(os.environ.get("VLM_RESPONSE_LOG", "runs/recovery/vlm_responses.jsonl")),
+    )
     policy = ApprovedPolicyRuntime(
         Path(os.environ["RECOVERY_POLICY_CHECKPOINT"]),
         os.environ["RECOVERY_POLICY_SHA256"],
@@ -147,6 +124,7 @@ def run_live_inference(*, safety_gate_enabled: bool) -> None:
         proposal_client,
         safety_gate_enabled=safety_gate_enabled,
         skill_selector=skill_selector,
+        execution_mode=os.environ["VLM_RL_EXECUTION_MODE"],
     )
     context_source = GatewayNavigationContextSource(gateway_url, device_id)
     camera_id = rtsp_url.rstrip("/").rsplit("/", 1)[-1]
@@ -170,9 +148,7 @@ def run_live_inference(*, safety_gate_enabled: bool) -> None:
             if not ok:
                 raise RuntimeError("5080 MediaMTX stream stopped producing frames")
             raw_detections = detector.detect(frame)
-            detections = detection_evidence(
-                raw_detections, frame.shape, person_class_id=person_class_id
-            )
+            detections = detection_evidence(raw_detections, person_class_id=person_class_id)
             person_reporter.observe_frame(raw_detections, frame.shape, time.monotonic())
             try:
                 context = context_source.get()

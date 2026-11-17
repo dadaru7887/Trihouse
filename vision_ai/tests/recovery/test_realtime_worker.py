@@ -20,7 +20,7 @@ class FakeVlm:
                 }
             ],
             "robot_candidate_sectors": [{"angle_deg": 20, "width_deg": 20, "preference": 0.8}],
-            "uncertainty": 0.15,
+            "scene_confidence": 0.15,
         }
 
 
@@ -83,7 +83,7 @@ def test_worker_preserves_all_detections_but_uses_one_worst_risk_state() -> None
     assert proposal["state"]["risk_bbox_center_x_norm"] == pytest.approx(0.3)
     assert proposal["state"]["risk_bbox_center_y_norm"] == pytest.approx(0.5)
     assert proposal["state"]["risk_confidence"] == 0.91
-    assert proposal["state"]["vlm_uncertainty"] == 0.15
+    assert proposal["state"]["scene_confidence"] == 0.15
     assert proposal["selected_skill_id"] == 1
     assert proposal["selected_skill_name"] == "REROUTE_LEFT"
 
@@ -91,7 +91,7 @@ def test_worker_preserves_all_detections_but_uses_one_worst_risk_state() -> None
 def test_worker_rejects_invalid_vlm_contract_without_sending_a_proposal() -> None:
     class InvalidVlm(FakeVlm):
         def interpret(self, frame, detections, goal_text):
-            return {"observations": "not-a-list", "uncertainty": 0.1}
+            return {"observations": "not-a-list", "scene_confidence": 0.1}
 
     client = RecordingProposalClient()
     worker = RecoveryInferenceWorker(InvalidVlm(), FakePolicy(), client)
@@ -262,3 +262,57 @@ def test_a_selection_marked_used_always_matches_the_skill_that_was_proposed(sele
         assert selection["learned_skill_id"] == proposal["selected_skill_id"]
     else:
         assert selection["source"] != "distilled_ensemble"
+
+
+def test_the_state_box_is_the_yoloe_box_not_the_one_the_vlm_wrote() -> None:
+    class DriftingVlm(FakeVlm):
+        def interpret(self, frame, detections, goal_text):
+            answer = super().interpret(frame, detections, goal_text)
+            answer["observations"][0].update(region_id="r2", bbox_norm=[0.0, 0.0, 0.1, 0.1])
+            return answer
+
+    evidence = [
+        DetectionEvidence("person", 0.91, (0.2, 0.2, 0.4, 0.8), "7", "r1"),
+        DetectionEvidence("obstacle", 0.70, (0.6, 0.3, 0.9, 0.9), None, "r2"),
+    ]
+    client = RecordingProposalClient()
+    RecoveryInferenceWorker(DriftingVlm(), FakePolicy(), client).process(object(), evidence, context())
+
+    state = client.payloads[0]["state"]
+    assert state["risk_bbox_center_x_norm"] == pytest.approx(0.75)   # r2's YOLOE box
+    assert state["risk_bbox_center_y_norm"] == pytest.approx(0.6)
+
+
+def test_detection_evidence_numbers_left_to_right_and_keeps_the_bytetrack_id() -> None:
+    from vision_ai.models.perception.detector import Detection
+    from vision_ai.robot.recovery.worker import detection_evidence
+
+    raw = [
+        Detection(1, 0.9, None, "12", (0.6, 0.1, 0.8, 0.9)),
+        Detection(0, 0.5, None, "", (0.1, 0.2, 0.3, 0.5)),
+        Detection(1, 0.4, None, "3", None),                   # no box: dropped
+    ]
+
+    evidence = detection_evidence(raw, person_class_id=1)
+
+    assert [(e.region_id, e.class_name, e.track_id) for e in evidence] == [
+        ("r1", "obstacle", None), ("r2", "person", "12")]
+
+
+def test_answers_without_region_ids_are_linked_by_box_overlap() -> None:
+    from vision_ai.robot.recovery.worker import link_observations
+
+    evidence = detections()
+    answers = [{"bbox_norm": [0.62, 0.3, 0.9, 0.88]}, {"bbox_norm": [0.0, 0.9, 0.05, 1.0]}]
+
+    assert link_observations(answers, evidence) == {1: answers[0]}
+
+
+def test_the_proposal_says_which_execution_mode_made_it() -> None:
+    client = RecordingProposalClient()
+    RecoveryInferenceWorker(FakeVlm(), FakePolicy(), client).process(object(), detections(), context())
+    RecoveryInferenceWorker(FakeVlm(), FakePolicy(), client,
+                            execution_mode="auto_bounded").process(object(), detections(), context())
+
+    assert [p["policy_lineage"]["execution_mode"] for p in client.payloads] == [
+        "operator_approved", "auto_bounded"]

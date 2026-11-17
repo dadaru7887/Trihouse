@@ -91,7 +91,7 @@ class RecoveryStateV1Payload(BaseModel):
     risk_bbox_center_x_norm: float
     risk_bbox_center_y_norm: float
     risk_confidence: float
-    vlm_uncertainty: float
+    scene_confidence: float
 
     @model_validator(mode="after")
     def validate_frozen_state(self):

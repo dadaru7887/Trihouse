@@ -120,7 +120,7 @@ trigger = relevant AND undecidable
 | `observations[].bbox_norm` | 길이 4, 각 0..1 | 같음 |
 | `observations[].confidence` | 0..1 | 같음 |
 | `robot_candidate_sectors[]` | angle_deg · width_deg · preference | 파싱만, state 에 안 들어감 |
-| `uncertainty` | 유한수 0..1 | `worker.py` |
+| `scene_confidence` (current 프롬프트는 `uncertainty` 키, 의미는 같은 확신도) | 유한수 0..1, 1 = 확실 | `worker.py:validated_observations` |
 
 **주의 깊게 쓰인 프롬프트 한 줄**: `robot_candidate_sectors` 는 "로봇이 갈 수 있는 방향"이지 "물체가 가는 방향"이 아니라고 명시한다. 이 구분이 없으면 VLM이 반대로 답한다.
 
@@ -145,9 +145,9 @@ trigger = relevant AND undecidable
 | --- | --- | --- | --- |
 | 1-3 | `robot_x/y/yaw` | `NavigationContext.robot_pose` (Gateway) | 유한수만 |
 | 4-5 | `goal_x/y` | `NavigationContext.goal_pose` | 유한수만 |
-| 6-7 | `risk_bbox_center_x/y_norm` | 최고 위험 관측 bbox 중심 | **0..1 강제** |
+| 6-7 | `risk_bbox_center_x/y_norm` | 최고 위험 관측에 연결된 YOLOE 박스 중심 | **0..1 강제** |
 | 8 | `risk_confidence` | 그 관측의 confidence | **0..1 강제** |
-| 9 | `vlm_uncertainty` | VLM `uncertainty` | **0..1 강제** |
+| 9 | `scene_confidence` | VLM 장면 확신도 (1 = 확실) | **0..1 강제** |
 
 **메모에 대한 답 — 최고 위험 객체 하나만 쓴다.** 다중 객체 관계는 state 에 안 들어간다. 표현 한계이자 의도된 단순화다: 9차원이 고정 계약이라 DB 컬럼·Gateway 검증·체크포인트 호환이 전부 여기 묶여 있고, 차원을 늘리면 그 넷이 동시에 깨진다. 대신 관측 **전부**는 `perception_evidence` 로 제안에 실려 사람이 본다.
 

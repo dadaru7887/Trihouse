@@ -50,13 +50,15 @@ class Detection:
 
     `track_id` is filled only when tracking is on. An empty string means "a
     detection in this frame, with no identity across frames" -- whatever holds
-    per-person state has to tell those apart.
+    per-person state has to tell those apart. `box_xyxy_norm` is the model's own
+    box, normalised by the frame size; None only where a caller built one by hand.
     """
 
     class_id: int
     confidence: float
     mask: Any
     track_id: str = ""
+    box_xyxy_norm: tuple[float, float, float, float] | None = None
 
 
 def resolve_weights(value: Path) -> Path:
@@ -102,12 +104,15 @@ def detections_from_result(result: Any, mask_threshold: float = 0.5) -> list[Det
     scores = boxes.conf.detach().cpu().numpy()
     raw_ids = getattr(boxes, "id", None)
     ids = None if raw_ids is None else raw_ids.detach().cpu().numpy().astype(int)
+    raw_boxes = getattr(boxes, "xyxyn", None)
+    xyxyn = None if raw_boxes is None else raw_boxes.detach().cpu().numpy()
     return [
         Detection(
             class_id=int(classes[index]),
             confidence=float(scores[index]),
             mask=masks.data[index].detach().cpu().numpy() > mask_threshold,
             track_id="" if ids is None else str(int(ids[index])),
+            box_xyxy_norm=None if xyxyn is None else tuple(float(v) for v in xyxyn[index]),
         )
         for index in range(len(classes))
     ]
@@ -146,10 +151,16 @@ class Detector:
             # Without persist=True the tracker restarts each frame and
             # renumbers, so a track_id would exist but mean nothing across
             # frames.
-            result = self._model.track(frame, persist=True, **options)[0]
+            result = self._model.track(frame, persist=True, tracker="bytetrack.yaml", **options)[0]
         else:
             result = self._model.predict(frame, **options)[0]
         return detections_from_result(result)
+
+    def reset_tracking(self) -> None:
+        """Forget every track, so the next frame starts a new scene from id 1."""
+        predictor = getattr(self._model, "predictor", None)
+        for tracker in getattr(predictor, "trackers", []):
+            tracker.reset()
 
     def detect_person(self, frame: Any) -> Detection | None:
         return select_best(self.detect(frame), self.config.person_class_id)

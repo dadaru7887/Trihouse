@@ -1,5 +1,6 @@
 -r base.txt
 ultralytics==8.4.118
+lap==0.5.14                 # ByteTrack (detector tracking=True); ultralytics would pip-install it at run time
 albumentations==1.4.24
 tensorboard==2.21.0
 pandas==2.3.3

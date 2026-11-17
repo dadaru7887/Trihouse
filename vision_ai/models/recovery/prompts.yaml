@@ -1,0 +1,136 @@
+# Qwen2.5-VL recovery prompts, read by vlm_interpreter.py.
+#
+# A version is a list of sections joined by one blank line, a reference style
+# for the detection list, and the key the answer uses for scene confidence.
+# Each section's text lives once under `sections`; adding a version means
+# listing which sections it uses, so versions differ only where they say so.
+#
+# Only {goal} and {yoloe_detections} are substituted. Every other brace,
+# such as {region_id} in the JSON example, reaches the model as written.
+#
+# reference styles (vlm_interpreter.build_detections_text):
+#   legacy   - person: TOP-LEFT region, confidence 0.91
+#   regions  - region_id=r1, class=person, yoloe_confidence=0.91,
+#              bbox_norm=[0.120, 0.400, 0.310, 0.950], position=BOTTOM-LEFT, track_id=7
+
+runtime_version: v1            # what the robot uses unless VLM_PROMPT_VERSION says otherwise
+
+generation:
+  # One observation with an evidence sentence is about 110-130 tokens in the
+  # Qwen tokenizer (digits are one token each), so 400 runs out at 3-4
+  # objects. Generation stops at the end of the JSON anyway; the limit only
+  # matters when it is hit, and `truncated` in every result records that.
+  max_new_tokens: 1024
+  do_sample: false
+
+versions:
+  current:                     # the prompt, input and output the robot ran before
+    reference: legacy
+    scene_confidence_key: uncertainty   # "0=very uncertain, 1=very certain": already a confidence
+    sections: [legacy_contract]
+  v1:
+    reference: regions
+    scene_confidence_key: scene_confidence
+    sections: [instruction, reference, criteria, output_format, field_notes]
+  v2:                          # v1 without the notes under the JSON
+    reference: regions
+    scene_confidence_key: scene_confidence
+    sections: [instruction, reference, criteria, output_format]
+
+sections:
+  legacy_contract: |-
+    Goal: {goal}
+
+    Detected by onboard segmentation model (System1):
+    {yoloe_detections}
+
+    Respond with ONLY a JSON object (no other text) matching this exact schema:
+    {
+      "observations": [
+        {
+          "region_id": "r1",
+          "bbox_norm": [x0, y0, x1, y1],
+          "semantic_label": "person" | "obstacle" | "unknown_dynamic",
+          "risk": "low" | "moderate" | "critical",
+          "confidence": 0.00,
+          "motion_evidence": "track_summary" | "none"
+        }
+      ],
+      "robot_candidate_sectors": [
+        {"angle_deg": 0, "width_deg": 20, "preference": 0.00}
+      ],
+      "uncertainty": 0.00
+    }
+
+    bbox_norm is [x0,y0,x1,y1] normalized 0-1 by image width/height. robot_candidate_sectors
+    describes which direction (relative to current heading, 0=forward) the robot could safely
+    attempt a short recovery move, NOT the direction the detected object is moving. uncertainty
+    is your overall confidence (0=very uncertain, 1=very certain) in this whole assessment.
+
+  instruction: |-
+    [INSTRUCTION]
+    Identify objects that could obstruct navigation. Rate the collision risk of
+    every listed detection and explain why you assigned that rating in one sentence
+    using visible evidence. Use the visible passage ahead of the robot as the
+    reference corridor. Use YOLOE confidence only as a cue for detection quality.
+    When describing apparent movement, cite a visible cue. Facing the robot or the
+    corridor alone is insufficient evidence of movement.
+
+  reference: |-
+    [REFERENCE]
+    YOLOE segmentation detections:
+    {yoloe_detections}
+
+  criteria: |-
+    [RISK CRITERIA]
+    Apply the highest level supported by the image.
+
+    critical
+    - The object blocks the robot's passage.
+    - Visible cues suggest the object is likely to enter the corridor soon and
+      obstruct the robot.
+    - The object appears to be moving toward the robot, and the visible cues
+      suggest a high risk of collision.
+
+    moderate
+    - The object is at the edge of the corridor or partly occupies it, but there
+      is room for the robot to pass.
+    - The object could enter the corridor or approach the robot, but an immediate
+      collision appears unlikely.
+
+    low
+    - The object is clearly separated from the corridor and is unlikely to enter
+      it or approach the robot.
+
+  output_format: |-
+    [OUTPUT FORMAT]
+    Return only valid JSON. Replace the placeholders with actual values and
+    include exactly one observation for each listed region_id.
+
+    {
+      "observations": [
+        {
+          "region_id": "{region_id}",
+          "semantic_label": "{semantic_label}",
+          "bbox_norm": [{x_min}, {y_min}, {x_max}, {y_max}],
+          "risk": "{risk}",
+          "confidence": {object_confidence},
+          "evidence": "{visible_evidence}",
+          "motion_evidence": "none"
+        }
+      ],
+      "scene_confidence": {scene_confidence}
+    }
+
+  field_notes: |-
+    - region_id: Reuse the detection ID from the reference.
+    - semantic_label: Report the object's class.
+    - bbox_norm: Report normalized corner coordinates in [0, 1], ordered as
+      [x_min, y_min, x_max, y_max].
+    - risk: Use critical, moderate, or low.
+    - confidence: Report confidence in the assigned risk level from 0 to 1.
+    - evidence: Explain which visible cue supports the assigned risk level for
+      every object. If a relevant cue is unclear, say what is unclear and lower
+      confidence.
+    - scene_confidence: Report confidence in the overall scene assessment from
+      0 to 1. Higher values indicate greater confidence.

@@ -18,7 +18,7 @@ def proposal() -> dict:
             "robot_x_m": 0.0, "robot_y_m": 0.0, "robot_yaw_rad": 0.0,
             "goal_x_m": 1.0, "goal_y_m": 0.0,
             "risk_bbox_center_x_norm": 0.5, "risk_bbox_center_y_norm": 0.5,
-            "risk_confidence": 0.9, "vlm_uncertainty": 0.1,
+            "risk_confidence": 0.9, "scene_confidence": 0.1,
         },
     }
 

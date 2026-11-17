@@ -21,7 +21,7 @@ class Vlm:
                 "bbox_norm": [0.2, 0.2, 0.4, 0.8],
                 "semantic_label": "person", "risk": "critical", "confidence": 0.9,
             }],
-            "uncertainty": 0.1,
+            "scene_confidence": 0.1,
         }
 
 

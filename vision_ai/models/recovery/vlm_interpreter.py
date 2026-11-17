@@ -1,42 +1,41 @@
-"""Qwen2.5-VL 7B 4-bit interpreter preserving the dev_driving JSON contract."""
+"""Qwen2.5-VL 7B 4-bit interpreter; prompt versions come from prompts.yaml.
+
+    vlm = QwenVlmInterpreter("main", prompt_version="v1",
+                             response_log=Path("runs/recovery/vlm_responses.jsonl"))
+    result = vlm.interpret(frame_bgr, evidence, GOAL_TEXT)            # robot
+    result = vlm.interpret(frame_bgr, evidence, GOAL_TEXT, version="v2")  # comparison
+
+Flow: render the version's sections around the detection list -> generate
+greedily with the shared settings -> parse the JSON -> rename the version's
+confidence key to `scene_confidence` -> return it with the raw text and the
+prompt sent, and append all of it to the response log when one is set.
+
+The raw text is returned even when the JSON cannot be parsed; that text is
+the only way to tell a truncated answer from a malformed one.
+"""
 
 from __future__ import annotations
 
+from dataclasses import asdict
 import json
+from pathlib import Path
 import re
+import time
 from typing import Any, Sequence
+from uuid import uuid4
 
 from vision_ai.robot.recovery.worker import DetectionEvidence
 
 
 MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
-CONTRACT_PROMPT_TEMPLATE = """Goal: {goal}
+PROMPTS_PATH = Path(__file__).with_name("prompts.yaml")
 
-Detected by onboard segmentation model (System1):
-{detections_text}
 
-Respond with ONLY a JSON object (no other text) matching this exact schema:
-{{
-  "observations": [
-    {{
-      "region_id": "r1",
-      "bbox_norm": [x0, y0, x1, y1],
-      "semantic_label": "person" | "obstacle" | "unknown_dynamic",
-      "risk": "low" | "moderate" | "critical",
-      "confidence": 0.00,
-      "motion_evidence": "track_summary" | "none"
-    }}
-  ],
-  "robot_candidate_sectors": [
-    {{"angle_deg": 0, "width_deg": 20, "preference": 0.00}}
-  ],
-  "uncertainty": 0.00
-}}
+def load_prompts(path: Path = PROMPTS_PATH) -> dict[str, Any]:
+    """prompts.yaml as a dict: runtime_version, generation, versions, sections."""
+    import yaml
 
-bbox_norm is [x0,y0,x1,y1] normalized 0-1 by image width/height. robot_candidate_sectors
-describes which direction (relative to current heading, 0=forward) the robot could safely
-attempt a short recovery move, NOT the direction the detected object is moving. uncertainty
-is your overall confidence (0=very uncertain, 1=very certain) in this whole assessment."""
+    return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
 
 
 def parse_json_response(text: str) -> dict[str, Any] | None:
@@ -50,25 +49,61 @@ def parse_json_response(text: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def build_detections_text(detections: Sequence[DetectionEvidence]) -> str:
+def build_detections_text(detections: Sequence[DetectionEvidence], style: str = "legacy") -> str:
+    """The detection list the prompt shows, one line per detection (see prompts.yaml)."""
     lines: list[str] = []
     for detection in detections:
         x0, y0, x1, y1 = detection.bbox_xyxy_norm
         center_x, center_y = (x0 + x1) / 2, (y0 + y1) / 2
         horizontal = "LEFT" if center_x < 1 / 3 else "RIGHT" if center_x > 2 / 3 else "CENTER"
         vertical = "TOP" if center_y < 1 / 3 else "BOTTOM" if center_y > 2 / 3 else "MIDDLE"
-        lines.append(
-            f"- {detection.class_name}: {vertical}-{horizontal} region, "
-            f"confidence {detection.confidence:.2f}"
-        )
+        if style == "legacy":
+            lines.append(
+                f"- {detection.class_name}: {vertical}-{horizontal} region, "
+                f"confidence {detection.confidence:.2f}"
+            )
+        else:
+            box = ", ".join(f"{value:.3f}" for value in detection.bbox_xyxy_norm)
+            lines.append(
+                f"- region_id={detection.region_id}, class={detection.class_name}, "
+                f"yoloe_confidence={detection.confidence:.2f}, bbox_norm=[{box}], "
+                f"position={vertical}-{horizontal}, track_id={detection.track_id or 'null'}"
+            )
     return "\n".join(lines) if lines else "- nothing detected"
+
+
+def render_prompt(version: str, detections: Sequence[DetectionEvidence], goal_text: str,
+                  prompts: dict[str, Any]) -> str:
+    """The full text prompt one version sends for these detections."""
+    spec = prompts["versions"][version]
+    text = "\n\n".join(prompts["sections"][name] for name in spec["sections"])
+    return (text.replace("{goal}", goal_text)
+                .replace("{yoloe_detections}", build_detections_text(detections, spec["reference"])))
+
+
+def parse_response(raw: str, version: str, prompts: dict[str, Any]) -> dict[str, Any]:
+    """Raw answer -> its JSON fields with the confidence key named `scene_confidence`.
+
+    An answer with no JSON object gives {}; the caller keeps `raw` beside it.
+    """
+    parsed = parse_json_response(raw) or {}
+    key = prompts["versions"][version]["scene_confidence_key"]
+    if key in parsed:
+        parsed["scene_confidence"] = parsed.pop(key)
+    return parsed
 
 
 class QwenVlmInterpreter:
     model_name = MODEL_ID
 
-    def __init__(self, model_revision: str = "main"):
+    def __init__(self, model_revision: str = "main", *, prompt_version: str | None = None,
+                 response_log: Path | None = None, prompts_path: Path = PROMPTS_PATH):
         self.model_revision = model_revision
+        self.prompts = load_prompts(prompts_path)
+        self.prompt_version = prompt_version or self.prompts["runtime_version"]
+        if self.prompt_version not in self.prompts["versions"]:
+            raise ValueError(f"unknown prompt version: {self.prompt_version}")
+        self.response_log = Path(response_log) if response_log else None
         self.model = None
         self.processor = None
 
@@ -102,17 +137,19 @@ class QwenVlmInterpreter:
         frame: Any,
         detections: Sequence[DetectionEvidence],
         goal_text: str,
+        version: str | None = None,
     ) -> dict[str, Any]:
+        """BGR frame + detections -> parsed answer plus raw_response, the prompt
+        sent, prompt_version, response_id, output_tokens and truncated."""
         if self.model is None or self.processor is None:
             self.load()
         import torch
         from PIL import Image
 
+        version = version or self.prompt_version
+        generation = self.prompts["generation"]
         image = Image.fromarray(frame[:, :, ::-1]).convert("RGB")
-        prompt = CONTRACT_PROMPT_TEMPLATE.format(
-            goal=goal_text,
-            detections_text=build_detections_text(detections),
-        )
+        prompt = render_prompt(version, detections, goal_text, self.prompts)
         messages = [{
             "role": "user",
             "content": [
@@ -126,10 +163,32 @@ class QwenVlmInterpreter:
         inputs = self.processor(text=[rendered], images=[image], return_tensors="pt").to(
             self.model.device
         )
+        started = time.monotonic()
         with torch.no_grad():
-            output_ids = self.model.generate(**inputs, max_new_tokens=400)
-        raw = self.processor.batch_decode(
-            output_ids[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True
-        )[0]
-        parsed = parse_json_response(raw)
-        return parsed if parsed is not None else {}
+            output_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=int(generation["max_new_tokens"]),
+                do_sample=bool(generation["do_sample"]),
+            )
+        new_ids = output_ids[:, inputs["input_ids"].shape[1]:]
+        raw = self.processor.batch_decode(new_ids, skip_special_tokens=True)[0]
+        result = {
+            **parse_response(raw, version, self.prompts),
+            "raw_response": raw,
+            "prompt": prompt,
+            "prompt_version": version,
+            "response_id": str(uuid4()),
+            "output_tokens": int(new_ids.shape[1]),
+            "truncated": int(new_ids.shape[1]) >= int(generation["max_new_tokens"]),
+            "seconds": round(time.monotonic() - started, 3),
+        }
+        if self.response_log is not None:
+            self.response_log.parent.mkdir(parents=True, exist_ok=True)
+            with self.response_log.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "logged_at": time.time(), "model": self.model_name,
+                    "revision": self.model_revision,
+                    "detections": [asdict(detection) for detection in detections],
+                    **result,
+                }, ensure_ascii=False) + "\n")
+        return result

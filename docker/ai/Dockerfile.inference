@@ -32,6 +32,7 @@ COPY vision_ai/models/recovery/__init__.py vision_ai/models/recovery/__init__.py
 COPY vision_ai/models/recovery/policy_architecture.py vision_ai/models/recovery/policy_architecture.py
 COPY vision_ai/models/recovery/distilled_selector.py vision_ai/models/recovery/distilled_selector.py
 COPY vision_ai/models/recovery/vlm_interpreter.py vision_ai/models/recovery/vlm_interpreter.py
+COPY vision_ai/models/recovery/prompts.yaml vision_ai/models/recovery/prompts.yaml
 COPY vision_ai/models/recovery/checkpoint.py vision_ai/models/recovery/checkpoint.py
 
 CMD ["python", "-m", "vision_ai.robot.recovery.runtime"]

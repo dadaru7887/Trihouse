@@ -21,7 +21,7 @@ def proposal(**overrides):
             "robot_x_m": 1.0, "robot_y_m": 2.0, "robot_yaw_rad": 0.0,
             "goal_x_m": 3.0, "goal_y_m": 4.0,
             "risk_bbox_center_x_norm": 0.3, "risk_bbox_center_y_norm": 0.5,
-            "risk_confidence": 0.91, "vlm_uncertainty": 0.15,
+            "risk_confidence": 0.91, "scene_confidence": 0.15,
         },
         "perception_evidence": [
             {"class_name": "person", "confidence": 0.91, "bbox_xyxy_norm": [0.2, 0.2, 0.4, 0.8]}
@@ -110,7 +110,7 @@ def _worker_payload(decision_kwargs, *, group_policy=True):
                     "semantic_label": "person", "risk": "critical",
                     "confidence": 0.91, "motion_evidence": "none",
                 }],
-                "uncertainty": 0.15,
+                "scene_confidence": 0.15,
             }
 
     class Policy:

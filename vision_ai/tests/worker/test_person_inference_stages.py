@@ -211,10 +211,12 @@ def test_a_local_camera_index_must_be_told_its_identity() -> None:
 
 
 class FakeBoxes:
-    def __init__(self, classes, scores, ids=None):
+    def __init__(self, classes, scores, ids=None, xyxyn=None):
         self.cls = FakeTensor(classes)
         self.conf = FakeTensor(scores)
         self.id = FakeTensor(ids) if ids is not None else None
+        if xyxyn is not None:
+            self.xyxyn = FakeTensor(xyxyn)
 
 
 class FakeTensor:
@@ -240,9 +242,9 @@ class FakeMasks:
 
 
 class FakeResult:
-    def __init__(self, classes, scores, ids=None):
+    def __init__(self, classes, scores, ids=None, xyxyn=None):
         self.masks = FakeMasks(len(classes))
-        self.boxes = FakeBoxes(classes, scores, ids)
+        self.boxes = FakeBoxes(classes, scores, ids, xyxyn)
 
 
 def test_tracked_results_carry_their_track_id() -> None:
@@ -252,6 +254,14 @@ def test_tracked_results_carry_their_track_id() -> None:
     detections = detections_from_result(FakeResult([1, 1], [0.9, 0.8], ids=[7, 12]))
 
     assert [item.track_id for item in detections] == ["7", "12"]
+
+
+def test_results_carry_the_model_box_normalised() -> None:
+    from vision_ai.models.perception.detector import detections_from_result
+
+    detections = detections_from_result(FakeResult([1], [0.9], xyxyn=[[0.1, 0.2, 0.3, 0.4]]))
+
+    assert detections[0].box_xyxy_norm == pytest.approx((0.1, 0.2, 0.3, 0.4))
 
 
 def test_untracked_results_still_parse_without_a_track_id() -> None:
@@ -312,6 +322,7 @@ def test_tracking_mode_asks_the_model_to_persist_identities() -> None:
 
     assert model.predict_calls == []
     assert model.track_calls[0]["persist"] is True
+    assert model.track_calls[0]["tracker"] == "bytetrack.yaml"
     assert detections[0].track_id == "3"
 
 

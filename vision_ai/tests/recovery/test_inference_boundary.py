@@ -46,7 +46,7 @@ def test_named_state_v1_serializes_in_the_frozen_model_order() -> None:
         risk_bbox_center_x_norm=0.25,
         risk_bbox_center_y_norm=0.75,
         risk_confidence=0.8,
-        vlm_uncertainty=0.1,
+        scene_confidence=0.1,
     )
 
     assert state.to_vector() == (1.0, 2.0, 0.3, 4.0, 5.0, 0.25, 0.75, 0.8, 0.1)
@@ -59,7 +59,7 @@ def test_named_state_v1_serializes_in_the_frozen_model_order() -> None:
         ("risk_bbox_center_x_norm", -0.01),
         ("risk_bbox_center_y_norm", 1.01),
         ("risk_confidence", float("nan")),
-        ("vlm_uncertainty", 1.1),
+        ("scene_confidence", 1.1),
     ],
 )
 def test_named_state_v1_rejects_values_outside_the_external_contract(field: str, value: float) -> None:
@@ -72,7 +72,7 @@ def test_named_state_v1_rejects_values_outside_the_external_contract(field: str,
         "risk_bbox_center_x_norm": 0.25,
         "risk_bbox_center_y_norm": 0.75,
         "risk_confidence": 0.8,
-        "vlm_uncertainty": 0.1,
+        "scene_confidence": 0.1,
     }
     values[field] = value
 

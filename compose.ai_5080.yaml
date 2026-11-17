@@ -41,6 +41,10 @@ services:
       FALLEN_CLASSIFIER_BUNDLE: ${FALLEN_CLASSIFIER_BUNDLE:-}
       FALLEN_CLASSIFIER_SHA256: ${FALLEN_CLASSIFIER_SHA256:-}
       VLM_MODEL_REVISION: ${VLM_MODEL_REVISION:-main}
+      # Every raw Qwen answer, kept on the artifacts volume (proposal vlm_lineage.response_id).
+      VLM_RESPONSE_LOG: ${VLM_RESPONSE_LOG:-/artifacts/vlm_responses.jsonl}
+      # prompts.yaml version; empty = its runtime_version. Same as --prompt-version.
+      VLM_PROMPT_VERSION: ${VLM_PROMPT_VERSION:-}
       VLM_RL_RUNTIME_MODE: physical
       VLM_RL_SAFETY_GATE_ENABLED: "true"
       VLM_RL_DEVICE: cuda

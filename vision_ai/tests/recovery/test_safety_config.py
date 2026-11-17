@@ -45,3 +45,13 @@ def test_runtime_accepts_explicit_equals_style_safety_argument() -> None:
 
     assert args.runtime_mode == "training_exploration"
     assert args.safety_gate_enabled is False
+
+
+def test_runtime_prompt_version_is_an_argument_over_the_environment(monkeypatch) -> None:
+    from vision_ai.models.recovery.vlm_interpreter import load_prompts
+
+    monkeypatch.delenv("VLM_PROMPT_VERSION", raising=False)
+    assert parse_runtime_args([]).prompt_version == load_prompts()["runtime_version"]
+    monkeypatch.setenv("VLM_PROMPT_VERSION", "v2")
+    assert parse_runtime_args([]).prompt_version == "v2"
+    assert parse_runtime_args(["--prompt-version", "current"]).prompt_version == "current"
