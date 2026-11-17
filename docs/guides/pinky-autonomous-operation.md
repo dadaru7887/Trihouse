@@ -410,15 +410,30 @@ venv/yolo_segmentation/bin/python -m vision_ai.robot.perception.worker \
   --headless
 ```
 
-VLM/RL recovery runtime는 physical mode에서 `operator_approved` 실행 모드와 승인된 policy
-checkpoint/hash, RTSP URL, FMS URL, device ID를 모두 요구한다. 이 값이 아직 확정되지
-않았다면 실행하지 않는다.
+VLM/RL recovery runtime는 physical mode에서 실행 모드와 승인된 policy checkpoint/hash,
+RTSP URL, FMS URL, device ID를 모두 요구한다. 이 값이 아직 확정되지 않았다면 실행하지
+않는다.
+
+실행 모드는 둘 중 하나다. 알 수 없는 값은 거부한다 — 오타가 무단 자율 주행이 되어서는
+안 된다.
+
+| 모드 | 누가 승인하는가 |
+|---|---|
+| `operator_approved` | 전 건 사람. 실물에서 정책의 첫 동작을 검증하는 단계에서 쓴다 |
+| `auto_bounded` | Gateway 의 tier 규칙이 제한된 제안(대기 · 0.15 m 이내 후진 · 우회)을 자동 승인하고, 사람·critical·반복 실패·REJOIN 은 관제로 넘긴다 |
+
+모드는 제안의 `policy_lineage.execution_mode` 로 Gateway 에 전달되고, Gateway 는 그 값이
+`auto_bounded` 인 제안만 자동 판정한다. 모드가 없는 제안은 사람에게 간다. 자동 승인 규칙은
+장면 확신도 `scene_confidence`(1 = 확실)가 tier A 0.6, tier B 0.4 이상일 때만 통과시킨다.
+
+두 모드 모두 실행 직전 경로 검사(6C-Lite), 로봇 admission check 10종, 20 Hz safety
+supervisor 를 똑같이 거친다. 승인 주체만 달라진다.
 
 ```bash
 # [개발 PC 모델 터미널 2] 승인된 값이 모두 배포된 경우에만 실행
 cd /home/newuser/Trihouse/.worktrees/physical-integration-v1
 export FMS_API='http://<fms-host>:8080'
-export VLM_RL_EXECUTION_MODE=operator_approved
+export VLM_RL_EXECUTION_MODE=operator_approved   # 제한된 제안 자동 승인은 auto_bounded
 export FMS_GATEWAY_URL="$FMS_API"
 export RECOVERY_DEVICE_ID='PK_01'
 export VISION_RTSP_URL='rtsp://<pc1-lan-ip>:8554/pinky/CAM-PK-01'

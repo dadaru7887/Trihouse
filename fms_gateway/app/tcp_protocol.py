@@ -272,6 +272,7 @@ class ProtocolSession:
         _require_fields(message, (
             "command_id", "proposal_sha256", "success", "status", "detail",
             "pre_pose", "post_pose", "clearance_before_m", "clearance_after_m",
+            "body_clearance_after_m",
             "elapsed_seconds", "safety_intervened", "terminal",
         ))
         _uuid(message["command_id"])
@@ -295,7 +296,8 @@ class ProtocolSession:
             for value in pose.values():
                 if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
                     _reject("SCHEMA_INVALID")
-        for name in ("clearance_before_m", "clearance_after_m", "elapsed_seconds"):
+        for name in ("clearance_before_m", "clearance_after_m",
+                     "body_clearance_after_m", "elapsed_seconds"):
             value = message[name]
             if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
                 _reject("SCHEMA_INVALID")

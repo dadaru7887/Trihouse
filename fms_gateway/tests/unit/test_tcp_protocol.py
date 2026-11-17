@@ -236,6 +236,7 @@ def test_recovery_execution_result_is_bound_to_authenticated_robot() -> None:
         "post_pose": {"x": 1.1, "y": 2.0, "yaw": 0.1},
         "clearance_before_m": 0.4,
         "clearance_after_m": 0.5,
+        "body_clearance_after_m": 0.5,
         "elapsed_seconds": 1.2,
         "safety_intervened": False,
         "terminal": True,

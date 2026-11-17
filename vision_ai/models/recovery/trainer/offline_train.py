@@ -35,6 +35,9 @@ def train(dataset: Path, checkpoint: Path, epochs: int = DEFAULT_EPOCHS) -> None
         next_state=item.next_state, done=item.done,
         timestamp=float(item.meta.get("timestamp", 0.0)),
         map_zone=str(item.meta.get("map_zone", item.meta.get("goal_waypoint", "unknown"))),
+        # `outcome_class` is what the Gateway recorded; `terminal_critical` stays as
+        # the fallback name so buffers exported before that key existed still load.
+        outcome_class=item.meta.get("outcome_class"),
         terminal_critical=bool(item.meta.get("terminal_critical", False)),
         policy_name=item.meta.get("recovery_policy_name"),
         policy_version=item.meta.get("recovery_policy_version"),

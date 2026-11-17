@@ -32,8 +32,14 @@ string status
 string detail
 geometry_msgs/PoseStamped pre_pose
 geometry_msgs/PoseStamped post_pose
+# 진행 방향 보호 필드 안에서 몸 끝부터 잰 여유. 보상의 clearance 항이 이 값을
+# 쓴다 — 옆을 스쳐 지나가는 벽까지 위험으로 세면 협로 우회가 상시 벌점을 받는다.
+# -1 은 "관측되지 않음" 이고 0 은 "닿았다" 다.
 float32 clearance_before_m
 float32 clearance_after_m
+# 방향과 무관하게 몸 경계에서 잰 최단 거리. terminal(충돌급) 판정만 이 값을 쓴다 —
+# 그 판정은 어느 방향이든 몸에 닿으면 참이어야 하므로 방향을 보면 안 된다.
+float32 body_clearance_after_m
 float32 elapsed_seconds
 bool safety_intervened
 bool terminal

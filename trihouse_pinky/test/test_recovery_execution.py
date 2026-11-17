@@ -98,3 +98,41 @@ def test_fleet_recovery_uses_relative_nav2_actions_and_never_publishes_velocity(
     recovery_method = source.split("async def _execute_recovery", 1)[1].split("\n    def ", 1)[0]
     assert "create_publisher" not in recovery_method
     assert "cmd_vel" not in recovery_method
+
+
+def test_blocked_recovery_path_is_refused_with_its_reason() -> None:
+    """승인은 "시도해도 되는가"이고, 경로 검사는 "지금 갈 수 있는가"다.
+
+    관제가 승인한 뒤에도 사람이 걸어 들어올 수 있으므로, 실행 직전의 지도로 한 번
+    더 본다. 사유를 그대로 붙여야 costmap 결함을 Nav2 실패로 오인하지 않는다.
+    """
+    common = {
+        "robot_id": "PK_01",
+        "map_revision": "new_map_2-r1",
+        "ready": True,
+        "recovery_health_ok": True,
+        "safety_available": True,
+        "emergency": False,
+        "stationary": True,
+        "transport_active": False,
+    }
+
+    assert recovery_admission_block_reason(
+        goal(), **common, path_block_reason="COSTMAP_OCCUPIED@2/4"
+    ) == "PATH_NOT_CLEAR:COSTMAP_OCCUPIED@2/4"
+
+
+def test_identity_checks_run_before_the_expensive_map_query() -> None:
+    """지도 조회는 가장 비싸다. 이미 거부된 명령에 지도를 읽을 이유가 없다."""
+    assert recovery_admission_block_reason(
+        goal(device_id="PK_02"),
+        robot_id="PK_01",
+        map_revision="new_map_2-r1",
+        ready=True,
+        recovery_health_ok=True,
+        safety_available=True,
+        emergency=False,
+        stationary=True,
+        transport_active=False,
+        path_block_reason="COSTMAP_OCCUPIED@1/4",
+    ) == "DEVICE_ID_MISMATCH"

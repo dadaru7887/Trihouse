@@ -3,7 +3,7 @@
 import copy
 import rclpy
 from dataclasses import dataclass
-from math import atan2, cos, hypot, isfinite, sin
+from math import atan2, cos, hypot, sin
 
 import yaml
 from pathlib import Path
@@ -49,6 +49,8 @@ from .narrow_zone_routing import (
     select_approach,
 )
 from .arrival import may_report_arrival, within_tolerance
+from .costmap_view import CostmapSnapshot, CostmapView
+from .recovery_path_check import rollout_blocked, target_pose
 from .recovery_execution import recovery_admission_block_reason
 
 
@@ -61,6 +63,19 @@ def _complete_once(future: Future) -> None:
 def _duration(seconds: float) -> Duration:
     whole = int(seconds)
     return Duration(sec=whole, nanosec=int((seconds - whole) * 1_000_000_000))
+
+
+# EN: -1 is explicit "not observed"; it must never be treated as safe clearance.
+# KO: -1은 "관측되지 않음"이며 안전한 여유 거리로 해석하면 안 된다.
+CLEARANCE_UNOBSERVED = -1.0
+
+
+def _observed(value: float) -> float | None:
+    return None if value is None or float(value) < 0.0 else float(value)
+
+
+def _reported(value: float | None) -> float:
+    return CLEARANCE_UNOBSERVED if value is None else float(value)
 
 
 @dataclass(frozen=True)
@@ -141,7 +156,15 @@ class FleetNode(Node):
         self.ready = False; self.outbox_ready = False; self.emergency = False; self.stationary = False; self.recovery_health_ok = False; self.current_pose: tuple[float, float, float] | None = None
         self.safety_seen = False
         self.safety_observation = SafetyObservation()
-        self.nearest_lidar_range_m: float | None = None
+        # 안전 supervisor 가 실어 보내는 여유. 스캔을 직접 해석하지 않는다.
+        self.forward_clearance_m: float | None = None
+        self.reverse_clearance_m: float | None = None
+        self.body_clearance_m: float | None = None
+        self.last_scan_at_ns: int = 0
+        # 승인된 좌표까지 **가는 길**을 실행 직전에 검사하기 위한 지도. 좌표 값만
+        # 보는 canonicalization 은 경로 위 장애물을 막지 못한다.
+        self.local_costmap: CostmapSnapshot | None = None
+        self.global_costmap: CostmapSnapshot | None = None
         # 정밀 정차 판정용 map 프레임 pose. odom 은 프레임이 달라 쓸 수 없다.
         self.map_pose: tuple[float, float, float] | None = None
         self.map_frame: str = ""
@@ -174,6 +197,20 @@ class FleetNode(Node):
                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
                 history=HistoryPolicy.KEEP_LAST,
             ),
+        )
+        # costmap 도 같은 latched QoS 로 나간다. local 은 실시간 LiDAR 를 담고
+        # global 은 정적 지도를 담는다 — 복구 경로 검사는 local 을 먼저 본다.
+        costmap_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+        )
+        self.create_subscription(
+            OccupancyGrid, 'local_costmap/costmap', self._on_local_costmap, costmap_qos,
+        )
+        self.create_subscription(
+            OccupancyGrid, 'global_costmap/costmap', self._on_global_costmap, costmap_qos,
         )
         # 협로 존 표. 값이 지도 좌표계에 묶여 있어 지도 이름이 맞지 않으면 거절한다.
         self.declare_parameter('narrow_zones_file', '')
@@ -211,15 +248,19 @@ class FleetNode(Node):
         self.ready = message.state == Readiness.STATE_READY
 
     def _on_scan(self, message: LaserScan) -> None:
-        valid = [
-            float(value) for value in message.ranges
-            if isfinite(value) and message.range_min <= value <= message.range_max
-        ]
-        self.nearest_lidar_range_m = min(valid) if valid else None
+        # 여유 거리는 더 이상 여기서 계산하지 않는다. 같은 스캔을 fleet 과 safety 가
+        # 각각 해석하면 두 정의가 갈라지고, 학습 보상이 안전 판정과 다른 값을 보게
+        # 된다. 이 노드는 스캔 신선도만 본다 — 여유는 `SafetyState` 가 실어 온다.
+        self.last_scan_at_ns = self.get_clock().now().nanoseconds
 
     def _on_safety(self, message: SafetyState) -> None:
         self.safety_seen = True
         self.emergency = message.state == SafetyState.STATE_EMERGENCY
+        # -1 은 "관측되지 않음"이다. None 으로 되돌려 두어야 아래에서 안전한 여유로
+        # 잘못 읽히지 않는다.
+        self.forward_clearance_m = _observed(message.forward_clearance_m)
+        self.reverse_clearance_m = _observed(message.reverse_clearance_m)
+        self.body_clearance_m = _observed(message.body_clearance_m)
         self.safety_observation = SafetyObservation(
             stopped=message.state in (
                 SafetyState.STATE_STOP,
@@ -695,6 +736,10 @@ class FleetNode(Node):
             message.pose.orientation.w = cos(yaw_rad / 2.0)
         return message
 
+    def _directional_clearance(self, reverse_motion: bool) -> float | None:
+        """이 행동이 나아가는 방향의 경로 여유. 관측이 없으면 `None`."""
+        return self.reverse_clearance_m if reverse_motion else self.forward_clearance_m
+
     async def _run_recovery_nav_action(self, client: ActionClient, goal: object) -> bool:
         if not client.wait_for_server(timeout_sec=2.0):
             return False
@@ -711,7 +756,10 @@ class FleetNode(Node):
         goal = goal_handle.request
         result = ExecuteRecovery.Result()
         result.pre_pose = self._recovery_pose()
-        clearance_before = self.nearest_lidar_range_m
+        # 여유는 이 행동이 나아가는 방향으로 잰다. BACKUP 은 뒤로 가므로 앞쪽
+        # 여유를 보고해도 이 행동의 안전과는 무관하다.
+        reverse_motion = goal.selected_skill_id == ExecuteRecovery.Goal.SKILL_BACKUP
+        clearance_before = self._directional_clearance(reverse_motion)
         block = recovery_admission_block_reason(
             goal,
             robot_id=self.robot_id,
@@ -722,6 +770,7 @@ class FleetNode(Node):
             emergency=self.emergency,
             stationary=self.stationary,
             transport_active=self.workflow.phase is not JobPhase.IDLE or self.recovery_active,
+            path_block_reason=self._recovery_path_block_reason(goal),
         )
         if block is not None:
             goal_handle.abort()
@@ -730,10 +779,9 @@ class FleetNode(Node):
             result.status = 'rejected'
             result.detail = block
             result.post_pose = self._recovery_pose()
-            result.clearance_before_m = (
-                clearance_before if clearance_before is not None else -1.0
-            )
+            result.clearance_before_m = _reported(clearance_before)
             result.clearance_after_m = result.clearance_before_m
+            result.body_clearance_after_m = _reported(self.body_clearance_m)
             result.safety_intervened = self.emergency
             result.terminal = True
             return result
@@ -779,10 +827,9 @@ class FleetNode(Node):
         result.post_pose = self._recovery_pose()
         # EN: -1 is explicit "not observed"; it must never be treated as safe clearance.
         # KO: -1은 "관측되지 않음"이며 안전한 여유 거리로 해석하면 안 된다.
-        result.clearance_before_m = clearance_before if clearance_before is not None else -1.0
-        result.clearance_after_m = (
-            self.nearest_lidar_range_m if self.nearest_lidar_range_m is not None else -1.0
-        )
+        result.clearance_before_m = _reported(clearance_before)
+        result.clearance_after_m = _reported(self._directional_clearance(reverse_motion))
+        result.body_clearance_after_m = _reported(self.body_clearance_m)
         result.elapsed_seconds = (
             self.get_clock().now().nanoseconds - started_ns
         ) / 1_000_000_000
@@ -942,6 +989,63 @@ class FleetNode(Node):
             xy_tolerance_m=PRECISE_STOP_XY_TOLERANCE_M,
             yaw_tolerance_rad=PRECISE_STOP_YAW_TOLERANCE_RAD,
         )
+
+    def _on_local_costmap(self, message: OccupancyGrid) -> None:
+        self.local_costmap = CostmapSnapshot.from_occupancy_grid(message)
+
+    def _on_global_costmap(self, message: OccupancyGrid) -> None:
+        self.global_costmap = CostmapSnapshot.from_occupancy_grid(message)
+
+    def _costmap_view(self) -> CostmapView | None:
+        """복구 경로 검사용 지도. 아직 아무 costmap 도 못 받았으면 `None`.
+
+        local costmap 이 map 이 아닌 프레임으로 나오면 좌표를 변환해야 한다.
+        변환을 못 얻으면 `CostmapView` 가 local 을 건너뛰고 global 로만 판단한다 —
+        틀린 좌표로 조회하는 것보다 낫다.
+        """
+        if self.local_costmap is None and self.global_costmap is None:
+            return None
+        return CostmapView(
+            local=self.local_costmap,
+            global_=self.global_costmap,
+            map_to_local=self._map_to_costmap_frame,
+        )
+
+    def _map_to_costmap_frame(self, x_m: float, y_m: float) -> tuple[float, float] | None:
+        """map 좌표를 local costmap 프레임으로. 변환을 모르면 `None`."""
+        local = self.local_costmap
+        if local is None:
+            return None
+        if local.frame_id in ('', 'map', self.map_frame):
+            return x_m, y_m
+        # odom 프레임 local costmap 은 map->odom 변환이 필요하다. 이 노드는 TF 를
+        # 듣지 않으므로, 변환을 모른다고 답해 global 로 넘긴다.
+        return None
+
+    def _recovery_path_block_reason(self, goal: object) -> str | None:
+        """승인된 좌표까지 가는 길이 지금 비어 있는가. 막혔으면 사유."""
+        if goal.selected_skill_id == ExecuteRecovery.Goal.SKILL_WAIT_REOBSERVE:
+            # 제자리 대기는 경로가 없다. 없는 경로를 검사하면 자기 자신이 서 있는
+            # 셀을 보게 되고, 정작 가장 안전한 행동이 막힌다.
+            return None
+        if self.map_pose is None:
+            return 'POSE_UNAVAILABLE'
+        coord = goal.canonical_coord
+        map_target = None
+        if goal.has_map_target:
+            position = goal.map_target.pose.position
+            orientation = goal.map_target.pose.orientation
+            map_target = (
+                float(position.x),
+                float(position.y),
+                2.0 * atan2(float(orientation.z), float(orientation.w)),
+            )
+        target = target_pose(
+            self.map_pose,
+            (float(coord.x), float(coord.y), float(coord.z)),
+            map_target,
+        )
+        return rollout_blocked(self.map_pose, target, self._costmap_view())
 
     def _on_map(self, message: OccupancyGrid) -> None:
         """정적 지도의 실제 범위를 기억한다."""

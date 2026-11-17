@@ -111,7 +111,7 @@ from .recovery_repository import (
     MySqlRecoveryRepository,
     RecoveryRepository,
 )
-from .recovery_dispatch import dispatch_loop
+from .recovery_dispatch import dispatch_loop, expiry_loop
 from .recovery_routes import recovery_router
 from .repositories import (
     CommandClaimConflict,
@@ -214,6 +214,7 @@ def create_app(
         """운영 앱 시작/종료와 TCP 서버 시작/종료를 정확히 대응시킨다."""
         tcp_server = None
         recovery_dispatch_task = None
+        recovery_expiry_task = None
         source_staging.reconcile_startup(repo)
         deployments.reconcile_startup()
         tcp_settings = get_tcp_settings()
@@ -232,13 +233,21 @@ def create_app(
                 dispatch_loop(recovery_repo, tcp_server.links),
                 name="recovery-command-dispatch",
             )
+            # 아무도 결정하지 않은 제안을 닫아 준다. 5080 은 미결 제안이 있는 동안
+            # 새 판단을 하지 않으므로, 이 청소가 없으면 로봇 하나가 영구히 멈춘다.
+            recovery_expiry_task = asyncio.create_task(
+                expiry_loop(recovery_repo),
+                name="recovery-proposal-expiry",
+            )
         try:
             yield
         finally:
-            if recovery_dispatch_task is not None:
-                recovery_dispatch_task.cancel()
+            for task in (recovery_dispatch_task, recovery_expiry_task):
+                if task is None:
+                    continue
+                task.cancel()
                 try:
-                    await recovery_dispatch_task
+                    await task
                 except asyncio.CancelledError:
                     pass
             if tcp_server is not None:

@@ -46,7 +46,13 @@ services:
       VLM_RL_DEVICE: cuda
       RECOVERY_QUEUE_DIR: /var/lib/trihouse/recovery_queue
       RECOVERY_RETRY_INTERVAL_SECONDS: ${RECOVERY_RETRY_INTERVAL_SECONDS:-2}
-      VLM_RL_EXECUTION_MODE: operator_approved
+      # operator_approved: 전 건 사람이 승인한다. 정책의 첫 실물 동작을 검증하는 기본값.
+      # auto_bounded: Gateway 의 tier 규칙이 제한된 제안(대기 / 짧은 후진 / 우회)을
+      # 스스로 승인하고, 사람·critical·반복 실패는 관제로 넘긴다. 승인 주체만
+      # 넓어질 뿐 경로 검사와 로봇 admission, safety supervisor 는 그대로다.
+      # 제안마다 policy_lineage.execution_mode 로 실려 가고, Gateway 는 그 값이
+      # auto_bounded 인 제안만 자동 판정한다.
+      VLM_RL_EXECUTION_MODE: ${VLM_RL_EXECUTION_MODE:-operator_approved}
       MODEL_DIR: /models
       ARTIFACT_DIR: /artifacts
       YOLO_CONFIG_DIR: /tmp/ultralytics

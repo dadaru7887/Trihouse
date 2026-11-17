@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from typing import Any, Protocol
 from uuid import uuid4
 
 from .database import Database
+from .recovery_autoapproval import AUTO_WORKER_ID
 from vision_ai.utils.contracts import (
     RecoveryStateV1,
     SKILL_NAMES,
@@ -38,6 +40,15 @@ class RecoveryProposalNotFound(Exception):
     pass
 
 
+# 사람 판단을 기다리는 제안의 수명.
+#
+# 자율 모드에서 tier C 는 정상적으로 발생하고, 그때 로봇은 안전 정지 상태로 남는다.
+# 만료가 없으면 그 상태가 영구가 된다 — 5080 은 미결 제안이 있는 동안 새 판단을
+# 하지 않기 때문이다. 관제가 알림을 보고 들어올 시간은 주되, 그 뒤에는 로봇이 다시
+# 판단할 수 있어야 한다.
+PROPOSAL_TTL = timedelta(minutes=2)
+
+
 class RecoveryApprovalForbidden(Exception):
     pass
 
@@ -51,6 +62,11 @@ class RecoveryRepository(Protocol):
                         payload_sha256: str) -> dict[str, Any]: ...
     def decide_proposal(self, proposal_id: str, worker_id: str,
                         decision: str, reason: str) -> dict[str, Any]: ...
+    def auto_decide_proposal(self, proposal_id: str, tier: str,
+                             reason: str) -> dict[str, Any]: ...
+    def expire_stale_proposals(self, now: datetime | None = None) -> list[str]: ...
+    def record_recovery_notice(self, proposal: dict[str, Any], tier: str, reason: str,
+                               *, requires_operator: bool) -> None: ...
     def list_pending_commands(self) -> list[dict[str, Any]]: ...
     def mark_command_sent(self, command_id: str) -> None: ...
     def record_command_ack(self, robot_id: str, payload: dict[str, Any]) -> None: ...
@@ -72,6 +88,7 @@ class InMemoryRecoveryRepository:
         self.proposals: dict[str, dict[str, Any]] = {}
         self.command_outbox: list[dict[str, Any]] = []
         self.execution_results: dict[str, dict[str, Any]] = {}
+        self.notices: list[dict[str, Any]] = []
 
     def list_pending_commands(self) -> list[dict[str, Any]]:
         return [
@@ -213,18 +230,70 @@ class InMemoryRecoveryRepository:
             "message_id": message_id,
             "proposal_sha256": proposal_sha256,
             "status": "pending",
+            "expires_at": datetime.now(timezone.utc) + PROPOSAL_TTL,
             "response": deepcopy(response),
             "decision": None,
         }
         return response
 
+    def auto_decide_proposal(self, proposal_id: str, tier: str,
+                             reason: str) -> dict[str, Any]:
+        """Approve a bounded proposal without a person, recorded as such.
+
+        The human path keeps its role check untouched. Routing the policy through
+        a `safety_manager` worker instead would make the audit log claim a person
+        reviewed the evidence, which is the one thing this record exists to prove.
+        """
+        return self._record_decision(
+            proposal_id, AUTO_WORKER_ID, "approved", reason,
+            decided_by="policy", tier=tier,
+        )
+
+    def expire_stale_proposals(self, now: datetime | None = None) -> list[str]:
+        """Close proposals nobody decided in time.
+
+        The 5080 runtime refuses to form a new judgement while one proposal is
+        still open, so an undecided proposal stops that robot's recovery for good.
+        Tier C proposals are a normal outcome of autonomous operation, so this is
+        a routine path rather than an error path.
+        """
+        moment = now or datetime.now(timezone.utc)
+        expired: list[str] = []
+        for proposal_id, proposal in self.proposals.items():
+            deadline = proposal.get("expires_at")
+            if proposal["status"] != "pending" or deadline is None:
+                continue
+            if deadline <= moment:
+                proposal["status"] = "expired"
+                expired.append(proposal_id)
+        return expired
+
+    def record_recovery_notice(self, proposal: dict[str, Any], tier: str, reason: str,
+                               *, requires_operator: bool) -> None:
+        self.notices.append({
+            "proposal_id": proposal.get("proposal_id"),
+            "device_id": proposal.get("device_id"),
+            "tier": tier,
+            "reason": reason,
+            "requires_operator": requires_operator,
+        })
+
     def decide_proposal(self, proposal_id: str, worker_id: str,
                         decision: str, reason: str) -> dict[str, Any]:
         if self.worker_roles.get(worker_id) != "safety_manager":
             raise RecoveryApprovalForbidden
+        return self._record_decision(
+            proposal_id, worker_id, decision, reason, decided_by="human", tier=None,
+        )
+
+    def _record_decision(self, proposal_id: str, worker_id: str, decision: str,
+                         reason: str, *, decided_by: str,
+                         tier: str | None) -> dict[str, Any]:
         proposal = self.proposals.get(proposal_id)
         if proposal is None:
             raise RecoveryProposalNotFound
+        if proposal["status"] == "expired":
+            raise RecoveryProposalConflict
         requested = {"worker_id": worker_id, "decision": decision, "reason": reason}
         if proposal["decision"] is not None:
             if proposal["decision"]["request"] != requested:
@@ -236,6 +305,8 @@ class InMemoryRecoveryRepository:
             "status": decision,
             "proposal_sha256": proposal["proposal_sha256"],
             "worker_id": worker_id,
+            "decided_by": decided_by,
+            "decision_tier": tier,
         }
         if decision == "approved":
             command = {
@@ -596,8 +667,9 @@ class MySqlRecoveryRepository:
                 "trigger_type,state_schema_id,named_state,perception_evidence,vlm_lineage,"
                 "policy_lineage,candidate_evidence,skill_selection,selected_skill_id,selected_skill_name,"
                 "action_family,selected_coord,canonical_action,safety_gate_enabled,"
-                "request_sha256,proposal_sha256) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "request_sha256,proposal_sha256,expires_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+                "DATE_ADD(NOW(6), INTERVAL %s SECOND))",
                 (request["proposal_id"], request["recovery_episode_uuid"], request["step_no"],
                  request["device_id"], request["map_name"], request["map_revision"],
                  request["trigger_type"], request["state_schema_id"],
@@ -610,24 +682,105 @@ class MySqlRecoveryRepository:
                  action.skill, action.skill_name,
                  action.action_family, json.dumps(request["selected_coord"], separators=(",", ":")),
                  json.dumps(canonical_action, separators=(",", ":")), int(request["safety_gate_enabled"]),
-                 payload_sha256, proposal_sha256),
+                 payload_sha256, proposal_sha256,
+                 int(PROPOSAL_TTL.total_seconds())),
             )
             connection.commit()
             cursor.close()
             return response
 
-    def decide_proposal(self, proposal_id: str, worker_id: str,
-                        decision: str, reason: str) -> dict[str, Any]:
+    def record_recovery_notice(self, proposal: dict[str, Any], tier: str, reason: str,
+                               *, requires_operator: bool) -> None:
+        """Put the recovery decision on the control tower's event stream.
+
+        Tier C is not an error, it is the policy handing a case to a person, and
+        that hand-off is worthless if nobody is told. Tier B acts first and tells
+        afterwards, which is the whole point of autonomous recovery.
+        """
+        severity = "warning" if requires_operator else "info"
+        event_type = (
+            "RECOVERY_OPERATOR_REQUIRED" if requires_operator else "RECOVERY_AUTO_APPROVED"
+        )
+        message = f"[{tier}] {proposal.get('selected_skill_name', 'recovery')}: {reason}"
+        with self.database.connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute("USE trihouse_fms")
+            cursor.execute(
+                "INSERT INTO operation_events "
+                "(event_uuid,occurred_at,device_id,severity,category,event_type,"
+                "message,safety_decision,payload) "
+                "VALUES (%s,NOW(6),%s,%s,'safety',%s,%s,%s,%s)",
+                (
+                    str(uuid4()),
+                    proposal.get("device_id"),
+                    severity,
+                    event_type,
+                    message[:512],
+                    "manual_review" if requires_operator else "approved",
+                    json.dumps({
+                        "proposal_id": proposal.get("proposal_id"),
+                        "recovery_episode_uuid": proposal.get("recovery_episode_uuid"),
+                        "step_no": proposal.get("step_no"),
+                        "tier": tier,
+                        "reason": reason,
+                        "trigger_type": proposal.get("trigger_type"),
+                    }, ensure_ascii=False),
+                ),
+            )
+            connection.commit()
+            cursor.close()
+
+    def auto_decide_proposal(self, proposal_id: str, tier: str,
+                             reason: str) -> dict[str, Any]:
+        """Approve a bounded proposal without a person, recorded as such."""
+        return self._decide(
+            proposal_id, AUTO_WORKER_ID, "approved", reason,
+            decided_by="policy", tier=tier, require_operator_role=False,
+        )
+
+    def expire_stale_proposals(self, now: datetime | None = None) -> list[str]:
+        """Close proposals nobody decided in time and report which closed."""
         with self.database.connection() as connection:
             cursor = connection.cursor(dictionary=True)
             cursor.execute("USE trihouse_recovery")
             cursor.execute(
-                "SELECT role,active FROM trihouse_fms.workers WHERE worker_id=%s FOR SHARE",
-                (worker_id,),
+                "SELECT proposal_id FROM recovery_proposals "
+                "WHERE status='pending' AND expires_at IS NOT NULL AND expires_at <= %s "
+                "FOR UPDATE",
+                (now or datetime.now(timezone.utc),),
             )
-            worker = cursor.fetchone()
-            if worker is None or not worker["active"] or worker["role"] != "safety_manager":
-                raise RecoveryApprovalForbidden
+            expired = [row["proposal_id"] for row in cursor.fetchall()]
+            for proposal_id in expired:
+                cursor.execute(
+                    "UPDATE recovery_proposals SET status='expired',decided_at=NOW(6) "
+                    "WHERE proposal_id=%s AND status='pending'",
+                    (proposal_id,),
+                )
+            connection.commit()
+            cursor.close()
+            return expired
+
+    def decide_proposal(self, proposal_id: str, worker_id: str,
+                        decision: str, reason: str) -> dict[str, Any]:
+        return self._decide(
+            proposal_id, worker_id, decision, reason,
+            decided_by="human", tier=None, require_operator_role=True,
+        )
+
+    def _decide(self, proposal_id: str, worker_id: str, decision: str, reason: str,
+                *, decided_by: str, tier: str | None,
+                require_operator_role: bool) -> dict[str, Any]:
+        with self.database.connection() as connection:
+            cursor = connection.cursor(dictionary=True)
+            cursor.execute("USE trihouse_recovery")
+            if require_operator_role:
+                cursor.execute(
+                    "SELECT role,active FROM trihouse_fms.workers WHERE worker_id=%s FOR SHARE",
+                    (worker_id,),
+                )
+                worker = cursor.fetchone()
+                if worker is None or not worker["active"] or worker["role"] != "safety_manager":
+                    raise RecoveryApprovalForbidden
             cursor.execute(
                 "SELECT * FROM recovery_proposals WHERE proposal_id=%s FOR UPDATE",
                 (proposal_id,),
@@ -635,6 +788,10 @@ class MySqlRecoveryRepository:
             proposal = cursor.fetchone()
             if proposal is None:
                 raise RecoveryProposalNotFound
+            if proposal["status"] == "expired":
+                # 만료된 제안은 그 사이 장면이 달라졌다는 뜻이다. 뒤늦은 승인으로
+                # 옛 좌표를 실행하면 안 된다.
+                raise RecoveryProposalConflict
             cursor.execute(
                 "SELECT approval_id,worker_id,decision,reason FROM recovery_approval_decisions "
                 "WHERE proposal_id=%s FOR UPDATE", (proposal_id,),
@@ -650,6 +807,8 @@ class MySqlRecoveryRepository:
                     "status": decision,
                     "proposal_sha256": proposal["proposal_sha256"],
                     "worker_id": worker_id,
+                    "decided_by": decided_by,
+                    "decision_tier": tier,
                 }
                 if decision == "approved":
                     cursor.execute(
@@ -662,9 +821,11 @@ class MySqlRecoveryRepository:
             approval_id = str(uuid4())
             cursor.execute(
                 "INSERT INTO recovery_approval_decisions "
-                "(approval_id,proposal_id,worker_id,decision,reason,proposal_sha256) "
-                "VALUES (%s,%s,%s,%s,%s,%s)",
-                (approval_id, proposal_id, worker_id, decision, reason, proposal["proposal_sha256"]),
+                "(approval_id,proposal_id,worker_id,decided_by,decision_tier,"
+                "decision,reason,proposal_sha256) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                (approval_id, proposal_id, worker_id, decided_by, tier,
+                 decision, reason, proposal["proposal_sha256"]),
             )
             cursor.execute(
                 "UPDATE recovery_proposals SET status=%s,decided_at=NOW(6) WHERE proposal_id=%s",
@@ -675,6 +836,8 @@ class MySqlRecoveryRepository:
                 "status": decision,
                 "proposal_sha256": proposal["proposal_sha256"],
                 "worker_id": worker_id,
+                "decided_by": decided_by,
+                "decision_tier": tier,
             }
             if decision == "approved":
                 canonical_action = self._json_value(proposal["canonical_action"])

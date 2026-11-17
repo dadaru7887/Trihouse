@@ -85,7 +85,8 @@ def test_fake_perception_to_approved_action_to_one_training_row() -> None:
         "command_id": command["command_id"],
         "proposal_sha256": command["proposal_sha256"],
         "success": True, "status": "succeeded", "terminal": True,
-        "clearance_after_m": 0.5, "elapsed_seconds": 1.0,
+        "clearance_after_m": 0.5, "body_clearance_after_m": 0.5,
+        "elapsed_seconds": 1.0,
         "safety_intervened": False,
     }
     repository.record_execution_result("PK_01", execution)

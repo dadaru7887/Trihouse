@@ -25,6 +25,7 @@ def recovery_admission_block_reason(
     emergency: bool,
     stationary: bool,
     transport_active: bool,
+    path_block_reason: str | None = None,
 ) -> str | None:
     if goal.device_id != robot_id:
         return "DEVICE_ID_MISMATCH"
@@ -55,4 +56,9 @@ def recovery_admission_block_reason(
         return "MOTION_BUSY"
     if not stationary:
         return "ROBOT_NOT_STOPPED"
+    # 마지막에 두는 이유: 이 검사만 지도를 읽으므로 가장 비싸고, 앞의 값싼 신원·
+    # 상태 검사가 이미 거부한 명령에 지도를 조회할 필요가 없다. 그리고 실행 직전에
+    # 봐야 "지금 이 순간" 이라는 전제가 유지된다.
+    if path_block_reason is not None:
+        return f"PATH_NOT_CLEAR:{path_block_reason}"
     return None

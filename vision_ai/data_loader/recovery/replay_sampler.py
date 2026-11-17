@@ -29,8 +29,24 @@ class TransitionRecord:
     outcome_margin: Optional[float] = None
     policy_name: Optional[str] = None
     policy_version: Optional[str] = None
+    # The Gateway already classified this execution as safe/boundary/critical and
+    # stored it in `recovery_steps.outcome_class`. Recomputing the class from the
+    # reward here would let the training set disagree with the operational record.
+    outcome_class: Optional[str] = None
 
     def bucket(self, boundary_margin: float = 0.2) -> OutcomeBucket:
+        """Prefer the operational verdict; fall back to reward only when absent.
+
+        `outcome_class` is the authority because the robot observed the clearance
+        that produced it. The reward threshold below is a legacy path for records
+        exported before the class was carried through, and for simulator buffers
+        that never went through the Gateway.
+        """
+        if self.outcome_class is not None:
+            try:
+                return OutcomeBucket(self.outcome_class)
+            except ValueError:
+                pass
         if self.terminal_critical:
             return OutcomeBucket.CRITICAL
         margin = self.outcome_margin if self.outcome_margin is not None else self.reward

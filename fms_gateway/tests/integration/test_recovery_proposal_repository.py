@@ -76,7 +76,8 @@ def test_ack_and_execution_result_are_idempotently_bound_to_the_command(
         "command_id": command["command_id"],
         "proposal_sha256": created["proposal_sha256"],
         "success": True, "status": "succeeded", "terminal": True,
-        "clearance_after_m": 0.5, "elapsed_seconds": 1.0,
+        "clearance_after_m": 0.5, "body_clearance_after_m": 0.5,
+        "elapsed_seconds": 1.0,
         "safety_intervened": False,
     }
     repository.record_execution_result("PK_01", result)

@@ -13,11 +13,20 @@ SCAN_FORWARD_OFFSET_RAD = math.pi
 # 뒤에 있으므로 정면 장애물은 스캔이 말하는 것보다 그만큼 **가깝다**.
 SCAN_ORIGIN_OFFSET_X_M = -0.017
 
-# 보호 필드(직사각형)의 반폭. 로봇 반폭 0.06 m + 여유 0.02 m.
+# 발자국 12 x 12 cm 안쪽에 꽉 차는 원의 반지름. 회전 중심에서 잰 거리를 **몸
+# 경계에서 잰 여유** 로 바꿀 때 빼는 값이다.
+#
+# 대각선까지 감싸는 외접원(0.085 m)이 아니라 내접원을 쓴다. 외접원은 모서리
+# 방향이 아닌 곳에서 실제보다 여유를 작게 보고하므로, 보상이 안전한 자세를
+# 위험하다고 벌하게 된다. `nav2_params.yaml` 의 발자국과 같은 값이어야 하고
+# `test_safety_fields_match_the_robot.py` 가 그것을 묶는다.
+FOOTPRINT_INSCRIBED_RADIUS_M = 0.06
+
+# 보호 필드(직사각형)의 반폭. 로봇 반폭 + 여유 0.02 m.
 #
 # 폭 0.20 m 통로에서 옆벽은 측면 0.10 m 에 있다. 이 값보다 크므로 통로를 지날 수
 # 있다. 이 값을 키우면 통로를 한 번도 못 지난다.
-PROTECTIVE_HALF_WIDTH_M = 0.08
+PROTECTIVE_HALF_WIDTH_M = FOOTPRINT_INSCRIBED_RADIUS_M + 0.02
 
 # 회전 중심에서 로봇 앞 끝·뒤 끝까지. `nav2_params.yaml` 의 footprint 와 같아야
 # 하고 `test_safety_fields_match_the_robot.py` 가 묶는다.
@@ -173,6 +182,28 @@ def nearest_range(
         if nearest is None or distance < nearest:
             nearest = distance
     return nearest
+
+
+def body_clearance(
+    nearest_m: float | None,
+    *,
+    inscribed_radius_m: float = FOOTPRINT_INSCRIBED_RADIUS_M,
+) -> float | None:
+    """`nearest_range` 의 중심 기준 거리를 **몸 경계 기준** 여유로 바꾼다.
+
+    방향을 보지 않는 값이라 "이 방향으로 갈 수 있는가" 에는 쓸 수 없다. 쓰는 곳은
+    "지금 이 자세가 이미 충돌급인가" 하나다 — 그 판정은 어느 방향이든 몸에 닿으면
+    참이어야 하므로 방향을 보면 안 된다.
+
+    `path_clearance` 와 같은 이유로 음수를 만들지 않는다. 이미 몸 안쪽으로 들어온
+    반사는 0 이고, 음수 여유는 `<=` 비교를 조용히 통과할 수 있다.
+
+    `None` 은 "스캔이 없다" 이고 0 은 "닿았다" 다. 둘을 섞으면 센서가 빠졌을 때
+    로봇이 안전하다고 보고하게 된다.
+    """
+    if nearest_m is None:
+        return None
+    return max(0.0, nearest_m - inscribed_radius_m)
 
 
 def rotating_in_place(

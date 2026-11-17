@@ -19,6 +19,7 @@ from trihouse_interfaces.msg import ConnectionState, IndicatorState, KeepOutZone
 from trihouse_interfaces.srv import ClearEmergency
 
 from .geometry import (
+    body_clearance,
     FOOTPRINT_FRONT_M,
     FOOTPRINT_REAR_M,
     PROTECTIVE_HALF_WIDTH_M,
@@ -66,6 +67,16 @@ SAFETY_SCAN_QOS = QoSProfile(
     reliability=QoSReliabilityPolicy.BEST_EFFORT,
     durability=QoSDurabilityPolicy.VOLATILE,
 )
+
+
+
+# 미관측을 0.0 으로 내보내면 수신 쪽에서 "닿았다" 로 읽힌다. msg 상수와 같은 값을
+# 쓰되 여기서 한 번만 변환한다.
+CLEARANCE_UNOBSERVED = -1.0
+
+
+def _clearance_field(value: float | None) -> float:
+    return CLEARANCE_UNOBSERVED if value is None else float(value)
 
 
 class SafetySupervisor(Node):
@@ -319,6 +330,14 @@ class SafetySupervisor(Node):
         self.cmd_pub.publish(cmd)
         state = SafetyState(); state.stamp = self.get_clock().now().to_msg(); state.robot_id = self.robot_id
         state.state = int(decision.level); state.latched = self.emergency_latched; state.source = 'safety_supervisor'; state.detail = decision.reason
+        # 이 노드가 판정에 쓴 그 여유를 그대로 내보낸다. fleet 이 같은 스캔을
+        # 다시 해석하면 안전 판정과 학습 보상이 서로 다른 값을 보게 된다.
+        # 스캔이 오래됐으면 "관측되지 않음"이다 — 옛 값을 현재로 내보내면 안 된다.
+        state.forward_clearance_m = _clearance_field(
+            self.forward_clearance if scan_fresh else None)
+        state.reverse_clearance_m = _clearance_field(
+            self.reverse_clearance if scan_fresh else None)
+        state.body_clearance_m = _clearance_field(body_clearance(nearby))
         self.state_pub.publish(state)
         indicator = IndicatorState(); indicator.stamp = state.stamp; indicator.robot_id = self.robot_id
         indicator.state = IndicatorState.STATE_EMERGENCY if self.emergency_latched else (IndicatorState.STATE_PERSON_DETECTED if person_detected and self.person_distance is not None and self.person_distance <= self.config.person_protective_distance_m else IndicatorState.STATE_OFF)

@@ -37,3 +37,27 @@ async def dispatch_loop(repository, links, *, interval_seconds: float = 0.5) -> 
         except Exception:
             logger.exception("recovery command dispatch failed")
         await asyncio.sleep(interval_seconds)
+
+
+async def expire_stale_proposals_once(repository) -> int:
+    """Close proposals nobody decided before their deadline.
+
+    Autonomous operation produces tier C proposals on purpose, and the 5080
+    runtime forms no new judgement while one proposal is still open. Without this
+    sweep a single undecided proposal parks that robot forever.
+    """
+    expired = await asyncio.to_thread(repository.expire_stale_proposals)
+    if expired:
+        logger.info("expired %d undecided recovery proposals", len(expired))
+    return len(expired)
+
+
+async def expiry_loop(repository, *, interval_seconds: float = 10.0) -> None:
+    while True:
+        try:
+            await expire_stale_proposals_once(repository)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("recovery proposal expiry sweep failed")
+        await asyncio.sleep(interval_seconds)

@@ -1016,6 +1016,7 @@ class GatewayNode(Node):
             'post_pose': self._recovery_pose_payload(action_result.post_pose),
             'clearance_before_m': float(action_result.clearance_before_m),
             'clearance_after_m': float(action_result.clearance_after_m),
+            'body_clearance_after_m': float(action_result.body_clearance_after_m),
             'elapsed_seconds': float(action_result.elapsed_seconds),
             'safety_intervened': bool(action_result.safety_intervened),
             'terminal': bool(action_result.terminal),
