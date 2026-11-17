@@ -20,6 +20,11 @@
     python3 scripts/p0_check_world_alignment.py                 # 기본 pinky_01
     python3 scripts/p0_check_world_alignment.py --robot pinky_02 --samples 20
 
+    # 단독 실행(launch_sim.launch.xml: namespace 없음, AMCL 없음). 로봇이 원점에서
+    # 생성되므로 odom = map 이다. docs/guides/recovery-sim-world.md 4단계.
+    python3 scripts/p0_check_world_alignment.py --robot "" --fixed-frame odom \
+        --map pinky_pro_alpha/pinky_navigation/map/new_map_2.yaml
+
 로봇을 여러 자리로 옮겨 가며 돌려야 한다. 한 자리에서 맞는 것은 우연일 수 있지만,
 서로 다른 세 자리에서 맞으면 회전·평행이동이 모두 맞았다는 뜻이다.
 """
@@ -79,7 +84,9 @@ class Grid:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--robot", default="pinky_01")
+    parser.add_argument("--robot", default="pinky_01", help="ROS namespace. 없으면 \"\"")
+    parser.add_argument("--fixed-frame", default="map",
+                        help="라이다 자세를 읽을 기준 프레임. AMCL 이 없으면 odom")
     parser.add_argument("--map", type=Path, default=None, help="지도 yaml. 생략하면 .trihouse/map_yaml")
     parser.add_argument("--samples", type=int, default=12, help="검사할 스캔 수")
     parser.add_argument("--tolerance", type=float, default=0.05, help="맞다고 볼 오차 (m)")
@@ -95,17 +102,18 @@ def main() -> int:
     grid = Grid(map_yaml)
     print(f"지도 {grid.name}  {grid.width}x{grid.height} @ {grid.resolution} m")
 
+    scan_topic = f"/{args.robot}/scan" if args.robot else "/scan"
     rclpy.init()
     node = Node("p0_check_world_alignment")
     buffer = Buffer()
     TransformListener(buffer, node)
     scans: list[LaserScan] = []
     node.create_subscription(
-        LaserScan, f"/{args.robot}/scan", scans.append,
+        LaserScan, scan_topic, scans.append,
         QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT),
     )
 
-    lidar_frame = f"{args.robot}/rplidar_link"
+    lidar_frame = f"{args.robot}/rplidar_link" if args.robot else "rplidar_link"
     errors: list[float] = []
     agreed = compared = used = 0
     deadline = node.get_clock().now().nanoseconds + 30 * 10 ** 9
@@ -116,7 +124,7 @@ def main() -> int:
         scan = scans.pop()
         scans.clear()
         try:
-            tf = buffer.lookup_transform("map", lidar_frame, rclpy.time.Time())
+            tf = buffer.lookup_transform(args.fixed_frame, lidar_frame, rclpy.time.Time())
         except Exception:
             continue
         t = tf.transform.translation
@@ -142,7 +150,7 @@ def main() -> int:
 
     if not errors:
         print("[실패] 견줄 빔이 없습니다. 시뮬레이터가 떠 있고 AMCL 이 map->odom 을 내보내는지,")
-        print(f"       그리고 /{args.robot}/scan 이 오는지 확인하세요.")
+        print(f"       그리고 {scan_topic} 이 오는지 확인하세요.")
         print("       Gazebo 세계에 벽이 하나도 없으면 라이다가 아무것도 못 봅니다 — 그것도 이 결과가 됩니다.")
         return 1
 
