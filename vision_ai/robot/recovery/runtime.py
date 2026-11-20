@@ -33,7 +33,7 @@ def parse_runtime_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--prompt-version",
         choices=sorted(prompts["versions"]),
         default=os.environ.get("VLM_PROMPT_VERSION") or prompts["runtime_version"],
-        help="VLM prompt in prompts.yaml (default: VLM_PROMPT_VERSION, else runtime_version)",
+        help="VLM prompt in robot/configs/vlm_prompts.yaml (default: VLM_PROMPT_VERSION, else runtime_version)",
     )
     return parser.parse_args(argv)
 

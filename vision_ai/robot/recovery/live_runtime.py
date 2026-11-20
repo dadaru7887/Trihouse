@@ -1,4 +1,8 @@
-"""5080 live loop: RTSP segmentation, stuck trigger, Qwen, policy, proposal."""
+"""5080 live loop: RTSP segmentation, stuck trigger, Qwen, policy, proposal.
+
+Optional RECOVERY_STATIC_MAP_YAML (the Nav2 map yaml of the deployed map) lets
+the worker drop candidates heading into walls before it asks for approval.
+"""
 
 from __future__ import annotations
 
@@ -24,7 +28,7 @@ from .navigation_context import GatewayNavigationContextSource
 from .policy_runtime import ApprovedPolicyRuntime
 from .proposal_client import GatewayProposalClient
 from vision_ai.models.recovery.vlm_interpreter import QwenVlmInterpreter
-from .worker import RecoveryInferenceWorker, detection_evidence
+from .worker import RecoveryInferenceWorker, TrackHistory, detection_evidence
 
 
 class PersonSafetyReporter:
@@ -118,6 +122,12 @@ def run_live_inference(*, safety_gate_enabled: bool, prompt_version: str | None 
     proposal_client = GatewayProposalClient(gateway_url)
     # Optional: absent selector environment keeps the pre-distillation ranking.
     skill_selector = build_selector_from_env(os.environ)
+    static_map = None
+    if os.environ.get("RECOVERY_STATIC_MAP_YAML"):
+        from trihouse_pinky_fleet.costmap_view import CostmapSnapshot, CostmapView
+
+        static_map = CostmapView(global_=CostmapSnapshot.from_map_yaml(
+            Path(os.environ["RECOVERY_STATIC_MAP_YAML"])))
     worker = RecoveryInferenceWorker(
         vlm,
         policy,
@@ -125,7 +135,9 @@ def run_live_inference(*, safety_gate_enabled: bool, prompt_version: str | None 
         safety_gate_enabled=safety_gate_enabled,
         skill_selector=skill_selector,
         execution_mode=os.environ["VLM_RL_EXECUTION_MODE"],
+        static_map=static_map,
     )
+    tracks = TrackHistory()
     context_source = GatewayNavigationContextSource(gateway_url, device_id)
     camera_id = rtsp_url.rstrip("/").rsplit("/", 1)[-1]
     person_reporter = PersonSafetyReporter(
@@ -148,7 +160,8 @@ def run_live_inference(*, safety_gate_enabled: bool, prompt_version: str | None 
             if not ok:
                 raise RuntimeError("5080 MediaMTX stream stopped producing frames")
             raw_detections = detector.detect(frame)
-            detections = detection_evidence(raw_detections, person_class_id=person_class_id)
+            detections = tracks.observe(
+                detection_evidence(raw_detections, person_class_id=person_class_id), time.monotonic())
             person_reporter.observe_frame(raw_detections, frame.shape, time.monotonic())
             try:
                 context = context_source.get()
@@ -159,6 +172,7 @@ def run_live_inference(*, safety_gate_enabled: bool, prompt_version: str | None 
                     execution_state = proposal_client.execution(pending_proposal["proposal_id"])
                     execution = execution_state.get("result")
                     if execution is not None:
+                        worker.record_outcome(pending_proposal, bool(execution["success"]))
                         next_state = worker.observe_state(frame, detections, context)
                         completion = build_completion(pending_proposal, execution, next_state)
                         proposal_client.complete(
@@ -166,7 +180,9 @@ def run_live_inference(*, safety_gate_enabled: bool, prompt_version: str | None 
                         )
                         pending_proposal = None
                     elif execution_state["status"] in {"rejected", "failed", "expired"}:
+                        worker.record_outcome(pending_proposal, False)
                         pending_proposal = None
+                        last_proposal_at = 0.0          # offer the next candidate now
                 else:
                     if time.monotonic() - last_open_lookup_at >= 1.0:
                         open_items = proposal_client.open_recoveries(device_id)

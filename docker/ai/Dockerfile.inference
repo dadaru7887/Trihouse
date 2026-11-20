@@ -32,7 +32,10 @@ COPY vision_ai/models/recovery/__init__.py vision_ai/models/recovery/__init__.py
 COPY vision_ai/models/recovery/policy_architecture.py vision_ai/models/recovery/policy_architecture.py
 COPY vision_ai/models/recovery/distilled_selector.py vision_ai/models/recovery/distilled_selector.py
 COPY vision_ai/models/recovery/vlm_interpreter.py vision_ai/models/recovery/vlm_interpreter.py
-COPY vision_ai/models/recovery/prompts.yaml vision_ai/models/recovery/prompts.yaml
 COPY vision_ai/models/recovery/checkpoint.py vision_ai/models/recovery/checkpoint.py
+# The robot's own path check, so the 5080 drops wall-bound candidates by the same rule.
+COPY trihouse_pinky/trihouse_pinky_fleet/trihouse_pinky_fleet/__init__.py trihouse_pinky_fleet/__init__.py
+COPY trihouse_pinky/trihouse_pinky_fleet/trihouse_pinky_fleet/costmap_view.py trihouse_pinky_fleet/costmap_view.py
+COPY trihouse_pinky/trihouse_pinky_fleet/trihouse_pinky_fleet/recovery_path_check.py trihouse_pinky_fleet/recovery_path_check.py
 
 CMD ["python", "-m", "vision_ai.robot.recovery.runtime"]

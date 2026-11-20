@@ -52,6 +52,6 @@ def test_runtime_prompt_version_is_an_argument_over_the_environment(monkeypatch)
 
     monkeypatch.delenv("VLM_PROMPT_VERSION", raising=False)
     assert parse_runtime_args([]).prompt_version == load_prompts()["runtime_version"]
-    monkeypatch.setenv("VLM_PROMPT_VERSION", "v2")
-    assert parse_runtime_args([]).prompt_version == "v2"
-    assert parse_runtime_args(["--prompt-version", "current"]).prompt_version == "current"
+    monkeypatch.setenv("VLM_PROMPT_VERSION", "current")
+    assert parse_runtime_args([]).prompt_version == "current"
+    assert parse_runtime_args(["--prompt-version", "v1"]).prompt_version == "v1"

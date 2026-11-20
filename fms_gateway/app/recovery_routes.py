@@ -60,7 +60,9 @@ def recovery_router(repository: RecoveryRepository) -> APIRouter:
         if payload["policy_lineage"].get("execution_mode") != "auto_bounded":
             # operator_approved (또는 모드를 밝히지 않은 런타임): 전 건 사람이 결정한다.
             return created
-        verdict = classify(payload, attempt_no=int(payload.get("step_no", 1)))
+        # Attempts during this stop, counted by the 5080 (every proposal is its own episode).
+        attempt_no = int(payload["policy_lineage"].get("attempt_no") or payload.get("step_no", 1))
+        verdict = classify(payload, attempt_no=attempt_no)
         created["decision_tier"] = verdict.tier
         created["decision_reason"] = verdict.reason
         created["requires_operator"] = verdict.requires_operator

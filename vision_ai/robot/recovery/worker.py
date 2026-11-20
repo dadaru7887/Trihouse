@@ -4,9 +4,14 @@
     worker.process(frame, evidence, context)          # -> proposal or None
 
 Flow: YOLOE detections -> `DetectionEvidence` (region_id left to right, the
-ByteTrack id kept) -> VLM rates every region -> `select_risk_target` links each
+ByteTrack id kept) -> `TrackHistory` stamps each with its motion over the last
+second -> VLM rates every region -> `select_risk_target` links each
 observation back to its detection and keeps the riskiest -> State V1, whose box
-centre is the YOLOE box, never the box the VLM wrote -> policy -> proposal.
+centre is the YOLOE box, never the box the VLM wrote -> policy candidates ->
+screened (skills that failed during this stop, skills a moving person rules
+out, paths the static map blocks) -> the survivor nearest the goal -> proposal.
+A failed proposal (`record_outcome`) takes its skill out of the next round, so
+the next round offers the next candidate.
 
 The offline prompt comparison (tooling/vlm_prompt_compare.py) imports the same
 conversion and linking, so what it scores is what the robot runs.
@@ -14,7 +19,8 @@ conversion and linking, so what it scores is what the robot runs.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from collections import deque
+from dataclasses import asdict, dataclass, field, replace
 import math
 from typing import Any, Protocol, Sequence
 from uuid import uuid4
@@ -26,15 +32,14 @@ from .navigation_context import NavigationContext
 from .trigger import should_trigger_recovery
 
 
-GOAL_TEXT = "The robot is navigating a warehouse aisle toward the next waypoint."
-
-
 @dataclass(frozen=True)
 class DetectionEvidence:
     """One YOLOE detection as the VLM and the proposal see it.
 
     `region_id` names it within one frame (r1 is leftmost); `track_id` is the
     ByteTrack id that follows it across frames, None when nothing tracked it.
+    `lateral` (left / right / none / unknown) and `approaching` are its motion
+    over the last second (`TrackHistory`); unknown / None without that history.
     """
 
     class_name: str
@@ -42,6 +47,8 @@ class DetectionEvidence:
     bbox_xyxy_norm: tuple[float, float, float, float]
     track_id: str | None = None
     region_id: str = ""
+    lateral: str = "unknown"
+    approaching: bool | None = None
 
 
 def detection_evidence(detections: Sequence[Any], *, person_class_id: int) -> list[DetectionEvidence]:
@@ -67,6 +74,97 @@ def detection_evidence(detections: Sequence[Any], *, person_class_id: int) -> li
     ]
 
 
+# The trigger needs 3 s without progress, so the last second before it is filmed
+# from a robot standing still: a box that moves in it is the object moving.
+MOTION_WINDOW_S = 1.0
+MIN_MOTION_SPAN_S = 0.5      # less history than this: motion unknown
+LATERAL_SPEED = 0.08         # box centre shift, frame widths per second
+APPROACH_GROWTH = 0.10       # box height growth over the window
+
+
+def track_motion(samples: Sequence[tuple[float, Sequence[float]]]) -> tuple[str, bool | None]:
+    """(time, box) samples of one track, oldest first -> (lateral, approaching).
+
+    Approaching: the box grows taller and its bottom edge comes down the frame.
+    """
+    if len(samples) < 2 or samples[-1][0] - samples[0][0] < MIN_MOTION_SPAN_S:
+        return "unknown", None
+    (t0, old), (t1, new) = samples[0], samples[-1]
+    speed = ((new[0] + new[2]) - (old[0] + old[2])) / 2 / (t1 - t0)
+    lateral = "right" if speed >= LATERAL_SPEED else "left" if speed <= -LATERAL_SPEED else "none"
+    growth = (new[3] - new[1]) / max(old[3] - old[1], 1e-6) - 1
+    return lateral, growth >= APPROACH_GROWTH and new[3] >= old[3]
+
+
+class TrackHistory:
+    """The last second of boxes per ByteTrack id; `observe` returns the evidence
+    with each detection's motion filled in."""
+
+    def __init__(self, window_s: float = MOTION_WINDOW_S):
+        self.window_s = window_s
+        self._samples: dict[str, deque] = {}
+
+    def observe(self, evidence: Sequence[DetectionEvidence], now: float) -> list[DetectionEvidence]:
+        for item in evidence:
+            if item.track_id:
+                self._samples.setdefault(item.track_id, deque()).append((now, item.bbox_xyxy_norm))
+        for track_id, samples in list(self._samples.items()):
+            while samples and samples[0][0] < now - self.window_s:
+                samples.popleft()
+            if not samples:
+                del self._samples[track_id]
+        stamped = []
+        for item in evidence:
+            lateral, approaching = track_motion(self._samples.get(item.track_id or "", ()))
+            stamped.append(replace(item, lateral=lateral, approaching=approaching))
+        return stamped
+
+
+# Skills a moving person rules out, so only the side away from it stays open.
+# Crossing: the side it is heading to, and driving on into its path. Coming
+# head-on: staying, backing away (it outpaces the robot) and driving on; only a
+# side step leaves its path. Image right is the robot's right.
+PERSON_MOTION_BLOCKS = {
+    "right": ("REROUTE_RIGHT", "REJOIN"),
+    "left": ("REROUTE_LEFT", "REJOIN"),
+    "approaching": ("WAIT_REOBSERVE", "BACKUP", "REJOIN"),
+}
+
+
+def person_blocked_skills(detections: Sequence[DetectionEvidence]) -> dict[int, str]:
+    """{skill id: reason} for every skill a moving person rules out."""
+    blocked: dict[int, str] = {}
+    for item in detections:
+        if item.class_name != "person":
+            continue
+        motions = [item.lateral] if item.lateral in ("left", "right") else []
+        motions += ["approaching"] if item.approaching else []
+        for motion in motions:
+            for name in PERSON_MOTION_BLOCKS[motion]:
+                blocked.setdefault(SKILL_NAMES.index(name), f"person {item.region_id} moving {motion}")
+    return blocked
+
+
+# One stop: attempts made while the robot stays within this radius of where it
+# stopped, heading for the same goal. Moving on further, or a new goal, starts afresh.
+SESSION_RADIUS_M = 0.5
+
+
+@dataclass
+class RecoverySession:
+    """Attempts during one stop, and the skills that failed in it."""
+
+    anchor: tuple[float, float]
+    goal: tuple[float, float]
+    attempts: int = 0
+    failed_skills: set[int] = field(default_factory=set)
+
+    def covers(self, context: NavigationContext) -> bool:
+        x, y = context.robot_pose[:2]
+        return (tuple(context.goal_pose) == self.goal
+                and math.hypot(x - self.anchor[0], y - self.anchor[1]) <= SESSION_RADIUS_M)
+
+
 class Vlm(Protocol):
     """`interpret` returns the parsed JSON plus `raw_response`, `scene_confidence`
     (whatever key the prompt version used) and `prompt_version`."""
@@ -74,7 +172,7 @@ class Vlm(Protocol):
     model_name: str
     model_revision: str
 
-    def interpret(self, frame: Any, detections: Sequence[DetectionEvidence], goal_text: str) -> dict[str, Any]: ...
+    def interpret(self, frame: Any, detections: Sequence[DetectionEvidence]) -> dict[str, Any]: ...
 
 
 class Policy(Protocol):
@@ -180,7 +278,8 @@ class RecoveryInferenceWorker:
     def __init__(self, vlm: Vlm, policy: Policy, proposal_client: ProposalClient,
                  *, safety_gate_enabled: bool = True,
                  skill_selector: SkillSelector | None = None,
-                 execution_mode: str = "operator_approved"):
+                 execution_mode: str = "operator_approved",
+                 static_map: Any | None = None):
         self.vlm = vlm
         self.policy = policy
         self.proposal_client = proposal_client
@@ -188,6 +287,9 @@ class RecoveryInferenceWorker:
         self.skill_selector = skill_selector
         # Sent with every proposal: the Gateway auto-approves only `auto_bounded` ones.
         self.execution_mode = execution_mode
+        # costmap_view.CostmapView over the static map, or None to leave walls to the robot.
+        self.static_map = static_map
+        self.session: RecoverySession | None = None
 
     def process(
         self,
@@ -197,7 +299,7 @@ class RecoveryInferenceWorker:
     ) -> dict[str, Any] | None:
         if not should_trigger_recovery(detections, context):
             return None
-        vlm_result = self.vlm.interpret(frame, detections, GOAL_TEXT)
+        vlm_result = self.vlm.interpret(frame, detections)
         target = select_risk_target(vlm_result, detections)
         if target is None:
             return None
@@ -215,6 +317,10 @@ class RecoveryInferenceWorker:
             scene_confidence=float(vlm_result["scene_confidence"]),
         )
         pose = Pose2D(*context.robot_pose)
+        if self.session is None or not self.session.covers(context):
+            self.session = RecoverySession(tuple(context.robot_pose[:2]), tuple(context.goal_pose))
+        blocked = person_blocked_skills(detections)
+        blocked.update({skill: "failed earlier in this stop" for skill in self.session.failed_skills})
         candidate_evidence: list[dict[str, Any]] = []
         group_sampler = getattr(self.policy, "select_group", None)
         if callable(group_sampler):
@@ -249,6 +355,7 @@ class RecoveryInferenceWorker:
                     context.goal_pose[0] - target_x,
                     context.goal_pose[1] - target_y,
                 )
+                rejection = self._rejection(candidate_skill, candidate_action, context, blocked)
                 candidate_evidence.append({
                     "candidate_index": candidate_index,
                     "skill": candidate_skill,
@@ -258,8 +365,10 @@ class RecoveryInferenceWorker:
                     "skill_log_prob": log_prob,
                     "passed_boundary": True,
                     "goal_distance_m": goal_distance,
+                    "rejected_by": rejection,
                 })
-                ranked.append((goal_distance, candidate_skill, candidate_action.coord, candidate_action))
+                if rejection is None:
+                    ranked.append((goal_distance, candidate_skill, candidate_action.coord, candidate_action))
             if not ranked:
                 return None
             _, skill, coord, action = min(ranked, key=lambda item: item[0])
@@ -280,6 +389,8 @@ class RecoveryInferenceWorker:
         else:
             skill, coord = self.policy.select(state.to_vector())
             action = canonicalize_recovery_action(skill, coord, pose)
+            if self._rejection(skill, action, context, blocked) is not None:
+                return None
             skill_selection, learned_skill = self._selector_evidence(state.to_vector())
             if learned_skill is not None:
                 # A single-select policy offers no candidate group to re-rank, so the
@@ -289,6 +400,7 @@ class RecoveryInferenceWorker:
                 )
         named_state = asdict(state)
         named_state.pop("state_schema_id")
+        self.session.attempts += 1
         proposal = {
             "proposal_id": str(uuid4()),
             "recovery_episode_uuid": str(uuid4()),
@@ -310,6 +422,8 @@ class RecoveryInferenceWorker:
                 "model": self.policy.policy_name,
                 "checkpoint_sha256": self.policy.checkpoint_sha256,
                 "execution_mode": self.execution_mode,
+                # Attempts during this stop; the Gateway hands the stop to a person after 3.
+                "attempt_no": str(self.session.attempts),
             },
             "selected_skill_id": skill,
             "selected_skill_name": SKILL_NAMES[skill],
@@ -320,6 +434,32 @@ class RecoveryInferenceWorker:
         }
         response = self.proposal_client.create(proposal)
         return {**response, "_local_proposal": proposal}
+
+    def record_outcome(self, proposal: dict[str, Any], succeeded: bool) -> None:
+        """A rejected, expired or failed proposal: its skill is not offered again
+        during this stop, so the next round proposes the next candidate."""
+        if not succeeded and self.session is not None:
+            self.session.failed_skills.add(int(proposal["selected_skill_id"]))
+
+    def _rejection(self, skill: int, action: Any, context: NavigationContext,
+                   blocked: dict[int, str]) -> str | None:
+        """Why this bounded candidate may not be proposed, or None.
+
+        The static map check is the robot's own pre-motion path check
+        (recovery_path_check) on the static map only: walls and off-map targets
+        go before ranking, people are still checked by the robot right before it moves.
+        """
+        if skill in blocked:
+            return blocked[skill]
+        if self.static_map is None or action.action_family == "wait":
+            return None
+        from trihouse_pinky_fleet.recovery_path_check import rollout_blocked, target_pose
+
+        target = action.map_target
+        goal = target_pose(context.robot_pose, action.coord,
+                           None if target is None else (target.x_m, target.y_m, target.yaw_rad))
+        reason = rollout_blocked(context.robot_pose, goal, self.static_map)
+        return None if reason is None else f"static map: {reason}"
 
     def _selector_evidence(
         self, state: tuple[float, ...]
@@ -361,7 +501,7 @@ class RecoveryInferenceWorker:
         context: NavigationContext,
     ) -> tuple[float, ...]:
         """Observe post-action State V1 without starting another proposal."""
-        vlm_result = self.vlm.interpret(frame, detections, GOAL_TEXT)
+        vlm_result = self.vlm.interpret(frame, detections)
         target = select_risk_target(vlm_result, detections)
         if target is None:
             # Nothing grounded to look at: no box, and no confidence in the scene.

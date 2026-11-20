@@ -7,7 +7,7 @@ class FakeVlm:
     model_name = "Qwen/Qwen2.5-VL-7B-Instruct"
     model_revision = "approved"
 
-    def interpret(self, frame, detections, goal_text):
+    def interpret(self, frame, detections):
         return {
             "observations": [
                 {
@@ -90,7 +90,7 @@ def test_worker_preserves_all_detections_but_uses_one_worst_risk_state() -> None
 
 def test_worker_rejects_invalid_vlm_contract_without_sending_a_proposal() -> None:
     class InvalidVlm(FakeVlm):
-        def interpret(self, frame, detections, goal_text):
+        def interpret(self, frame, detections):
             return {"observations": "not-a-list", "scene_confidence": 0.1}
 
     client = RecordingProposalClient()
@@ -266,8 +266,8 @@ def test_a_selection_marked_used_always_matches_the_skill_that_was_proposed(sele
 
 def test_the_state_box_is_the_yoloe_box_not_the_one_the_vlm_wrote() -> None:
     class DriftingVlm(FakeVlm):
-        def interpret(self, frame, detections, goal_text):
-            answer = super().interpret(frame, detections, goal_text)
+        def interpret(self, frame, detections):
+            answer = super().interpret(frame, detections)
             answer["observations"][0].update(region_id="r2", bbox_norm=[0.0, 0.0, 0.1, 0.1])
             return answer
 
@@ -316,3 +316,67 @@ def test_the_proposal_says_which_execution_mode_made_it() -> None:
 
     assert [p["policy_lineage"]["execution_mode"] for p in client.payloads] == [
         "operator_approved", "auto_bounded"]
+
+
+def test_track_motion_reads_crossing_and_approaching_from_the_last_second() -> None:
+    from vision_ai.robot.recovery.worker import TrackHistory, track_motion
+
+    crossing = [(0.0, (0.20, 0.3, 0.30, 0.8)), (1.0, (0.35, 0.3, 0.45, 0.8))]
+    coming = [(0.0, (0.40, 0.4, 0.50, 0.7)), (1.0, (0.39, 0.4, 0.51, 0.8))]
+
+    assert track_motion(crossing) == ("right", False)
+    assert track_motion(coming) == ("none", True)
+    assert track_motion(crossing[:1]) == ("unknown", None)          # one sample: no motion yet
+
+    history = TrackHistory()
+    for now, box in crossing:
+        stamped = history.observe([DetectionEvidence("person", 0.9, box, "7", "r1")], now)
+    assert (stamped[0].lateral, stamped[0].approaching) == ("right", False)
+
+
+def test_a_moving_person_leaves_only_the_side_away_from_it() -> None:
+    walking_left = [DetectionEvidence("person", 0.91, (0.2, 0.2, 0.4, 0.8), "7", "person-1", "left", False)]
+    client = RecordingProposalClient()
+
+    RecoveryInferenceWorker(FakeVlm(), GroupPolicy(), client).process(object(), walking_left, context())
+
+    proposal = client.payloads[0]
+    assert proposal["selected_skill_name"] == "REROUTE_RIGHT"           # left would be nearer the goal
+    assert {c["rejected_by"] for c in proposal["candidate_evidence"] if c["skill_name"] == "REROUTE_LEFT"} == {
+        "person person-1 moving left"}
+
+
+def test_a_failed_skill_is_not_offered_again_during_the_same_stop() -> None:
+    client = RecordingProposalClient()
+    worker = RecoveryInferenceWorker(FakeVlm(), GroupPolicy(), client)
+
+    worker.process(object(), detections(), context())
+    worker.record_outcome(client.payloads[-1], succeeded=False)         # REROUTE_LEFT failed
+    worker.process(object(), detections(), context(robot_pose=(1.05, 2.0, 0.0)))
+    worker.process(object(), detections(), context(robot_pose=(2.0, 2.0, 0.0)))   # moved on: new stop
+
+    assert [(p["selected_skill_name"], p["policy_lineage"]["attempt_no"]) for p in client.payloads] == [
+        ("REROUTE_LEFT", "1"), ("REROUTE_RIGHT", "2"), ("REROUTE_LEFT", "1")]
+
+
+def test_a_candidate_heading_into_a_wall_of_the_static_map_is_dropped(tmp_path) -> None:
+    np = pytest.importorskip("numpy")
+    image_module = pytest.importorskip("PIL.Image")
+    from trihouse_pinky_fleet.costmap_view import CostmapSnapshot, CostmapView
+
+    pixels = np.full((100, 100), 254, np.uint8)                      # 3 m x 3 m, 0.03 m cells
+    pixels[100 - 74:100 - 69, 30:45] = 0                             # wall at y 2.07-2.2 m, x 0.9-1.35 m
+    image_module.fromarray(pixels).save(tmp_path / "map.pgm")
+    (tmp_path / "map.yaml").write_text(
+        "image: map.pgm\nresolution: 0.03\norigin: [0.0, 0.0, 0.0]\nnegate: 0\n"
+        "occupied_thresh: 0.65\nfree_thresh: 0.196\n", encoding="utf-8")
+    static_map = CostmapView(global_=CostmapSnapshot.from_map_yaml(tmp_path / "map.yaml"))
+    client = RecordingProposalClient()
+
+    RecoveryInferenceWorker(FakeVlm(), GroupPolicy(), client, static_map=static_map).process(
+        object(), detections(), context())                           # robot at (1.0, 2.0) facing +x
+
+    proposal = client.payloads[0]
+    assert proposal["selected_skill_name"] == "REROUTE_RIGHT"
+    assert all(c["rejected_by"].startswith("static map: FOOTPRINT_BLOCKED")
+               for c in proposal["candidate_evidence"] if c["skill_name"] == "REROUTE_LEFT")

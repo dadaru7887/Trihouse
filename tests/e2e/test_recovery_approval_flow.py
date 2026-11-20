@@ -15,7 +15,7 @@ class Vlm:
     model_name = "Qwen/Qwen2.5-VL-7B-Instruct"
     model_revision = "approved"
 
-    def interpret(self, frame, detections, goal_text):
+    def interpret(self, frame, detections):
         return {
             "observations": [{
                 "bbox_norm": [0.2, 0.2, 0.4, 0.8],

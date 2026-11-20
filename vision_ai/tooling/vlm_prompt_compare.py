@@ -4,7 +4,7 @@ settings, one answer per prompt version, saved for labelling and scoring.
     python -m vision_ai.tooling.vlm_prompt_compare \
         --dataset data/pinky_camera/merged_export_split --split valid \
         --weights experiments/<stamp>/selected_model.json \
-        --versions current v1 v2 --out runs/vlm_prompt_compare/valid
+        --versions current v1 --out runs/vlm_prompt_compare/valid
 
 Flow: order each recording's frames by the time in the file name -> YOLOE
 predict for the objects, and YOLOE + ByteTrack (reset at each new recording,
@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from vision_ai.robot.recovery.worker import (
-    GOAL_TEXT, DetectionEvidence, box_iou, detection_evidence, link_observations,
+    DetectionEvidence, box_iou, detection_evidence, link_observations,
     validated_observations,
 )
 
@@ -130,7 +130,7 @@ def ask_vlm(rows: list[dict], dataset: Path, versions: list[str], revision: str,
                 continue
             frame = cv2.imread(str(dataset / row["image"]))
             for version in todo:
-                result = vlm.interpret(frame, evidence, GOAL_TEXT, version=version)
+                result = vlm.interpret(frame, evidence, version=version)
                 observations = result.get("observations")
                 answers = ([o for o in observations if isinstance(o, dict)]
                            if isinstance(observations, list) else [])
@@ -235,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--split", default="valid", choices=("train", "valid", "test"))
     parser.add_argument("--weights", type=Path, help="YOLOE best.pt or selected_model.json; "
                                                      "needed until detections.jsonl exists")
-    parser.add_argument("--versions", nargs="+", help="default: every version in prompts.yaml")
+    parser.add_argument("--versions", nargs="+", help="default: every version in vlm_prompts.yaml")
     parser.add_argument("--draft-version", default="v1",
                         help="answers copied into risk_label as a starting point, or 'none'")
     parser.add_argument("--revision", default=os.environ.get("VLM_MODEL_REVISION", "main"))

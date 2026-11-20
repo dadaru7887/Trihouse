@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parent
 ROS_PACKAGE_ROOTS = (
     "trihouse_rmf_bridge",
     "trihouse_omx_adapter",
+    # 5080 복구 worker 가 로봇의 경로 검사(costmap_view, recovery_path_check)를 그대로 쓴다.
+    "trihouse_pinky/trihouse_pinky_fleet",
 )
 
 
@@ -34,4 +36,4 @@ for _name in ROS_PACKAGE_ROOTS:
 # namespace package로 잡힌다. 여기서 미리 한 번 import해 올바른 모듈을
 # `sys.modules`에 고정한다.
 for _name in ROS_PACKAGE_ROOTS:
-    __import__(_name)
+    __import__(Path(_name).name)

@@ -60,7 +60,7 @@ class FakeVlm:
     def __init__(self, revision):
         pass
 
-    def interpret(self, frame, detections, goal_text, version=None):
+    def interpret(self, frame, detections, version=None):
         FakeVlm.received.append(list(detections))
         risk = "critical" if version == "v1" else "low"
         return {"observations": [{"region_id": "r2", "semantic_label": "person",
@@ -97,7 +97,7 @@ def test_compare_runs_end_to_end_and_resumes(tmp_path, monkeypatch):
     from vision_ai.models.recovery.vlm_interpreter import load_prompts, render_prompt
     given = {e.region_id: e.track_id for e in FakeVlm.received[0]}
     assert given == {d["region_id"]: d["track_id"] for d in rows[0]["detections"]} == {"r1": None, "r2": "5"}
-    prompt = render_prompt("v1", FakeVlm.received[0], "goal", load_prompts())
+    prompt = render_prompt("v1", FakeVlm.received[0], load_prompts())
     assert "region_id=r2, class=person" in prompt and "track_id=5" in prompt
     assert "region_id=r1, class=obstacle" in prompt and "track_id=null" in prompt
 

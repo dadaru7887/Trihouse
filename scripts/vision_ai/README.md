@@ -200,7 +200,7 @@ python -m vision_ai.models.perception.trainer.fall_trainer \
 
 ## 10. VLM prompt comparison (after step 6)
 
-Runs every prompt version in `vision_ai/models/recovery/prompts.yaml` on the
+Runs every prompt version in `vision_ai/robot/configs/vlm_prompts.yaml` on the
 same frames, the same YOLOE detections and the same Qwen settings. Needs a GPU
 with about 8 GB free and the VLM packages of the inference image:
 
@@ -210,7 +210,7 @@ pip install transformers==4.53.2 accelerate==1.8.1 bitsandbytes==0.46.1 qwen-vl-
 python -m vision_ai.tooling.vlm_prompt_compare \
     --dataset data/pinky_camera/merged_export_split --split valid \
     --weights experiments/<stamp>/selected_model.json \
-    --out runs/vlm_prompt_compare/valid                 # all versions; --versions v1 v2 for some
+    --out runs/vlm_prompt_compare/valid                 # all versions (current, v1); --versions v1 for one
 ```
 
 | file | what it is |

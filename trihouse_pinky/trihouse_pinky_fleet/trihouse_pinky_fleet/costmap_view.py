@@ -9,6 +9,10 @@
 `costmap_free` / `footprint_fits` 를 질의한다. ROS 타입은 여기 들어오지 않는다 —
 그래야 로봇 없이 테스트할 수 있다.
 
+5080 의 복구 worker 도 이 모듈과 `recovery_path_check` 를 그대로 쓴다.
+`CostmapSnapshot.from_map_yaml` 로 정적 지도를 읽어, 승인 요청 전에 벽이나
+지도 밖으로 가는 후보를 로봇과 같은 규칙으로 지운다.
+
 원본: `upstream/dev_driving/02_pipeline_core/nav2_costmap_query.py` 의 조회 규칙을
 그대로 옮겼고, 프레임 변환은 호출부가 넘겨주는 함수로 분리했다.
 """
@@ -64,6 +68,35 @@ class CostmapSnapshot:
             origin_y=float(info.origin.position.y),
             frame_id=str(message.header.frame_id),  # type: ignore[attr-defined]
         )
+
+    @classmethod
+    def from_map_yaml(cls, path: object) -> "CostmapSnapshot":
+        """Nav2 map_server 의 yaml + 이미지 -> map 프레임 정적 grid (0 / 100 / -1).
+
+        5080 이 승인 전에 벽 쪽 후보를 지우는 데 쓴다. 판정 규칙(occupied_thresh,
+        free_thresh, negate)은 map_server 와 같고, 이미지 첫 행이 지도 맨 위라서
+        grid 순서(맨 아래 행부터)로 뒤집는다.
+        """
+        from pathlib import Path
+
+        import yaml
+        from PIL import Image
+
+        path = Path(path)
+        spec = yaml.safe_load(path.read_text(encoding="utf-8"))
+        image = Image.open(path.parent / spec["image"]).convert("L")
+        width, height = image.size
+        pixels = image.tobytes()                       # one byte per pixel in mode L
+        negate = bool(spec.get("negate", 0))
+        grid: list[int] = []
+        for row in range(height - 1, -1, -1):
+            for value in pixels[row * width:(row + 1) * width]:
+                occupied = value / 255.0 if negate else (255 - value) / 255.0
+                grid.append(LETHAL if occupied > spec["occupied_thresh"]
+                            else 0 if occupied < spec["free_thresh"] else UNKNOWN)
+        origin = spec["origin"]
+        return cls(grid=grid, width=width, height=height, resolution=float(spec["resolution"]),
+                   origin_x=float(origin[0]), origin_y=float(origin[1]), frame_id="map")
 
     def cell_value(self, x_m: float, y_m: float) -> int | None:
         """이 grid 의 프레임 기준 좌표의 셀 값. 범위 밖이면 `None`.

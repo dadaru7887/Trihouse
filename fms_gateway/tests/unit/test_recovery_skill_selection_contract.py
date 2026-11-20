@@ -103,7 +103,7 @@ def _worker_payload(decision_kwargs, *, group_policy=True):
     class Vlm:
         model_name, model_revision = "Qwen/Qwen2.5-VL-7B-Instruct", "approved"
 
-        def interpret(self, frame, detections, goal_text):
+        def interpret(self, frame, detections):
             return {
                 "observations": [{
                     "region_id": "person-1", "bbox_norm": [0.2, 0.2, 0.4, 0.8],

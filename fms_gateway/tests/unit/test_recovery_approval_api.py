@@ -150,3 +150,26 @@ def test_only_an_auto_bounded_runtime_gets_its_proposals_decided_by_the_policy(m
 
     assert response.status_code == 201, response.text
     assert response.json()["status"] == status
+
+
+def test_the_attempt_count_of_the_stop_hands_it_to_a_person_after_three() -> None:
+    from uuid import uuid4
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from fms_gateway.app.recovery_routes import recovery_router
+
+    payload = proposal_payload()
+    payload.update(selected_skill_id=3, selected_skill_name="WAIT_REOBSERVE",
+                   selected_coord=[0.0, 0.0, 0.0])
+    payload["state"]["scene_confidence"] = 0.9
+    payload["policy_lineage"].update(execution_mode="auto_bounded", attempt_no="4")
+    app = FastAPI()
+    app.include_router(recovery_router(repository()))
+
+    response = TestClient(app).post("/internal/v1/recovery/proposals", json=payload,
+                                    headers={"Idempotency-Key": str(uuid4())})
+
+    assert response.json()["status"] == "pending"
+    assert response.json()["decision_tier"] == "C"

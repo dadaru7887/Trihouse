@@ -1,14 +1,15 @@
-"""Qwen2.5-VL 7B 4-bit interpreter; prompt versions come from prompts.yaml.
+"""Qwen2.5-VL 7B 4-bit interpreter; prompt versions come from
+vision_ai/robot/configs/vlm_prompts.yaml.
 
     vlm = QwenVlmInterpreter("main", prompt_version="v1",
                              response_log=Path("runs/recovery/vlm_responses.jsonl"))
-    result = vlm.interpret(frame_bgr, evidence, GOAL_TEXT)            # robot
-    result = vlm.interpret(frame_bgr, evidence, GOAL_TEXT, version="v2")  # comparison
+    result = vlm.interpret(frame_bgr, evidence)                       # robot
+    result = vlm.interpret(frame_bgr, evidence, version="current")    # comparison
 
 Flow: render the version's sections around the detection list -> generate
-greedily with the shared settings -> parse the JSON -> rename the version's
-confidence key to `scene_confidence` -> return it with the raw text and the
-prompt sent, and append all of it to the response log when one is set.
+greedily with the shared settings -> parse the JSON -> return it with the raw
+text and the prompt sent, and append all of it to the response log when one
+is set. Every version answers `scene_confidence` (1 = certain).
 
 The raw text is returned even when the JSON cannot be parsed; that text is
 the only way to tell a truncated answer from a malformed one.
@@ -28,11 +29,11 @@ from vision_ai.robot.recovery.worker import DetectionEvidence
 
 
 MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
-PROMPTS_PATH = Path(__file__).with_name("prompts.yaml")
+PROMPTS_PATH = Path(__file__).resolve().parents[2] / "robot" / "configs" / "vlm_prompts.yaml"
 
 
 def load_prompts(path: Path = PROMPTS_PATH) -> dict[str, Any]:
-    """prompts.yaml as a dict: runtime_version, generation, versions, sections."""
+    """vlm_prompts.yaml as a dict: runtime_version, generation, versions, sections."""
     import yaml
 
     return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
@@ -50,7 +51,7 @@ def parse_json_response(text: str) -> dict[str, Any] | None:
 
 
 def build_detections_text(detections: Sequence[DetectionEvidence], style: str = "legacy") -> str:
-    """The detection list the prompt shows, one line per detection (see prompts.yaml)."""
+    """The detection list the prompt shows, one line per detection (see vlm_prompts.yaml)."""
     lines: list[str] = []
     for detection in detections:
         x0, y0, x1, y1 = detection.bbox_xyxy_norm
@@ -72,25 +73,12 @@ def build_detections_text(detections: Sequence[DetectionEvidence], style: str = 
     return "\n".join(lines) if lines else "- nothing detected"
 
 
-def render_prompt(version: str, detections: Sequence[DetectionEvidence], goal_text: str,
+def render_prompt(version: str, detections: Sequence[DetectionEvidence],
                   prompts: dict[str, Any]) -> str:
     """The full text prompt one version sends for these detections."""
     spec = prompts["versions"][version]
     text = "\n\n".join(prompts["sections"][name] for name in spec["sections"])
-    return (text.replace("{goal}", goal_text)
-                .replace("{yoloe_detections}", build_detections_text(detections, spec["reference"])))
-
-
-def parse_response(raw: str, version: str, prompts: dict[str, Any]) -> dict[str, Any]:
-    """Raw answer -> its JSON fields with the confidence key named `scene_confidence`.
-
-    An answer with no JSON object gives {}; the caller keeps `raw` beside it.
-    """
-    parsed = parse_json_response(raw) or {}
-    key = prompts["versions"][version]["scene_confidence_key"]
-    if key in parsed:
-        parsed["scene_confidence"] = parsed.pop(key)
-    return parsed
+    return text.replace("{yoloe_detections}", build_detections_text(detections, spec["reference"]))
 
 
 class QwenVlmInterpreter:
@@ -136,7 +124,6 @@ class QwenVlmInterpreter:
         self,
         frame: Any,
         detections: Sequence[DetectionEvidence],
-        goal_text: str,
         version: str | None = None,
     ) -> dict[str, Any]:
         """BGR frame + detections -> parsed answer plus raw_response, the prompt
@@ -149,7 +136,7 @@ class QwenVlmInterpreter:
         version = version or self.prompt_version
         generation = self.prompts["generation"]
         image = Image.fromarray(frame[:, :, ::-1]).convert("RGB")
-        prompt = render_prompt(version, detections, goal_text, self.prompts)
+        prompt = render_prompt(version, detections, self.prompts)
         messages = [{
             "role": "user",
             "content": [
@@ -173,7 +160,7 @@ class QwenVlmInterpreter:
         new_ids = output_ids[:, inputs["input_ids"].shape[1]:]
         raw = self.processor.batch_decode(new_ids, skip_special_tokens=True)[0]
         result = {
-            **parse_response(raw, version, self.prompts),
+            **(parse_json_response(raw) or {}),          # {} when there is no JSON; raw stays
             "raw_response": raw,
             "prompt": prompt,
             "prompt_version": version,

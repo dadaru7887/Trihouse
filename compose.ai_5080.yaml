@@ -43,8 +43,12 @@ services:
       VLM_MODEL_REVISION: ${VLM_MODEL_REVISION:-main}
       # Every raw Qwen answer, kept on the artifacts volume (proposal vlm_lineage.response_id).
       VLM_RESPONSE_LOG: ${VLM_RESPONSE_LOG:-/artifacts/vlm_responses.jsonl}
-      # prompts.yaml version; empty = its runtime_version. Same as --prompt-version.
+      # robot/configs/vlm_prompts.yaml version; empty = its runtime_version. Same as --prompt-version.
       VLM_PROMPT_VERSION: ${VLM_PROMPT_VERSION:-}
+      # Nav2 map yaml of the deployed map (its pgm beside it), mounted into the
+      # container. Set: candidates heading into walls are dropped before approval.
+      # Empty: walls are left to the robot's own pre-motion path check.
+      RECOVERY_STATIC_MAP_YAML: ${RECOVERY_STATIC_MAP_YAML:-}
       VLM_RL_RUNTIME_MODE: physical
       VLM_RL_SAFETY_GATE_ENABLED: "true"
       VLM_RL_DEVICE: cuda

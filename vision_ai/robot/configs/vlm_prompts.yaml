@@ -1,19 +1,19 @@
-# Qwen2.5-VL recovery prompts, read by vlm_interpreter.py.
+# Qwen2.5-VL recovery prompts, read by vision_ai/models/recovery/vlm_interpreter.py.
 #
-# A version is a list of sections joined by one blank line, a reference style
-# for the detection list, and the key the answer uses for scene confidence.
-# Each section's text lives once under `sections`; adding a version means
-# listing which sections it uses, so versions differ only where they say so.
+# A version is a list of sections joined by one blank line plus the style of
+# its detection list. Each section's text lives once under `sections`, so two
+# versions differ only in the sections they list.
 #
-# Only {goal} and {yoloe_detections} are substituted. Every other brace,
-# such as {region_id} in the JSON example, reaches the model as written.
+# The goal sentence is fixed text inside the prompt. Only {yoloe_detections}
+# is substituted; every other brace, such as {region_id} in the JSON
+# template, reaches the model as written.
 #
 # reference styles (vlm_interpreter.build_detections_text):
 #   legacy   - person: TOP-LEFT region, confidence 0.91
 #   regions  - region_id=r1, class=person, yoloe_confidence=0.91,
 #              bbox_norm=[0.120, 0.400, 0.310, 0.950], position=BOTTOM-LEFT, track_id=7
 
-runtime_version: v1            # what the robot uses unless VLM_PROMPT_VERSION says otherwise
+runtime_version: v1            # what the robot uses unless --prompt-version / VLM_PROMPT_VERSION says otherwise
 
 generation:
   # One observation with an evidence sentence is about 110-130 tokens in the
@@ -24,22 +24,16 @@ generation:
   do_sample: false
 
 versions:
-  current:                     # the prompt, input and output the robot ran before
+  current:                     # the prompt the robot ran before; only uncertainty is renamed scene_confidence
     reference: legacy
-    scene_confidence_key: uncertainty   # "0=very uncertain, 1=very certain": already a confidence
     sections: [legacy_contract]
   v1:
     reference: regions
-    scene_confidence_key: scene_confidence
-    sections: [instruction, reference, criteria, output_format, field_notes]
-  v2:                          # v1 without the notes under the JSON
-    reference: regions
-    scene_confidence_key: scene_confidence
     sections: [instruction, reference, criteria, output_format]
 
 sections:
   legacy_contract: |-
-    Goal: {goal}
+    Goal: The robot is navigating a warehouse aisle toward the next waypoint.
 
     Detected by onboard segmentation model (System1):
     {yoloe_detections}
@@ -59,26 +53,26 @@ sections:
       "robot_candidate_sectors": [
         {"angle_deg": 0, "width_deg": 20, "preference": 0.00}
       ],
-      "uncertainty": 0.00
+      "scene_confidence": 0.00
     }
 
     bbox_norm is [x0,y0,x1,y1] normalized 0-1 by image width/height. robot_candidate_sectors
     describes which direction (relative to current heading, 0=forward) the robot could safely
-    attempt a short recovery move, NOT the direction the detected object is moving. uncertainty
+    attempt a short recovery move, NOT the direction the detected object is moving. scene_confidence
     is your overall confidence (0=very uncertain, 1=very certain) in this whole assessment.
 
   instruction: |-
     [INSTRUCTION]
-    Identify objects that could obstruct navigation. Rate the collision risk of
-    every listed detection and explain why you assigned that rating in one sentence
-    using visible evidence. Use the visible passage ahead of the robot as the
-    reference corridor. Use YOLOE confidence only as a cue for detection quality.
-    When describing apparent movement, cite a visible cue. Facing the robot or the
-    corridor alone is insufficient evidence of movement.
+    Identify the objects that block or obstruct the robot's path, analyze the
+    collision risk of each listed detection, and classify it as critical,
+    moderate, or low.
+
+    The robot is navigating a warehouse aisle toward the next waypoint; the
+    visible passage ahead of it is the corridor.
 
   reference: |-
     [REFERENCE]
-    YOLOE segmentation detections:
+    YOLOE segmentation detections (yoloe_confidence reflects detection quality only):
     {yoloe_detections}
 
   criteria: |-
@@ -122,15 +116,15 @@ sections:
       "scene_confidence": {scene_confidence}
     }
 
-  field_notes: |-
     - region_id: Reuse the detection ID from the reference.
     - semantic_label: Report the object's class.
     - bbox_norm: Report normalized corner coordinates in [0, 1], ordered as
       [x_min, y_min, x_max, y_max].
     - risk: Use critical, moderate, or low.
     - confidence: Report confidence in the assigned risk level from 0 to 1.
-    - evidence: Explain which visible cue supports the assigned risk level for
-      every object. If a relevant cue is unclear, say what is unclear and lower
+    - evidence: In one sentence, name the visible cue that supports the assigned
+      risk level. Facing the robot or the corridor alone is not evidence of
+      movement. If a relevant cue is unclear, say what is unclear and lower
       confidence.
     - scene_confidence: Report confidence in the overall scene assessment from
       0 to 1. Higher values indicate greater confidence.
